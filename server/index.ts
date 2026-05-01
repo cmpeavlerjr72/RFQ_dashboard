@@ -16,6 +16,7 @@ import {
   getMarket,
   getMarketsBatch,
   getRfqLegs,
+  recoverParlay,
   cacheStats as kalshiCacheStats,
 } from "./kalshi.js";
 import {
@@ -101,6 +102,15 @@ app.get("/api/kalshi/rfq/:rfqId", async (req, res, next) => {
   try {
     upstreamCallCount++;
     res.json(await getRfqLegs(req.params.rfqId));
+  } catch (e) { next(e); }
+});
+
+// Recover legs for an open parlay ticker without needing a local fills file —
+// walks fills → order → quote → rfq on Kalshi. Cached forever per ticker.
+app.get("/api/kalshi/recover/:ticker", async (req, res, next) => {
+  try {
+    upstreamCallCount++;
+    res.json(await recoverParlay(req.params.ticker));
   } catch (e) { next(e); }
 });
 

@@ -189,10 +189,122 @@ export async function getRfqLegs(rfqId: string): Promise<any> {
   return v;
 }
 
+// ----------------------------------------------------------------------------
+// Parlay recovery: when no local fills.jsonl is available (e.g. when running
+// the dashboard on a deployed host without the runner's data dir), walk
+// fills → order → quote → rfq for an open parlay ticker to recover legs +
+// rfq_id + accepted_side. Mirrors sandbox/recover_open_positions.py.
+// ----------------------------------------------------------------------------
+
+const RECOVERY_DISK_DIR = path.resolve(process.cwd(), "..", "data", "dashboard_cache", "parlay_recovery");
+fs.mkdirSync(RECOVERY_DISK_DIR, { recursive: true });
+const recoveryMemCache = new TTLCache<any>();
+
+function recoveryDiskPath(parlayTicker: string): string {
+  // Filenames must be safe — replace any chars that aren't alnum/-_
+  const safe = parlayTicker.replace(/[^A-Za-z0-9_-]/g, "_");
+  return path.join(RECOVERY_DISK_DIR, `${safe}.json`);
+}
+
+export interface ParlayRecovery {
+  parlay_ticker: string;
+  rfq_id: string | null;
+  quote_id: string | null;
+  accepted_side: string | null;
+  legs: { ticker: string; side: string; p: number | null }[];
+}
+
+export async function recoverParlay(parlayTicker: string): Promise<ParlayRecovery> {
+  // 1. mem cache
+  const memHit = recoveryMemCache.get(parlayTicker);
+  if (memHit) return memHit;
+
+  // 2. disk cache
+  const dp = recoveryDiskPath(parlayTicker);
+  if (fs.existsSync(dp)) {
+    try {
+      const v = JSON.parse(fs.readFileSync(dp, "utf-8")) as ParlayRecovery;
+      recoveryMemCache.set(parlayTicker, v, 86_400_000);
+      return v;
+    } catch {}
+  }
+
+  // 3. Walk the chain on Kalshi.
+  const empty: ParlayRecovery = {
+    parlay_ticker: parlayTicker,
+    rfq_id: null, quote_id: null, accepted_side: null, legs: [],
+  };
+  let result: ParlayRecovery = empty;
+  try {
+    const fills = await getJson(
+      `/portfolio/fills?ticker=${encodeURIComponent(parlayTicker)}&limit=20`,
+    );
+    const fillsList: any[] = fills?.fills || [];
+    if (fillsList.length === 0) return empty;
+    const sorted = [...fillsList].sort((a, b) =>
+      String(a.created_time || "").localeCompare(String(b.created_time || "")),
+    );
+    const first = sorted[0];
+    const orderId = first?.order_id;
+    if (!orderId) return empty;
+
+    const order = (await getJson(`/portfolio/orders/${encodeURIComponent(orderId)}`))?.order;
+    const clientOrderId: string = order?.client_order_id || "";
+    if (!clientOrderId.startsWith("quote:")) return empty;
+    const parts = clientOrderId.split(":");
+    if (parts.length < 3) return empty;
+    const quoteId = parts[2];
+
+    const quote = (await getJson(`/communications/quotes/${encodeURIComponent(quoteId)}`))?.quote;
+    const rfqId: string | undefined = quote?.rfq_id;
+    if (!rfqId) return empty;
+
+    const rfqResp = await getRfqLegs(rfqId);
+    const rfq = rfqResp?.rfq || rfqResp;
+    const legsRaw: any[] = rfq?.mve_selected_legs || [];
+    const legs = legsRaw
+      .map((l) => ({
+        ticker: l?.market_ticker || "",
+        side: (l?.side || "yes").toLowerCase(),
+        p: null as number | null,
+      }))
+      .filter((l) => l.ticker);
+
+    result = {
+      parlay_ticker: parlayTicker,
+      rfq_id: rfqId,
+      quote_id: quoteId,
+      accepted_side: (quote?.accepted_side || first?.side || "").toLowerCase() || null,
+      legs,
+    };
+  } catch (e) {
+    console.warn(`recoverParlay(${parlayTicker}) failed:`, (e as any)?.message || e);
+    // Return empty (cached briefly so we don't hammer on every refresh)
+    recoveryMemCache.set(parlayTicker, empty, 60_000);
+    return empty;
+  }
+
+  // Persist successful recovery to disk
+  if (result.rfq_id) {
+    try {
+      const tmp = dp + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(result));
+      fs.renameSync(tmp, dp);
+    } catch (e) {
+      console.warn("parlay recovery disk cache write failed:", e);
+    }
+    recoveryMemCache.set(parlayTicker, result, 86_400_000);
+  } else {
+    recoveryMemCache.set(parlayTicker, result, 60_000);
+  }
+  return result;
+}
+
 export function cacheStats() {
   return {
     positions: { size: positionsCache.size() },
     markets: { size: marketCache.size() },
     rfqs: { memSize: rfqMemCache.size() },
+    recovery: { memSize: recoveryMemCache.size() },
   };
 }

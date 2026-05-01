@@ -221,9 +221,10 @@ async function refresh() {
 }
 
 async function enrichMissingLegs() {
-  const todo = state.positions.filter((p) => p.rfq_id && p.legs.length === 0);
-  if (!todo.length) return;
-  await Promise.all(todo.map(async (p) => {
+  // 1. Positions with rfq_id (came from local fills.jsonl) but no legs yet:
+  //    fetch the RFQ directly.
+  const haveRfqId = state.positions.filter((p) => p.rfq_id && p.legs.length === 0);
+  await Promise.all(haveRfqId.map(async (p) => {
     try {
       const r = await api(`/api/kalshi/rfq/${encodeURIComponent(p.rfq_id)}`);
       const rfq = r.rfq || r;
@@ -234,6 +235,23 @@ async function enrichMissingLegs() {
         p: null,
       }));
     } catch (e) { console.warn("rfq enrich failed", p.ticker, e); }
+  }));
+
+  // 2. Positions with no rfq_id (no local fills file — e.g. deployed dashboard):
+  //    walk Kalshi to recover rfq_id, accepted_side, and legs.
+  const noRfqId = state.positions.filter((p) => !p.rfq_id && p.legs.length === 0);
+  await Promise.all(noRfqId.map(async (p) => {
+    try {
+      const r = await api(`/api/kalshi/recover/${encodeURIComponent(p.ticker)}`);
+      if (r?.rfq_id) {
+        p.rfq_id = r.rfq_id;
+        p.legs = (r.legs || []).map((l) => ({
+          ticker: l.ticker,
+          side: (l.side || "yes"),
+          p: null,
+        }));
+      }
+    } catch (e) { console.warn("recover failed", p.ticker, e); }
   }));
 }
 
