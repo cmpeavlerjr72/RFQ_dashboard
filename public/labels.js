@@ -250,11 +250,23 @@ export function legLabel(ticker, side, athleteIdx) {
  * team only; for team-side picks (KXNBAGAME-...-NYK) we return the picked team.
  * Used to pick logos to display next to the leg label.
  */
-export function legTeams(ticker) {
+export function legTeams(ticker, side) {
+  // `side` is OUR side after the flip (e.g. "no" when we hold long-NO).
+  // For game-pick legs, the ticker encodes the bettor's pick. When we're
+  // on the opposite side, return the OPPOSITE team's logo so the dashboard
+  // shows our rooting interest, not the bettor's.
+  side = (side || "yes").toLowerCase();
+
   // NBA team-side
   if (ticker.startsWith("KXNBAGAME-")) {
     const rest = ticker.slice("KXNBAGAME-".length);
-    const [, pickAbbr] = rest.split("-");
+    const [dt, pickAbbr] = rest.split("-");
+    if (side === "no") {
+      const { teams } = parseDateTeams(dt);
+      const [a, b] = splitTeams(teams, NBA_TEAMS);
+      const opp = pickAbbr === a ? b : a;
+      return { sport: "nba", teams: [opp] };
+    }
     return { sport: "nba", teams: [pickAbbr] };
   }
   if (ticker.startsWith("KXNBASPREAD-") || ticker.startsWith("KXNBATOTAL-")) {
@@ -277,7 +289,13 @@ export function legTeams(ticker) {
   // NHL
   if (ticker.startsWith("KXNHLGAME-")) {
     const rest = ticker.slice("KXNHLGAME-".length);
-    const [, pickAbbr] = rest.split("-");
+    const [dt, pickAbbr] = rest.split("-");
+    if (side === "no") {
+      const { teams } = parseDateTeams(dt);
+      const [a, b] = splitTeams(teams, NHL_TEAMS);
+      const opp = pickAbbr === a ? b : a;
+      return { sport: "nhl", teams: [opp] };
+    }
     return { sport: "nhl", teams: [pickAbbr] };
   }
   if (ticker.startsWith("KXNHLSPREAD-") || ticker.startsWith("KXNHLTOTAL-") || ticker.startsWith("KXNHLGOAL-")) {
@@ -292,7 +310,13 @@ export function legTeams(ticker) {
   // MLB
   if (ticker.startsWith("KXMLBGAME-")) {
     const rest = ticker.slice("KXMLBGAME-".length);
-    const [, pickAbbr] = rest.split("-");
+    const [dt, pickAbbr] = rest.split("-");
+    if (side === "no") {
+      const { teams } = parseDateTeams(dt);
+      const [a, b] = splitTeams(teams, MLB_TEAMS);
+      const opp = pickAbbr === a ? b : a;
+      return { sport: "mlb", teams: [opp] };
+    }
     return { sport: "mlb", teams: [pickAbbr] };
   }
   if (ticker.startsWith("KXMLBSPREAD-") || ticker.startsWith("KXMLBTOTAL-")) {
@@ -366,6 +390,18 @@ export function parsePlayerProp(ticker) {
     sport: "mlb",
   };
 }
+
+/**
+ * Human-readable date for a leg (e.g. "May 1"). Empty string if the ticker
+ * doesn't have a parseable date prefix. Used to disambiguate parlay legs
+ * across multiple dates (e.g. a 3-game series stack).
+ */
+export function legDateLabel(ticker) {
+  const m = ticker.match(/-(\d{2}[A-Z]{3}\d{2})/);
+  if (!m) return "";
+  return ymdHumanFromTicker(m[1]);
+}
+
 
 /**
  * Build the underlying-game key for a leg, used for matching to ESPN events.

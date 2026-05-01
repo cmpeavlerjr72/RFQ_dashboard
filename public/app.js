@@ -2,7 +2,7 @@
 // We hold NO on every parlay, so each leg is rendered as the OPPOSITE of what
 // the buyer took, with NO-side odds. Manual-refresh by default.
 
-import { legLabel, legTeams, teamLogoUrl, legGameKey, findEspnEvent, parsePlayerProp } from "/labels.js";
+import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp } from "/labels.js";
 import { buildAthleteIndex } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
@@ -638,7 +638,7 @@ function renderParlayCard(p, n) {
     let probHtml;
     if (eff === "alive")          probHtml = `<span class="v pos">WON${marketImplied ? " (market)" : ""}</span>`;
     else if (eff === "dead")      probHtml = `<span class="v neg">LOST${marketImplied ? " (market)" : ""}</span>`;
-    else if (pUsThisLeg != null)  probHtml = `<span class="k">Win chance</span> <span class="v">${(pUsThisLeg*100).toFixed(0)}%</span>`;
+    else if (pUsThisLeg != null)  probHtml = `<span class="k">Win chance</span> <span class="v">${(pUsThisLeg*100).toFixed(1)}%</span>`;
     else                          probHtml = `<span class="k">Win chance</span> <span class="v">—</span>`;
 
     const liveText = res.live || "";
@@ -647,15 +647,26 @@ function renderParlayCard(p, n) {
                    : res.status === "dead" ? "post" : "";
     const statText = res.stat || "";
 
-    const { sport, teams: logoTeams } = legTeams(leg.ticker);
+    // Pass our flipped side so game-pick legs show the OPPOSITE team's logo
+    // (e.g. parlay leg picks ATL but we hold long-NO → show COL logo, our
+    // rooting interest).
+    const { sport, teams: logoTeams } = legTeams(leg.ticker, ourSide);
     const logoHtml = logoTeams.map(abbr =>
       `<img class="team-logo" src="${teamLogoUrl(sport, abbr)}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
     ).join("");
+
+    // Date tag — disambiguates same-matchup legs across multiple dates
+    // (e.g. a 3-game ATL@COL series stack).
+    const dateLabel = legDateLabel(leg.ticker);
+    const dateHtml = dateLabel
+      ? `<span class="leg-date">${escapeHtml(dateLabel)}</span>`
+      : "";
 
     return `<div class="leg ${cls}">
       <div class="desc">
         ${logoHtml}
         <span>${escapeHtml(desc)}</span>
+        ${dateHtml}
         ${check ? `<span class="check">${check}</span>` : ""}
       </div>
       <div class="meta">
