@@ -111,9 +111,32 @@ const positionsCache = new TTLCache<any>();
 const marketCache = new TTLCache<any>();
 
 // RFQ legs — permanent (never change once posted). Disk-backed so they
-// survive restarts.
-const RFQ_DISK_DIR = path.resolve(process.cwd(), "..", "data", "dashboard_cache", "rfq_legs");
-fs.mkdirSync(RFQ_DISK_DIR, { recursive: true });
+// survive restarts. CACHE_DIR can be overridden by env (CACHE_DIR or
+// RENDER_DISK_PATH); defaults to a path INSIDE the project so we don't depend
+// on the parent dir being writable on hosted runtimes.
+function resolveCacheRoot(): string {
+  const fromEnv = process.env.CACHE_DIR || process.env.RENDER_DISK_PATH;
+  if (fromEnv) return path.resolve(fromEnv);
+  // Local-dev convention: write to ../data/dashboard_cache when that dir
+  // already exists; otherwise fall back to a project-local cache/ dir.
+  const sibling = path.resolve(process.cwd(), "..", "data", "dashboard_cache");
+  if (fs.existsSync(path.dirname(sibling))) return sibling;
+  return path.resolve(process.cwd(), "cache");
+}
+const CACHE_ROOT = resolveCacheRoot();
+
+function ensureDir(dir: string): boolean {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return true;
+  } catch (e) {
+    console.warn(`cache dir ${dir} not writable: ${(e as any)?.message || e}`);
+    return false;
+  }
+}
+
+const RFQ_DISK_DIR = path.join(CACHE_ROOT, "rfq_legs");
+const RFQ_DISK_OK = ensureDir(RFQ_DISK_DIR);
 const rfqMemCache = new TTLCache<any>();
 
 function rfqDiskPath(rfqId: string): string {
@@ -176,9 +199,9 @@ export async function getRfqLegs(rfqId: string): Promise<any> {
   const cached = rfqMemCache.get(rfqId);
   if (cached) return cached;
 
-  // 2. Check disk cache
+  // 2. Check disk cache (only if the cache dir exists)
   const dp = rfqDiskPath(rfqId);
-  if (fs.existsSync(dp)) {
+  if (RFQ_DISK_OK && fs.existsSync(dp)) {
     try {
       const v = JSON.parse(fs.readFileSync(dp, "utf-8"));
       rfqMemCache.set(rfqId, v, 86_400_000);
@@ -190,13 +213,14 @@ export async function getRfqLegs(rfqId: string): Promise<any> {
 
   // 3. Fetch and persist
   const v = await getJson(`/communications/rfqs/${encodeURIComponent(rfqId)}`);
-  // Persist atomically: write to .tmp then rename
-  try {
-    const tmp = dp + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(v));
-    fs.renameSync(tmp, dp);
-  } catch (e) {
-    console.warn("rfq disk cache write failed:", e);
+  if (RFQ_DISK_OK) {
+    try {
+      const tmp = dp + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(v));
+      fs.renameSync(tmp, dp);
+    } catch (e) {
+      console.warn("rfq disk cache write failed:", e);
+    }
   }
   rfqMemCache.set(rfqId, v, 86_400_000);
   return v;
@@ -209,8 +233,8 @@ export async function getRfqLegs(rfqId: string): Promise<any> {
 // rfq_id + accepted_side. Mirrors sandbox/recover_open_positions.py.
 // ----------------------------------------------------------------------------
 
-const RECOVERY_DISK_DIR = path.resolve(process.cwd(), "..", "data", "dashboard_cache", "parlay_recovery");
-fs.mkdirSync(RECOVERY_DISK_DIR, { recursive: true });
+const RECOVERY_DISK_DIR = path.join(CACHE_ROOT, "parlay_recovery");
+const RECOVERY_DISK_OK = ensureDir(RECOVERY_DISK_DIR);
 const recoveryMemCache = new TTLCache<any>();
 
 function recoveryDiskPath(parlayTicker: string): string {
@@ -232,9 +256,9 @@ export async function recoverParlay(parlayTicker: string): Promise<ParlayRecover
   const memHit = recoveryMemCache.get(parlayTicker);
   if (memHit) return memHit;
 
-  // 2. disk cache
+  // 2. disk cache (only if writable)
   const dp = recoveryDiskPath(parlayTicker);
-  if (fs.existsSync(dp)) {
+  if (RECOVERY_DISK_OK && fs.existsSync(dp)) {
     try {
       const v = JSON.parse(fs.readFileSync(dp, "utf-8")) as ParlayRecovery;
       recoveryMemCache.set(parlayTicker, v, 86_400_000);
@@ -297,14 +321,16 @@ export async function recoverParlay(parlayTicker: string): Promise<ParlayRecover
     return empty;
   }
 
-  // Persist successful recovery to disk
+  // Persist successful recovery to disk (if writable)
   if (result.rfq_id) {
-    try {
-      const tmp = dp + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify(result));
-      fs.renameSync(tmp, dp);
-    } catch (e) {
-      console.warn("parlay recovery disk cache write failed:", e);
+    if (RECOVERY_DISK_OK) {
+      try {
+        const tmp = dp + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify(result));
+        fs.renameSync(tmp, dp);
+      } catch (e) {
+        console.warn("parlay recovery disk cache write failed:", e);
+      }
     }
     recoveryMemCache.set(parlayTicker, result, 86_400_000);
   } else {
