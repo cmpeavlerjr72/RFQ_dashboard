@@ -154,19 +154,32 @@ async function refresh() {
         // Per-leg odds: buyer took side X on leg; we want the OPPOSITE side's price.
         for (const leg of p.legs) {
           const lm = markets[leg.ticker]?.market || {};
+          const lLast = dollarsToC(lm.last_price_dollars);
+          const lYesBidDirect = dollarsToC(lm.yes_bid_dollars);
+          const lYesAskDirect = dollarsToC(lm.yes_ask_dollars);
           const lNoBid = dollarsToC(lm.no_bid_dollars);
           const lNoAsk = dollarsToC(lm.no_ask_dollars);
-          const lYesBid = lNoAsk != null ? 100 - lNoAsk : null;
-          const lYesAsk = lNoBid != null ? 100 - lNoBid : null;
+          // Prefer direct YES prices; fall back to deriving from NO via 100-x.
+          const lYesBid = lYesBidDirect != null ? lYesBidDirect : (lNoAsk != null ? 100 - lNoAsk : null);
+          const lYesAsk = lYesAskDirect != null ? lYesAskDirect : (lNoBid != null ? 100 - lNoBid : null);
           // Flip the buyer's side to get OUR side
           const ourSide = flipSide(leg.side);
           const bidC = ourSide === "yes" ? lYesBid : lNoBid;
           const askC = ourSide === "yes" ? lYesAsk : lNoAsk;
+          // Two-sided quote is "real" only when both endpoints are off the walls.
+          // (bidC=0 + askC=100 = empty book, tells us nothing about value.)
+          const haveTrueQuote =
+            bidC != null && askC != null && bidC > 0 && askC > 0 && askC < 100;
           let midC = null;
-          if (bidC != null && askC != null && bidC > 0 && askC > 0) {
+          if (haveTrueQuote) {
             midC = (bidC + askC) / 2;
-          } else if (askC != null && askC > 0) {
-            midC = askC;  // half-quote
+          } else if (lLast != null && lLast >= 0 && lLast <= 100) {
+            // last_price is the YES side's last trade — flip for NO side
+            midC = ourSide === "yes" ? lLast : (100 - lLast);
+          } else if (bidC != null && bidC > 0) {
+            midC = bidC;  // winning side, no offers below
+          } else if (askC != null && askC > 0 && askC < 100) {
+            midC = askC;  // losing side, no bids above
           }
           p.legMids[leg.ticker] = { midC, bidC, askC, status: lm.status };
         }
