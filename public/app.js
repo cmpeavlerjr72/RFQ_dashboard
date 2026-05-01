@@ -239,20 +239,31 @@ async function enrichMissingLegs() {
 
   // 2. Positions with no rfq_id (no local fills file — e.g. deployed dashboard):
   //    walk Kalshi to recover rfq_id, accepted_side, and legs.
+  // Each recover call fans out up to 4 sequential Kalshi requests, so cap
+  // concurrency to avoid 429s. Successful results are cached on the server.
   const noRfqId = state.positions.filter((p) => !p.rfq_id && p.legs.length === 0);
-  await Promise.all(noRfqId.map(async (p) => {
-    try {
-      const r = await api(`/api/kalshi/recover/${encodeURIComponent(p.ticker)}`);
-      if (r?.rfq_id) {
-        p.rfq_id = r.rfq_id;
-        p.legs = (r.legs || []).map((l) => ({
-          ticker: l.ticker,
-          side: (l.side || "yes"),
-          p: null,
-        }));
-      }
-    } catch (e) { console.warn("recover failed", p.ticker, e); }
-  }));
+  const CONCURRENCY = 3;
+  let cursor = 0;
+  async function recoverWorker() {
+    while (cursor < noRfqId.length) {
+      const idx = cursor++;
+      const p = noRfqId[idx];
+      try {
+        const r = await api(`/api/kalshi/recover/${encodeURIComponent(p.ticker)}`);
+        if (r?.rfq_id) {
+          p.rfq_id = r.rfq_id;
+          p.legs = (r.legs || []).map((l) => ({
+            ticker: l.ticker,
+            side: (l.side || "yes"),
+            p: null,
+          }));
+        }
+      } catch (e) { console.warn("recover failed", p.ticker, e); }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, noRfqId.length) }, recoverWorker),
+  );
 }
 
 async function fetchNeededBoxscores() {

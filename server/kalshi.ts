@@ -78,11 +78,24 @@ function signedHeaders(method: string, fullPath: string): Record<string, string>
   };
 }
 
-async function getJson(apiPath: string): Promise<any> {
+async function getJson(apiPath: string, retryOn429 = 3): Promise<any> {
   const c = loadClient();
   const fullPath = API_PREFIX + apiPath;
-  const headers = signedHeaders("GET", fullPath);
-  return fetchJsonWithTimeout(c.baseUrl + fullPath, 10_000, { headers });
+  for (let attempt = 0; attempt <= retryOn429; attempt++) {
+    const headers = signedHeaders("GET", fullPath);  // re-sign each attempt (timestamp must be fresh)
+    try {
+      return await fetchJsonWithTimeout(c.baseUrl + fullPath, 10_000, { headers });
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      const is429 = msg.includes("429") || /too[_ ]many[_ ]requests/i.test(msg);
+      if (!is429 || attempt === retryOn429) throw e;
+      // Exponential backoff with jitter: 250ms, 750ms, 1750ms…
+      const wait = 250 * Math.pow(3, attempt) + Math.random() * 200;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  // Unreachable, satisfies the type checker
+  throw new Error("getJson: exhausted retries");
 }
 
 // ----------------------------------------------------------------------------
