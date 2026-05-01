@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: rfq-dashboard
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      - key: KALSHI_ENV
+        value: PROD
+      - key: KALSHI_API_KEY_ID
+        sync: false
+      - key: KALSHI_PRIVATE_KEY
+        sync: false
+      # Render's free tier supports Secret Files. If you prefer a file:
+      #   1) upload kalshi.pem under "Secret Files" in the Render dashboard
+      #   2) set KALSHI_PRIVATE_KEY_PATH=/etc/secrets/kalshi.pem
+      #   3) leave KALSHI_PRIVATE_KEY unset

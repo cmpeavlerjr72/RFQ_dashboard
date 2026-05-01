@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>label tests</title>
+<style>body{font:13px/1.4 monospace;padding:20px;background:#fafafa}
+pre{background:white;padding:10px;border:1px solid #ddd}</style></head>
+<body>
+<h1>Leg label decoder smoke test</h1>
+<p>Open dev tools / network tab to confirm only <code>/teams.js</code> + <code>/labels.js</code> load.</p>
+<pre id="out">running...</pre>
+<script type="module">
+  import { legLabel } from "/labels.js";
+  const idx = { SIN: "Jannik Sinner", FIL: "Arthur Fils", JOD: "Jordan Thompson",
+    LEH: "Tristan Boyer Lehecka", KOS: "Marta Kostyuk", NOS: "Karolina Muchova Nosková",
+    PLI: "Karolina Pliskova", POT: "Ekaterina Alexandrova Potapova",
+    FAN: "Adrian Fanchini", STE: "Steve Garcia", MIC: "Vinicius Oliveira",
+    GOR: "Davey Grant" };
+  const tests = [
+    ["KXNHLGAME-26APR28MINDAL-MIN", "yes"],
+    ["KXNHLGAME-26APR28MINDAL-DAL", "yes"],
+    ["KXNHLTOTAL-26APR28MINDAL-5", "yes"],
+    ["KXNHLTOTAL-26APR28MINDAL-4", "yes"],
+    ["KXNHLGAME-26APR28ANAEDM-EDM", "yes"],
+    ["KXATPMATCH-26APR29SINJOD-SIN", "yes"],
+    ["KXATPMATCH-26APR29FILLEH-FIL", "yes"],
+    ["KXWTAMATCH-26APR29KOSNOS-KOS", "yes"],
+    ["KXUFCFIGHT-26MAY02FANSTE-FAN", "yes"],
+    ["KXMLBGAME-26APR281835HOUBAL-BAL", "yes"],
+    ["KXMLBGAME-26APR281835HOUBAL-HOU", "yes"],
+    ["KXMLBTOTAL-26APR281835HOUBAL-8", "yes"],
+    ["KXMLBHRR-26APR281835HOUBAL-HOUYALVAREZ44-2", "yes"],
+    ["KXMLBHIT-26APR281915DETATL-DETKMCGONIGLE85-1", "yes"],
+    ["KXMLBKS-26APR231310MILDET-DETTSKUBAL29-7", "yes"],
+  ];
+  const out = tests.map(([t, s]) => `${t.padEnd(50)} -> ${legLabel(t, s, idx)}`).join("\n");
+  document.getElementById("out").textContent = out;
+</script>
+</body></html>

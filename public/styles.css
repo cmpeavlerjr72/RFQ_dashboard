@@ -1,0 +1,193 @@
+/* Light, clean, sportsbook-style. */
+:root {
+  --bg: #f7f8fa;
+  --fg: #0f172a;
+  --muted: #64748b;
+  --muted-2: #94a3b8;
+  --border: #e2e8f0;
+  --card: #ffffff;
+  --card-head: #f1f5f9;
+  --pos: #15803d;
+  --pos-bg: #dcfce7;
+  --neg: #b91c1c;
+  --neg-bg: #fee2e2;
+  --warn: #b45309;
+  --warn-bg: #fef3c7;
+  --accent: #1d4ed8;
+  --accent-bg: #dbeafe;
+  --shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--fg); margin: 0; }
+body {
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", sans-serif;
+}
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 10;
+  background: var(--card); border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+  box-shadow: var(--shadow);
+}
+header h1 {
+  font-size: 16px; margin: 0; font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.row { display: flex; align-items: center; gap: 16px; }
+.row + .row { margin-top: 10px; }
+
+.status { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted-2);
+}
+.dot.live { background: var(--pos); box-shadow: 0 0 6px rgba(21, 128, 61, 0.4); }
+.dot.error { background: var(--neg); }
+.dot.fetching { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+
+button {
+  background: var(--card); color: var(--fg);
+  border: 1px solid var(--border); padding: 6px 14px;
+  border-radius: 6px; cursor: pointer; font: inherit;
+  transition: background .12s;
+}
+button:hover { background: var(--card-head); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+.auto { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.auto select {
+  background: var(--card); color: var(--fg); border: 1px solid var(--border);
+  padding: 4px 6px; border-radius: 4px; font: inherit;
+}
+.meta { color: var(--muted); font-size: 12px; margin-left: auto; }
+.hint { color: var(--muted-2); font-size: 11px; margin-left: 8px; }
+
+/* ---------- main ---------- */
+main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
+section + section { margin-top: 28px; }
+.section-head { margin-bottom: 12px; }
+h2 {
+  font-size: 12px; margin: 0; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+}
+
+/* ---------- summary cards ---------- */
+.summary {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.kpi {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; box-shadow: var(--shadow);
+}
+.kpi .label {
+  color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+}
+.kpi .label small { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.kpi .value {
+  font-size: 22px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 4px; font-weight: 600;
+}
+
+/* ---------- parlay cards ---------- */
+.parlays {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+}
+.parlay {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+}
+.parlay .head {
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+  background: var(--card-head);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.parlay .head .top {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.parlay .head .badge {
+  font-size: 10px; font-weight: 600; letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 100px;
+  background: var(--accent-bg); color: var(--accent);
+  text-transform: uppercase;
+}
+.parlay .head .badge.alive { background: var(--pos-bg); color: var(--pos); }
+.parlay .head .badge.dead { background: var(--neg-bg); color: var(--neg); }
+.parlay .head .badge.partial { background: var(--warn-bg); color: var(--warn); }
+.parlay .head .source {
+  font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace;
+}
+.parlay .head .stake {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.parlay .head .stake .col { display: flex; flex-direction: column; }
+.parlay .head .stake .col .lbl {
+  font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+}
+.parlay .head .stake .col .val {
+  font-size: 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 600;
+}
+.parlay .head .stake .col .val.pos { color: var(--pos); }
+.parlay .head .stake .col .val.neg { color: var(--neg); }
+
+.parlay .legs { padding: 4px 0; }
+.parlay .leg {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.parlay .legs .leg:first-child { border-top: 0; }
+.parlay .leg.alive { background: var(--pos-bg); }
+.parlay .leg.dead  { background: var(--neg-bg); }
+.parlay .leg.partial { background: var(--warn-bg); }
+
+.parlay .leg .desc {
+  font-size: 14px; color: var(--fg); font-weight: 500;
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px;
+  flex-wrap: wrap;
+}
+.parlay .leg .desc > span:not(.check) {
+  flex: 1 1 auto; min-width: 0;
+}
+.parlay .leg .desc .check {
+  font-size: 14px; flex-shrink: 0; margin-left: auto;
+}
+.parlay .leg .desc .team-logo {
+  height: 20px; width: 20px; object-fit: contain; flex-shrink: 0;
+  vertical-align: middle;
+}
+.parlay .leg .desc .team-logo + .team-logo {
+  margin-left: -4px;
+}
+.parlay .leg .meta {
+  font-size: 12px; color: var(--muted);
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  align-items: center;
+}
+.parlay .leg .meta .k { color: var(--muted-2); }
+.parlay .leg .meta .v {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; color: var(--fg);
+}
+.parlay .leg .meta .live-state.in {
+  color: var(--pos); font-weight: 600;
+}
+.parlay .leg .meta .live-state.post { color: var(--accent); font-weight: 600; }
+.parlay .leg .meta .live-state.pre { color: var(--muted); }
+
+.empty {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 18px; color: var(--muted); text-align: center;
+}
+
+footer {
+  border-top: 1px solid var(--border); background: var(--card);
+  padding: 14px 24px; color: var(--muted); font-size: 12px;
+}

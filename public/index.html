@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kalshi RFQ Dashboard</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Kalshi RFQ</h1>
+    <div class="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">idle</span>
+    </div>
+  </div>
+  <div class="row controls">
+    <button id="refresh-btn">Refresh</button>
+    <label class="auto">
+      <input type="checkbox" id="auto-toggle" />
+      Auto every
+      <select id="auto-interval">
+        <option value="60">60s</option>
+        <option value="120" selected>2m</option>
+        <option value="300">5m</option>
+      </select>
+    </label>
+    <span class="meta" id="meta-text"></span>
+  </div>
+</header>
+
+<main>
+  <section class="summary" id="summary"></section>
+
+  <section>
+    <div class="row section-head">
+      <h2>Open Parlays</h2>
+      <span class="hint">cards group by parlay; each line is one leg</span>
+    </div>
+    <div id="parlays" class="parlays"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="footer-text">no fetch yet</span>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
