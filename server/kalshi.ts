@@ -78,7 +78,7 @@ function signedHeaders(method: string, fullPath: string): Record<string, string>
   };
 }
 
-async function getJson(apiPath: string, retryOn429 = 3): Promise<any> {
+export async function getJson(apiPath: string, retryOn429 = 3): Promise<any> {
   const c = loadClient();
   const fullPath = API_PREFIX + apiPath;
   for (let attempt = 0; attempt <= retryOn429; attempt++) {

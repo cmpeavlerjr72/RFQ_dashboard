@@ -10,6 +10,10 @@
 <header>
   <div class="row">
     <h1>Kalshi RFQ</h1>
+    <nav class="nav-links">
+      <a href="/" class="active">Live</a>
+      <a href="/recap.html">Recap</a>
+    </nav>
     <div class="status">
       <span class="dot" id="status-dot"></span>
       <span id="status-text">idle</span>
@@ -36,7 +40,7 @@
   <section>
     <div class="row section-head">
       <h2>Top Cheering Targets</h2>
-      <span class="hint">single leg → multiple parlays. Sorted by expected $ saved if it breaks our way</span>
+      <span class="hint">single leg appearing across multiple open parlays — root for it to break our way · click any column to sort</span>
     </div>
     <div id="leg-exposure" class="leg-exposure"></div>
   </section>
@@ -44,8 +48,9 @@
   <section>
     <div class="row section-head">
       <h2>Open Parlays</h2>
-      <span class="hint">cards group by parlay; each line is one leg</span>
+      <span class="hint">click a card to show or hide its legs</span>
     </div>
+    <div id="parlay-sort-bar" class="parlay-sort-bar"></div>
     <div id="parlays" class="parlays"></div>
   </section>
 </main>

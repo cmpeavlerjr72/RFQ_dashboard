@@ -76,7 +76,7 @@ export function legLabel(ticker, side, athleteIdx) {
     const [a, b] = splitTeams(teams, NHL_TEAMS);
     const matchup = `${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)}`;
     if (side === "yes") return `NHL: ${matchup} OVER ${n} goals`;
-    return `NHL: ${matchup} UNDER or = ${n} goals`;
+    return `NHL: ${matchup} UNDER ${n} goals`;
   }
   if (ticker.startsWith("KXNHLSPREAD-")) {
     const rest = ticker.slice("KXNHLSPREAD-".length);
@@ -105,7 +105,7 @@ export function legLabel(ticker, side, athleteIdx) {
     const [a, b] = splitTeams(teams, MLB_TEAMS);
     const matchup = `${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)}`;
     if (side === "yes") return `MLB: ${matchup} OVER ${n} runs`;
-    return `MLB: ${matchup} UNDER or = ${n} runs`;
+    return `MLB: ${matchup} UNDER ${n} runs`;
   }
   if (ticker.startsWith("KXMLBSPREAD-")) {
     const rest = ticker.slice("KXMLBSPREAD-".length);
@@ -158,7 +158,7 @@ export function legLabel(ticker, side, athleteIdx) {
     const [a, b] = splitTeams(teams, NBA_TEAMS);
     const matchup = `${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)}`;
     if (side === "yes") return `NBA: ${matchup} OVER ${n} points`;
-    return `NBA: ${matchup} UNDER or = ${n} points`;
+    return `NBA: ${matchup} UNDER ${n} points`;
   }
   if (ticker.startsWith("KXNBASPREAD-")) {
     const rest = ticker.slice("KXNBASPREAD-".length);

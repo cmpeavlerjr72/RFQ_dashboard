@@ -27,6 +27,7 @@ import {
   cacheStats as espnCacheStats,
   boxscoreCacheStats,
 } from "./espn.js";
+import { getRecap } from "./recap.js";
 
 // Load .env from dashboard/.env (next to package.json)
 const __filename = fileURLToPath(import.meta.url);
@@ -169,6 +170,22 @@ app.get("/api/fills", (_req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: String(e?.message || e) });
   }
+});
+
+// ----------------------------------------------------------------------------
+// Recap — historical RFQ performance for an ET date or date range
+// ----------------------------------------------------------------------------
+
+app.get("/api/recap", async (req, res, next) => {
+  try {
+    const start = String(req.query.start || "").trim();
+    const end = String(req.query.end || start).trim();
+    if (!start) return res.status(400).json({ error: "start=YYYY-MM-DD required" });
+    const force = String(req.query.fresh || "") === "1";
+    upstreamCallCount++;
+    const payload = await getRecap(start, end, force);
+    res.json(payload);
+  } catch (e) { next(e); }
 });
 
 // ----------------------------------------------------------------------------

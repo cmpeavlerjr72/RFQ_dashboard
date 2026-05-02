@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kalshi RFQ — Recap</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Kalshi RFQ — Recap</h1>
+    <nav class="nav-links">
+      <a href="/">Live</a>
+      <a href="/recap.html" class="active">Recap</a>
+    </nav>
+    <div class="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">idle</span>
+    </div>
+  </div>
+  <div class="row controls">
+    <label class="recap-date">
+      Date
+      <input type="date" id="start-date" />
+    </label>
+    <label class="auto">
+      <input type="checkbox" id="range-toggle" />
+      Range
+    </label>
+    <label class="recap-date" id="end-wrap" style="display:none">
+      End
+      <input type="date" id="end-date" />
+    </label>
+    <button id="load-btn">Load</button>
+    <button id="refresh-btn" title="Force refresh (bypass cache)">Refresh</button>
+    <span class="meta" id="meta-text"></span>
+  </div>
+  <div class="row">
+    <span class="hint">Filter: parlays whose <b>first fill</b> falls in the date range (ET). ROI is on settled cost only — open positions excluded from net P&amp;L.</span>
+  </div>
+  <div class="row legend-row">
+    <span class="legend-label">Trust:</span>
+    <span class="conf-chip noise">Too early</span>
+    <span class="conf-chip noise">Noise</span>
+    <span class="conf-chip early">Early signal</span>
+    <span class="conf-chip likely_real pos">Likely real</span>
+    <span class="legend-hint">based on settled-parlay sample size and how far ROI is from zero — hover any chip for details</span>
+  </div>
+</header>
+
+<main>
+  <section class="summary" id="summary"></section>
+
+  <section id="chart-wrap" class="chart-wrap" style="display:none"></section>
+
+  <section id="breakdown-wrap" class="breakdown-wrap" style="display:none"></section>
+
+  <section>
+    <div class="row section-head">
+      <h2>Parlays</h2>
+      <span class="hint" id="parlays-hint"></span>
+    </div>
+    <div id="parlays-table-wrap"></div>
+  </section>
+</main>
+
+<footer>
+  <span id="footer-text">no fetch yet</span>
+</footer>
+
+<script type="module" src="/recap.js"></script>
+</body>
+</html>

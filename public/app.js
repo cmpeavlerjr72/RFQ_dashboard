@@ -17,7 +17,16 @@ const state = {
   lastRefreshAt: null,
   apiCallsThisSession: 0,
   fetching: false,
+  // --- Top Cheering Targets table state ---
+  cheerSortCol: "maxWin",  // 'parlays' | 'exposure' | 'maxWin' | 'pUs'
+  cheerSortDir: "desc",    // 'asc' | 'desc'
+  cheerExpanded: false,    // top-5 by default; click "show more" to expand
+  // --- Open Parlays section state ---
+  parlaySortCol: "cost",   // 'cost' | 'maxWin' | 'pWin' | 'evPnl' | 'roi'
+  parlaySortDir: "desc",   // 'asc' | 'desc'
+  parlayExpanded: new Set(), // tickers currently expanded; default = none
 };
+const CHEER_COLLAPSED_LIMIT = 5;
 let autoTimer = null;
 
 // ----------------------------- helpers --------------------------------------
@@ -424,7 +433,6 @@ function render() {
  *   - exposure: total cost we'd lose if every containing parlay hits
  *   - maxWin:   total max_profit we'd collect if this leg breaks our way
  *   - pUs:      probability our side wins THIS leg (live mid, flipped to NO side)
- *   - eSave:    pUs * maxWin (expected $ from rooting for this leg to break)
  *
  * A leg "breaking our way" voids any parlay it's in, so this is the single most
  * actionable view: which player/team underperformance would clear the most $$
@@ -474,42 +482,60 @@ function aggregateLegExposure() {
       // fill-time fair was the buyer's prob; ours is 1 - that
       pUs = 1 - row.fillP;
     }
-    const eSave = pUs != null ? pUs * row.maxWin : null;
-    out.push({ ...row, eff, pUs, eSave, statText: res.stat || "", live: res.live || "" });
+    out.push({ ...row, eff, pUs, statText: res.stat || "", live: res.live || "" });
   }
 
-  // Sort: WON legs first (locked savings), pending by expected savings desc,
-  // LOST legs last. Within each group, sort by the relevant dollar value.
-  const groupRank = (eff) => eff === "alive" ? 0 : eff === "dead" ? 2 : 1;
-  out.sort((a, b) => {
-    const ga = groupRank(a.eff), gb = groupRank(b.eff);
-    if (ga !== gb) return ga - gb;
-    if (ga === 0) return b.maxWin - a.maxWin;       // WON: biggest locked first
-    if (ga === 2) return b.exposure - a.exposure;   // LOST: biggest stake first
-    return (b.eSave ?? -1) - (a.eSave ?? -1);       // PENDING: best E[save] first
-  });
   return out;
 }
 
+// Sortable columns and the value extractor each one uses.
+const CHEER_SORT_KEYS = {
+  parlays:  (r) => r.parlays,
+  exposure: (r) => r.exposure,
+  maxWin:   (r) => r.maxWin,
+  pUs:      (r) => r.pUs ?? -1,
+};
+
 function renderLegExposure() {
   const wrap = $("leg-exposure");
-  const rows = aggregateLegExposure();
-  if (!rows.length) {
-    wrap.innerHTML = `<div class="empty">no legs to aggregate</div>`;
+  // Pending legs only — won/lost are excluded from the cheering view since
+  // they're already resolved.
+  const allPending = aggregateLegExposure().filter((r) => r.eff !== "alive" && r.eff !== "dead");
+  if (!allPending.length) {
+    wrap.innerHTML = `<div class="empty">no pending legs to cheer for</div>`;
     return;
   }
 
+  // Sort by current selection
+  const sortFn = CHEER_SORT_KEYS[state.cheerSortCol] || CHEER_SORT_KEYS.maxWin;
+  const dirMul = state.cheerSortDir === "asc" ? 1 : -1;
+  allPending.sort((a, b) => (sortFn(a) - sortFn(b)) * dirMul);
+
+  const totalCount = allPending.length;
+  const visible = state.cheerExpanded
+    ? allPending
+    : allPending.slice(0, CHEER_COLLAPSED_LIMIT);
+
+  const sortIndicator = (key) =>
+    state.cheerSortCol === key
+      ? (state.cheerSortDir === "asc" ? " ▲" : " ▼")
+      : "";
+  const th = (key, label, opts = {}) => {
+    const cls = opts.cls || "num";
+    const tip = opts.title ? ` title="${escapeHtml(opts.title)}"` : "";
+    return `<th class="${cls} sortable ${state.cheerSortCol === key ? "active" : ""}" data-sort="${key}"${tip}>`
+      + `${label}${sortIndicator(key)}</th>`;
+  };
+
   const headerCells = [
     `<th class="cheer">Cheer for</th>`,
-    `<th class="num">In</th>`,
-    `<th class="num">Risk</th>`,
-    `<th class="num">To win</th>`,
-    `<th class="num">Status</th>`,
-    `<th class="num">E[save]</th>`,
-    `<th class="status">Live</th>`,
+    th("parlays", "In", { title: "Number of open parlays this leg appears in" }),
+    th("exposure", "At Risk", { title: "Total $ we'd lose if every parlay containing this leg hits" }),
+    th("maxWin", "To Win", { title: "Total $ we'd collect if every parlay containing this leg fails" }),
+    th("pUs", "Win Chance", { title: "Estimated probability this leg breaks our way (live mid or fill-time fair)" }),
   ].join("");
 
-  const bodyRows = rows.map((r) => {
+  const bodyRows = visible.map((r) => {
     const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
     const { sport, teams: logoTeams } = legTeams(r.ticker, r.ourSide);
     const logos = logoTeams.map((abbr) =>
@@ -518,50 +544,58 @@ function renderLegExposure() {
     const dateLabel = legDateLabel(r.ticker);
     const dateHtml = dateLabel ? `<span class="leg-date">${escapeHtml(dateLabel)}</span>` : "";
 
-    // Status cell: mirror parlay-leg rendering (WON / LOST / Win chance %)
-    let rowCls = "", statusHtml, eSaveHtml;
-    if (r.eff === "alive") {
-      rowCls = "alive";
-      statusHtml = `<span class="pos">WON ✓</span>`;
-      // For locked-our-way legs, the "expected save" IS the locked max profit
-      eSaveHtml = `<span class="pos">${fmtMoney(r.maxWin)}</span>`;
-    } else if (r.eff === "dead") {
-      rowCls = "dead";
-      statusHtml = `<span class="neg">LOST ✗</span>`;
-      // Dead legs contribute 0 future savings (parlays may still win via other legs)
-      eSaveHtml = `<span class="muted">$0.00</span>`;
-    } else {
-      const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
-      statusHtml = `<span>${pUsPct}</span>`;
-      eSaveHtml = r.eSave != null
-        ? `<span class="pos">${fmtMoney(r.eSave)}</span>`
-        : `<span class="muted">—</span>`;
-    }
+    const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
 
-    const liveCls = r.live ? (r.live.match(/Final/i) ? "post" : "in") : "";
-    const liveHtml = r.live
-      ? `<span class="live-state ${liveCls}">${escapeHtml(r.live)}</span>${r.statText ? ` <span class="v">${escapeHtml(r.statText)}</span>` : ""}`
-      : `<span class="muted">scheduled</span>`;
-
-    return `<tr class="${rowCls}">
+    return `<tr>
       <td class="cheer"><span class="logos">${logos}</span><span>${escapeHtml(desc)}</span>${dateHtml}</td>
       <td class="num">${r.parlays}</td>
       <td class="num">${fmtMoney(r.exposure)}</td>
       <td class="num pos">+${r.maxWin.toFixed(2)}</td>
-      <td class="num">${statusHtml}</td>
-      <td class="num">${eSaveHtml}</td>
-      <td class="status">${liveHtml}</td>
+      <td class="num">${pUsPct}</td>
     </tr>`;
   }).join("");
+
+  // Expand/collapse footer row
+  const hidden = totalCount - visible.length;
+  let footer = "";
+  if (totalCount > CHEER_COLLAPSED_LIMIT) {
+    if (!state.cheerExpanded) {
+      footer = `<tr class="cheer-toggle-row"><td colspan="5">
+        <button class="cheer-toggle" id="cheer-expand">Show ${hidden} more pending leg${hidden === 1 ? "" : "s"}</button>
+      </td></tr>`;
+    } else {
+      footer = `<tr class="cheer-toggle-row"><td colspan="5">
+        <button class="cheer-toggle" id="cheer-collapse">Show top ${CHEER_COLLAPSED_LIMIT} only</button>
+      </td></tr>`;
+    }
+  }
 
   wrap.innerHTML = `
     <div class="leg-exposure-table-wrap">
       <table class="leg-exposure-table">
         <thead><tr>${headerCells}</tr></thead>
-        <tbody>${bodyRows}</tbody>
+        <tbody>${bodyRows}${footer}</tbody>
       </table>
     </div>
   `;
+
+  // Wire up sort + expand/collapse
+  wrap.querySelectorAll("th.sortable").forEach((th) => {
+    th.addEventListener("click", () => {
+      const col = th.getAttribute("data-sort");
+      if (state.cheerSortCol === col) {
+        state.cheerSortDir = state.cheerSortDir === "asc" ? "desc" : "asc";
+      } else {
+        state.cheerSortCol = col;
+        state.cheerSortDir = "desc";
+      }
+      renderLegExposure();
+    });
+  });
+  const exp = $("cheer-expand");
+  if (exp) exp.addEventListener("click", () => { state.cheerExpanded = true; renderLegExposure(); });
+  const col = $("cheer-collapse");
+  if (col) col.addEventListener("click", () => { state.cheerExpanded = false; renderLegExposure(); });
 }
 
 function renderSummary() {
@@ -592,16 +626,90 @@ function renderSummary() {
   `;
 }
 
+// Sort options for the parlay list. Each value-extractor takes the position
+// record and its precomputed { probs } so we don't recompute per comparator.
+const PARLAY_SORT_OPTIONS = [
+  { key: "cost",   label: "Risk",     get: (p, x) => p.cost },
+  { key: "maxWin", label: "To Win",   get: (p, x) => p.max_profit },
+  { key: "pWin",   label: "Win Chance", get: (p, x) => x.probs.pWin ?? -1 },
+  { key: "evPnl",  label: "Expected Outcome", get: (p, x) => x.probs.expectedPnl ?? -Infinity },
+  { key: "roi",    label: "Current ROI", get: (p, x) =>
+      (x.probs.expectedPnl != null && p.cost > 0) ? (x.probs.expectedPnl / p.cost) : -Infinity },
+];
+
+function renderParlaySortBar() {
+  const bar = $("parlay-sort-bar");
+  if (!bar) return;
+  if (!state.positions.length) { bar.innerHTML = ""; return; }
+  const arrow = (k) =>
+    state.parlaySortCol === k
+      ? (state.parlaySortDir === "asc" ? " ▲" : " ▼")
+      : "";
+  const buttons = PARLAY_SORT_OPTIONS.map((o) =>
+    `<button class="sort-btn ${state.parlaySortCol === o.key ? "active" : ""}" data-sort="${o.key}">${escapeHtml(o.label)}${arrow(o.key)}</button>`
+  ).join("");
+  bar.innerHTML = `<span class="sort-label">Sort:</span>${buttons}
+    <span class="parlay-sort-actions">
+      <button class="sort-action" id="parlay-expand-all">Expand all</button>
+      <button class="sort-action" id="parlay-collapse-all">Collapse all</button>
+    </span>`;
+  bar.querySelectorAll("button.sort-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const col = btn.getAttribute("data-sort");
+      if (state.parlaySortCol === col) {
+        state.parlaySortDir = state.parlaySortDir === "asc" ? "desc" : "asc";
+      } else {
+        state.parlaySortCol = col;
+        state.parlaySortDir = "desc";
+      }
+      renderParlays();
+    });
+  });
+  $("parlay-expand-all")?.addEventListener("click", () => {
+    state.parlayExpanded = new Set(state.positions.map((p) => p.ticker));
+    renderParlays();
+  });
+  $("parlay-collapse-all")?.addEventListener("click", () => {
+    state.parlayExpanded = new Set();
+    renderParlays();
+  });
+}
+
 function renderParlays() {
+  renderParlaySortBar();
   const wrap = $("parlays");
   if (!state.positions.length) {
     wrap.innerHTML = `<div class="empty">no open positions</div>`;
     return;
   }
-  const cards = [...state.positions]
-    .sort((a, b) => b.cost - a.cost)
-    .map((p, i) => renderParlayCard(p, i + 1));
-  wrap.innerHTML = cards.join("");
+  // Precompute probabilities once per position so the sort comparator is cheap.
+  const enriched = state.positions.map((p) => ({ p, probs: computeParlayProbabilities(p) }));
+  const opt = PARLAY_SORT_OPTIONS.find((o) => o.key === state.parlaySortCol) || PARLAY_SORT_OPTIONS[0];
+  const dirMul = state.parlaySortDir === "asc" ? 1 : -1;
+  enriched.sort((a, b) => (opt.get(a.p, a) - opt.get(b.p, b)) * dirMul);
+
+  wrap.innerHTML = enriched
+    .map((x, i) => renderParlayCard(x.p, i + 1, x.probs))
+    .join("");
+
+  // Click / keyboard toggle on each parlay head
+  wrap.querySelectorAll(".parlay > .head").forEach((head) => {
+    const toggle = (e) => {
+      if (e.target.closest("a, button")) return;
+      const tk = head.getAttribute("data-ticker");
+      if (!tk) return;
+      if (state.parlayExpanded.has(tk)) state.parlayExpanded.delete(tk);
+      else state.parlayExpanded.add(tk);
+      renderParlays();
+    };
+    head.addEventListener("click", toggle);
+    head.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle(e);
+      }
+    });
+  });
 }
 
 /**
@@ -763,9 +871,41 @@ function computeParlayProbabilities(p) {
   return { pWin, pLose, expectedPnl, unknown: false, breakdown };
 }
 
-function renderParlayCard(p, n) {
+/**
+ * Logo strip showing every team involved in the parlay, deduped across legs.
+ * Walks BOTH buyer-yes and buyer-no resolutions of each leg so game-pick legs
+ * contribute both teams of the matchup, not just the side the buyer picked.
+ */
+function parlayLegLogosHtml(p, max = 8) {
+  const seen = new Set();
+  const out = [];
+  for (const leg of p.legs || []) {
+    for (const side of ["yes", "no"]) {
+      const { sport, teams } = legTeams(leg.ticker, side) || {};
+      if (!sport || !teams) continue;
+      for (const t of teams) {
+        const key = `${sport}|${t}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ sport, abbr: t });
+      }
+    }
+  }
+  if (!out.length) return "";
+  const truncated = out.length > max ? out.slice(0, max) : out;
+  const extra = out.length > max
+    ? `<span class="parlay-logo-more">+${out.length - max}</span>`
+    : "";
+  const imgs = truncated.map(({ sport, abbr }) =>
+    `<img class="team-logo" src="${teamLogoUrl(sport, abbr)}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+  ).join("");
+  return `<span class="parlay-logos">${imgs}${extra}</span>`;
+}
+
+function renderParlayCard(p, n, probs) {
   let aliveLegs = 0, deadLegs = 0, pendingLegs = 0;
-  const probs = computeParlayProbabilities(p);
+  if (!probs) probs = computeParlayProbabilities(p);
+  const expanded = state.parlayExpanded.has(p.ticker);
 
   const legHtml = p.legs.map((leg, i) => {
     const res = legResolutionForUs(leg, state.scoreboards, state.boxscores);
@@ -826,19 +966,21 @@ function renderParlayCard(p, n) {
     </div>`;
   }).join("") || `<div class="leg"><div class="desc">legs unavailable</div></div>`;
 
-  let cardBadge = "open", cardBadgeCls = "";
+  // Status pill rules:
+  //   LOST     — every leg hit for the buyer (we paid out)
+  //   WON      — at least one leg locked our way → parlay can't lose, win chance 100%
+  //   AT RISK  — neither WON nor LOST, but live expected outcome is negative (ROI < 0)
+  //   TRACKING — neither WON nor LOST and ROI ≥ 0 (or ROI unknown)
+  let cardBadge = "TRACKING", cardBadgeCls = "";
   if (p.legs.length > 0) {
-    if (aliveLegs > 0) {
-      // Any single leg we've locked → parlay can't lose anymore.
-      cardBadge = "WINNING"; cardBadgeCls = "alive";
-    } else if (deadLegs === p.legs.length) {
+    if (deadLegs === p.legs.length) {
       cardBadge = "LOST"; cardBadgeCls = "dead";
-    } else if (deadLegs > 0) {
-      // Some legs locked against us, others still TBD. We need ANY remaining
-      // leg to break (turn alive) for us to win.
-      cardBadge = "AT RISK"; cardBadgeCls = "dead";
-    } else if (pendingLegs > 0) {
-      cardBadge = "in play"; cardBadgeCls = "partial";
+    } else if (aliveLegs > 0) {
+      cardBadge = "WON"; cardBadgeCls = "alive";
+    } else if (probs.expectedPnl != null && probs.expectedPnl < 0) {
+      cardBadge = "AT RISK"; cardBadgeCls = "partial";
+    } else {
+      cardBadge = "TRACKING"; cardBadgeCls = "";
     }
   }
 
@@ -855,11 +997,12 @@ function renderParlayCard(p, n) {
     ? `<div class="col"><div class="lbl">Current ROI</div><div class="val ${pnlClass(probs.expectedPnl)}">${(probs.expectedPnl/p.cost*100).toFixed(0)}%</div></div>`
     : "";
 
-  return `<div class="parlay">
-    <div class="head">
+  return `<div class="parlay ${expanded ? "expanded" : "collapsed"}">
+    <div class="head" data-ticker="${escapeHtml(p.ticker)}" role="button" aria-expanded="${expanded}" tabindex="0">
       <div class="top">
         <span class="badge ${cardBadgeCls}">#${n} · ${cardBadge}</span>
-        <span class="source">${escapeHtml(p.source || "—")}</span>
+        ${parlayLegLogosHtml(p)}
+        <span class="chev" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
       </div>
       <div class="stake">
         <div class="col"><div class="lbl">Risk</div><div class="val">${fmtMoney(p.cost)}</div></div>
@@ -870,7 +1013,7 @@ function renderParlayCard(p, n) {
         ${unrealHtml}
       </div>
     </div>
-    <div class="legs">${legHtml}</div>
+    ${expanded ? `<div class="legs">${legHtml}</div>` : ""}
   </div>`;
 }
 
