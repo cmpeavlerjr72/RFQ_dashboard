@@ -412,7 +412,142 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
 
 function render() {
   renderSummary();
+  renderLegExposure();
   renderParlays();
+}
+
+// --------------------------- leg exposure ----------------------------------
+
+/**
+ * Aggregate every leg across every open parlay into a "what to cheer for" view.
+ * Each unique leg ticker is summed across all parlays it appears in:
+ *   - exposure: total cost we'd lose if every containing parlay hits
+ *   - maxWin:   total max_profit we'd collect if this leg breaks our way
+ *   - pUs:      probability our side wins THIS leg (live mid, flipped to NO side)
+ *   - eSave:    pUs * maxWin (expected $ from rooting for this leg to break)
+ *
+ * A leg "breaking our way" voids any parlay it's in, so this is the single most
+ * actionable view: which player/team underperformance would clear the most $$
+ * off the book at once.
+ */
+function aggregateLegExposure() {
+  const byTicker = new Map();
+  for (const p of state.positions) {
+    for (const leg of p.legs) {
+      const tk = leg.ticker;
+      let row = byTicker.get(tk);
+      if (!row) {
+        row = {
+          ticker: tk,
+          buyerSide: leg.side,         // what the buyer needs (parlay hits)
+          ourSide: flipSide(leg.side), // what we need (parlay voids)
+          parlays: 0,
+          exposure: 0,
+          maxWin: 0,
+          legMid: null,                // most recent legMid we've seen
+          fillP: null,                 // fill-time fair (fallback)
+        };
+        byTicker.set(tk, row);
+      }
+      row.parlays++;
+      row.exposure += p.cost;
+      row.maxWin += p.max_profit;
+      const lm = p.legMids[tk];
+      if (lm && lm.midC != null) row.legMid = lm;
+      if (leg.p != null) row.fillP = Number(leg.p);
+    }
+  }
+
+  // Resolve probability + status per leg using the same rules as the parlay cards
+  const out = [];
+  for (const row of byTicker.values()) {
+    const synthetic = { ticker: row.ticker, side: row.buyerSide };
+    const res = legResolutionForUs(synthetic, state.scoreboards, state.boxscores);
+    const eff = effectiveStatus(res, row.legMid);
+    let pUs = null;
+    if (eff === "alive") pUs = 1;
+    else if (eff === "dead") pUs = 0;
+    else if (row.legMid?.midC != null) {
+      // legMid is for OUR side already (flipped during refresh), midC ∈ [0,100]
+      pUs = row.legMid.midC / 100;
+    } else if (row.fillP != null) {
+      // fill-time fair was the buyer's prob; ours is 1 - that
+      pUs = 1 - row.fillP;
+    }
+    const eSave = pUs != null ? pUs * row.maxWin : null;
+    out.push({ ...row, eff, pUs, eSave, statText: res.stat || "", live: res.live || "" });
+  }
+
+  // Sort: undecided legs by expected savings desc; resolved legs at bottom.
+  out.sort((a, b) => {
+    const aResolved = a.eff === "alive" || a.eff === "dead";
+    const bResolved = b.eff === "alive" || b.eff === "dead";
+    if (aResolved !== bResolved) return aResolved ? 1 : -1;
+    return (b.eSave ?? -1) - (a.eSave ?? -1);
+  });
+  return out;
+}
+
+function renderLegExposure() {
+  const wrap = $("leg-exposure");
+  const rows = aggregateLegExposure();
+  if (!rows.length) {
+    wrap.innerHTML = `<div class="empty">no legs to aggregate</div>`;
+    return;
+  }
+  // Limit display to top 25 unresolved + any resolved we want to show separately
+  const unresolved = rows.filter((r) => r.eff !== "alive" && r.eff !== "dead").slice(0, 25);
+  const wonCount = rows.filter((r) => r.eff === "alive").length;
+  const lostCount = rows.filter((r) => r.eff === "dead").length;
+
+  const headerCells = [
+    `<th class="cheer">Cheer for</th>`,
+    `<th class="num">In</th>`,
+    `<th class="num">Risk</th>`,
+    `<th class="num">To win</th>`,
+    `<th class="num">P(break)</th>`,
+    `<th class="num">E[save]</th>`,
+    `<th class="status">Live</th>`,
+  ].join("");
+
+  const bodyRows = unresolved.map((r) => {
+    const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
+    const { sport, teams: logoTeams } = legTeams(r.ticker, r.ourSide);
+    const logos = logoTeams.map((abbr) =>
+      `<img class="team-logo" src="${teamLogoUrl(sport, abbr)}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+    ).join("");
+    const dateLabel = legDateLabel(r.ticker);
+    const dateHtml = dateLabel ? `<span class="leg-date">${escapeHtml(dateLabel)}</span>` : "";
+    const pBreakHtml = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
+    const eSaveHtml = r.eSave != null ? fmtMoney(r.eSave) : "—";
+    const liveCls = r.live ? (r.live.match(/Final/i) ? "post" : "in") : "";
+    const liveHtml = r.live
+      ? `<span class="live-state ${liveCls}">${escapeHtml(r.live)}</span>${r.statText ? ` <span class="v">${escapeHtml(r.statText)}</span>` : ""}`
+      : `<span class="muted">scheduled</span>`;
+    return `<tr>
+      <td class="cheer"><span class="logos">${logos}</span><span>${escapeHtml(desc)}</span>${dateHtml}</td>
+      <td class="num">${r.parlays}</td>
+      <td class="num">${fmtMoney(r.exposure)}</td>
+      <td class="num pos">+${r.maxWin.toFixed(2)}</td>
+      <td class="num">${pBreakHtml}</td>
+      <td class="num pos">${eSaveHtml}</td>
+      <td class="status">${liveHtml}</td>
+    </tr>`;
+  }).join("");
+
+  const settledNote = (wonCount + lostCount) > 0
+    ? `<div class="settled-note">${wonCount} legs won · ${lostCount} legs lost (settled, hidden)</div>`
+    : "";
+
+  wrap.innerHTML = `
+    <div class="leg-exposure-table-wrap">
+      <table class="leg-exposure-table">
+        <thead><tr>${headerCells}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>
+    ${settledNote}
+  `;
 }
 
 function renderSummary() {
