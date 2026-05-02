@@ -478,12 +478,15 @@ function aggregateLegExposure() {
     out.push({ ...row, eff, pUs, eSave, statText: res.stat || "", live: res.live || "" });
   }
 
-  // Sort: undecided legs by expected savings desc; resolved legs at bottom.
+  // Sort: WON legs first (locked savings), pending by expected savings desc,
+  // LOST legs last. Within each group, sort by the relevant dollar value.
+  const groupRank = (eff) => eff === "alive" ? 0 : eff === "dead" ? 2 : 1;
   out.sort((a, b) => {
-    const aResolved = a.eff === "alive" || a.eff === "dead";
-    const bResolved = b.eff === "alive" || b.eff === "dead";
-    if (aResolved !== bResolved) return aResolved ? 1 : -1;
-    return (b.eSave ?? -1) - (a.eSave ?? -1);
+    const ga = groupRank(a.eff), gb = groupRank(b.eff);
+    if (ga !== gb) return ga - gb;
+    if (ga === 0) return b.maxWin - a.maxWin;       // WON: biggest locked first
+    if (ga === 2) return b.exposure - a.exposure;   // LOST: biggest stake first
+    return (b.eSave ?? -1) - (a.eSave ?? -1);       // PENDING: best E[save] first
   });
   return out;
 }
@@ -495,22 +498,18 @@ function renderLegExposure() {
     wrap.innerHTML = `<div class="empty">no legs to aggregate</div>`;
     return;
   }
-  // Limit display to top 25 unresolved + any resolved we want to show separately
-  const unresolved = rows.filter((r) => r.eff !== "alive" && r.eff !== "dead").slice(0, 25);
-  const wonCount = rows.filter((r) => r.eff === "alive").length;
-  const lostCount = rows.filter((r) => r.eff === "dead").length;
 
   const headerCells = [
     `<th class="cheer">Cheer for</th>`,
     `<th class="num">In</th>`,
     `<th class="num">Risk</th>`,
     `<th class="num">To win</th>`,
-    `<th class="num">P(break)</th>`,
+    `<th class="num">Status</th>`,
     `<th class="num">E[save]</th>`,
     `<th class="status">Live</th>`,
   ].join("");
 
-  const bodyRows = unresolved.map((r) => {
+  const bodyRows = rows.map((r) => {
     const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
     const { sport, teams: logoTeams } = legTeams(r.ticker, r.ourSide);
     const logos = logoTeams.map((abbr) =>
@@ -518,26 +517,42 @@ function renderLegExposure() {
     ).join("");
     const dateLabel = legDateLabel(r.ticker);
     const dateHtml = dateLabel ? `<span class="leg-date">${escapeHtml(dateLabel)}</span>` : "";
-    const pBreakHtml = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
-    const eSaveHtml = r.eSave != null ? fmtMoney(r.eSave) : "—";
+
+    // Status cell: mirror parlay-leg rendering (WON / LOST / Win chance %)
+    let rowCls = "", statusHtml, eSaveHtml;
+    if (r.eff === "alive") {
+      rowCls = "alive";
+      statusHtml = `<span class="pos">WON ✓</span>`;
+      // For locked-our-way legs, the "expected save" IS the locked max profit
+      eSaveHtml = `<span class="pos">${fmtMoney(r.maxWin)}</span>`;
+    } else if (r.eff === "dead") {
+      rowCls = "dead";
+      statusHtml = `<span class="neg">LOST ✗</span>`;
+      // Dead legs contribute 0 future savings (parlays may still win via other legs)
+      eSaveHtml = `<span class="muted">$0.00</span>`;
+    } else {
+      const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
+      statusHtml = `<span>${pUsPct}</span>`;
+      eSaveHtml = r.eSave != null
+        ? `<span class="pos">${fmtMoney(r.eSave)}</span>`
+        : `<span class="muted">—</span>`;
+    }
+
     const liveCls = r.live ? (r.live.match(/Final/i) ? "post" : "in") : "";
     const liveHtml = r.live
       ? `<span class="live-state ${liveCls}">${escapeHtml(r.live)}</span>${r.statText ? ` <span class="v">${escapeHtml(r.statText)}</span>` : ""}`
       : `<span class="muted">scheduled</span>`;
-    return `<tr>
+
+    return `<tr class="${rowCls}">
       <td class="cheer"><span class="logos">${logos}</span><span>${escapeHtml(desc)}</span>${dateHtml}</td>
       <td class="num">${r.parlays}</td>
       <td class="num">${fmtMoney(r.exposure)}</td>
       <td class="num pos">+${r.maxWin.toFixed(2)}</td>
-      <td class="num">${pBreakHtml}</td>
-      <td class="num pos">${eSaveHtml}</td>
+      <td class="num">${statusHtml}</td>
+      <td class="num">${eSaveHtml}</td>
       <td class="status">${liveHtml}</td>
     </tr>`;
   }).join("");
-
-  const settledNote = (wonCount + lostCount) > 0
-    ? `<div class="settled-note">${wonCount} legs won · ${lostCount} legs lost (settled, hidden)</div>`
-    : "";
 
   wrap.innerHTML = `
     <div class="leg-exposure-table-wrap">
@@ -546,7 +561,6 @@ function renderLegExposure() {
         <tbody>${bodyRows}</tbody>
       </table>
     </div>
-    ${settledNote}
   `;
 }
 
