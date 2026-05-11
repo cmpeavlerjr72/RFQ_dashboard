@@ -27,8 +27,11 @@ export interface KalshiFill {
 
 export interface KalshiSettlement {
   ticker?: string;
-  market_result?: string;       // "yes" | "no" | "void" | ""
+  market_result?: string;       // "yes" | "no" | "void" | "scalar" | ""
   settled_time?: string;
+  // For "scalar" MVE settlements Kalshi returns gross payout (in cents) here.
+  // Absent / 0 for binary yes/no/void results.
+  revenue?: number;
 }
 
 export interface RecapLeg {
@@ -279,6 +282,12 @@ function aggregateParlay(parlayTicker: string, fills: KalshiFill[], settle?: Kal
   } else if (result === "void") {
     pnl = 0;
     status = "void";
+  } else if (result === "scalar") {
+    // MVE scalar settlement: Kalshi pays gross `revenue` cents on our position.
+    // Sign of net pnl decides win/loss bucket.
+    const revenueDollars = (settle?.revenue ?? 0) / 100;
+    pnl = revenueDollars - cost;
+    status = pnl >= 0 ? "won" : "lost";
   } else if (result === side) {
     pnl = qty * 1.0 - cost;
     status = "won";
