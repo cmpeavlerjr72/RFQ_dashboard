@@ -256,7 +256,8 @@ function logoStripForTickers(parlayMap, tickers, defaultSport, opts = {}) {
     const p = parlayMap.get(tk);
     if (!p) continue;
     for (const leg of p.legs || []) {
-      const { sport, teams } = legTeams(leg.ticker, leg.side) || {};
+      const lt = legTeams(leg.ticker, leg.side) || {};
+      const { sport, teams, league } = lt;
       if (!sport || !teams) continue;
       // For a sport-row strip, only show teams matching the parent sport (else it
       // gets messy with cross-sport parlays). For "Cross" / unknown rows, show all.
@@ -264,24 +265,26 @@ function logoStripForTickers(parlayMap, tickers, defaultSport, opts = {}) {
         if (sport.toLowerCase() !== defaultSport.toLowerCase()) continue;
       }
       for (const t of teams) {
-        const key = `${sport}|${t}`;
+        const key = `${sport}|${league || ""}|${t}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push({ sport, abbr: t });
+        out.push({ sport, abbr: t, league });
       }
     }
   }
   if (!out.length) return "";
   const truncated = out.length > max ? out.slice(0, max) : out;
   const moreChip = out.length > max ? `<span class="leg-count">+${out.length - max}</span>` : "";
-  const imgs = truncated.map(({ sport, abbr }) => renderTeamBadge(sport, abbr)).join("");
+  const imgs = truncated.map(({ sport, abbr, league }) => renderTeamBadge(sport, abbr, league)).join("");
   return `<div class="logo-strip">${imgs}${moreChip}</div>`;
 }
 
 /** Render either an <img> (logo/flag) or a small text chip if no logo is known.
- *  Keeps the soccer / unknown-sport rows from being completely blank. */
-function renderTeamBadge(sport, abbr) {
-  const url = teamLogoUrl(sport, abbr);
+ *  Keeps the soccer / unknown-sport rows from being completely blank.
+ *  Pass league for soccer (e.g. "LALIGA") so the logo resolver can
+ *  disambiguate across leagues. */
+function renderTeamBadge(sport, abbr, league) {
+  const url = teamLogoUrl(sport, abbr, { league });
   if (url) {
     return `<img class="leg-logo" src="${url}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)} (${escapeHtml(sport)})" loading="lazy" />`;
   }
@@ -380,13 +383,14 @@ function renderLogoStrip(parlay) {
   const seen = new Set();
   const imgs = [];
   for (const leg of legs) {
-    const { sport, teams } = legTeams(leg.ticker, leg.side) || {};
+    const lt = legTeams(leg.ticker, leg.side) || {};
+    const { sport, teams, league } = lt;
     if (!sport || !teams || !teams.length) continue;
     for (const t of teams) {
-      const key = `${sport}|${t}`;
+      const key = `${sport}|${league || ""}|${t}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      imgs.push(renderTeamBadge(sport, t));
+      imgs.push(renderTeamBadge(sport, t, league));
     }
   }
   if (!imgs.length) {

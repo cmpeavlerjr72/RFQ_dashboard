@@ -9,8 +9,29 @@
 
 import {
   NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
-  MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl,
+  MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl, soccerLogoUrl,
 } from "/teams.js";
+
+// Series-prefix → league key used to look up soccer logos.
+const SOCCER_LEAGUE_FROM_PREFIX = {
+  KXEPLGAME: "EPL", KXEPLSPREAD: "EPL", KXEPLTOTAL: "EPL", KXEPLBTTS: "EPL",
+  KXLALIGAGAME: "LALIGA", KXLALIGASPREAD: "LALIGA", KXLALIGATOTAL: "LALIGA",
+  KXLALIGABTTS: "LALIGA", KXLALIGA1H: "LALIGA",
+  KXSERIEAGAME: "SERIEA", KXSERIEASPREAD: "SERIEA", KXSERIEATOTAL: "SERIEA",
+  KXSERIEABTTS: "SERIEA", KXSERIEA1H: "SERIEA",
+  KXBUNDESLIGAGAME: "BUNDESLIGA", KXBUNDESLIGASPREAD: "BUNDESLIGA",
+  KXBUNDESLIGATOTAL: "BUNDESLIGA", KXBUNDESLIGABTTS: "BUNDESLIGA",
+  KXBUNDESLIGA1H: "BUNDESLIGA",
+  KXLIGUE1GAME: "LIGUE1", KXLIGUE1SPREAD: "LIGUE1", KXLIGUE1TOTAL: "LIGUE1",
+  KXLIGUE1BTTS: "LIGUE1", KXLIGUE11H: "LIGUE1",
+};
+
+function soccerLeagueOf(ticker) {
+  for (const [pref, league] of Object.entries(SOCCER_LEAGUE_FROM_PREFIX)) {
+    if (ticker.startsWith(pref + "-")) return league;
+  }
+  return null;
+}
 
 const TEAM_BY_LEN_HINT = {
   KXMLB: MLB_TEAMS,
@@ -20,13 +41,22 @@ const TEAM_BY_LEN_HINT = {
 };
 
 function splitTeams(concat, table) {
-  // Try every prefix length 2-4 against the team table; return [away, home]
-  for (let i = 2; i <= 4; i++) {
-    const a = concat.slice(0, i);
-    const b = concat.slice(i);
+  // Try every plausible split (a-length 2..4, b-length 2..4) against the
+  // team table; first hit wins. Returns [away, home].
+  for (let aLen = 2; aLen <= 4 && aLen < concat.length; aLen++) {
+    const a = concat.slice(0, aLen);
+    const b = concat.slice(aLen);
+    if (b.length < 2 || b.length > 4) continue;
     if (table[a] && table[b]) return [a, b];
   }
-  // Fallback: best-effort 50/50 split
+  // Looser fallback: at least one side known.
+  for (let aLen = 2; aLen <= 4 && aLen < concat.length; aLen++) {
+    const a = concat.slice(0, aLen);
+    const b = concat.slice(aLen);
+    if (b.length < 2 || b.length > 4) continue;
+    if (table[a] || table[b]) return [a, b];
+  }
+  // Last resort: 50/50 split.
   const mid = Math.ceil(concat.length / 2);
   return [concat.slice(0, mid), concat.slice(mid)];
 }
@@ -267,44 +297,145 @@ export function legLabel(ticker, side, athleteIdx) {
     return `UFC: ${oppName} d. ${winnerName}`;
   }
 
-  // ---------- Soccer ----------
-  // Game (3-way moneyline incl. TIE pick) — flip to "draw or other team" on NO.
+  // ---------- Soccer (all 5 leagues × game/spread/total/BTTS/1H) ----------
   for (const [pref, label] of Object.entries(SOCCER_LEAGUES)) {
     if (!ticker.startsWith(pref + "-")) continue;
     const rest = ticker.slice(pref.length + 1);
-    const [dt, pickAbbr] = rest.split("-");
+    const [dt, suffix] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, SOCCER_TEAMS);
     const aName = teamName(SOCCER_TEAMS, a);
     const bName = teamName(SOCCER_TEAMS, b);
 
     if (pref.endsWith("GAME")) {
-      if (pickAbbr === "TIE") {
+      if (suffix === "TIE") {
         if (side === "yes") return `${label}: Draw — ${aName} vs ${bName}`;
         return `${label}: Decisive result — ${aName} vs ${bName}`;
       }
-      const pickName = teamName(SOCCER_TEAMS, pickAbbr);
-      const oppName = pickAbbr === a ? bName : aName;
+      const pickName = teamName(SOCCER_TEAMS, suffix);
+      const oppName = suffix === a ? bName : aName;
       if (side === "yes") return `${label}: ${pickName} win vs ${oppName}`;
       return `${label}: ${oppName} win or draw vs ${pickName}`;
     }
+    if (pref.endsWith("SPREAD")) {
+      // Suffix is the team abbrev + handicap (e.g. "RMA1" = RMA -1.5).
+      // We can't always cleanly parse the handicap; render the matchup and
+      // direction at minimum.
+      if (side === "yes") return `${label}: ${aName} vs ${bName} spread ${suffix}`;
+      return `${label}: ${aName} vs ${bName} spread NOT ${suffix}`;
+    }
+    if (pref.endsWith("TOTAL")) {
+      if (side === "yes") return `${label}: ${aName} vs ${bName} OVER ${suffix} goals`;
+      return `${label}: ${aName} vs ${bName} UNDER ${suffix} goals`;
+    }
     if (pref.endsWith("BTTS")) {
-      // Both teams to score — yes side = both teams score
       if (side === "yes") return `${label}: Both teams score (${aName} vs ${bName})`;
       return `${label}: Either team blanked (${aName} vs ${bName})`;
     }
     if (pref.endsWith("1H")) {
-      // First-half 3-way moneyline
-      if (pickAbbr === "TIE") {
+      if (suffix === "TIE") {
         if (side === "yes") return `${label}: 1H draw — ${aName} vs ${bName}`;
         return `${label}: 1H decisive — ${aName} vs ${bName}`;
       }
-      const pickName = teamName(SOCCER_TEAMS, pickAbbr);
-      const oppName = pickAbbr === a ? bName : aName;
+      const pickName = teamName(SOCCER_TEAMS, suffix);
+      const oppName = suffix === a ? bName : aName;
       if (side === "yes") return `${label}: ${pickName} lead at half vs ${oppName}`;
       return `${label}: ${oppName} lead or draw at half vs ${pickName}`;
     }
     return `${label}: ${aName} vs ${bName}`;
+  }
+
+  // ---------- WNBA ----------
+  if (ticker.startsWith("KXWNBAGAME-")) {
+    const rest = ticker.slice("KXWNBAGAME-".length);
+    const [dt, pickAbbr] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, NBA_TEAMS); // WNBA uses similar abbrev system
+    const opp = pickAbbr === a ? b : a;
+    const pickName = teamName(NBA_TEAMS, pickAbbr);
+    const oppName = teamName(NBA_TEAMS, opp);
+    if (side === "yes") return `WNBA: ${pickName} win vs ${oppName}`;
+    return `WNBA: ${oppName} win vs ${pickName}`;
+  }
+
+  // ---------- MLB Run-in-First-Inning ----------
+  // Format: KXMLBRFI-{date+time+teams}-{TEAM}
+  if (ticker.startsWith("KXMLBRFI-")) {
+    const rest = ticker.slice("KXMLBRFI-".length);
+    const [dt, teamAbbr] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, MLB_TEAMS);
+    const teamName_ = teamName(MLB_TEAMS, teamAbbr);
+    if (side === "yes") return `MLB: ${teamName_} score in 1st inning`;
+    return `MLB: ${teamName_} scoreless 1st inning`;
+  }
+
+  // ---------- NHL player props ----------
+  // Format: KXNHL{STAT}-{game}-{TEAM}{PLAYERINITIAL+LASTNAME}{JERSEY}-{THRESHOLD}
+  const nhlPlayer = ticker.match(/^KXNHL(GOAL|PTS|AST|FIRSTGOAL)-(\d{2}[A-Z]{3}\d{2}[A-Z]+)-([A-Z]+\d+)(?:-(\d+))?$/);
+  if (nhlPlayer) {
+    const [, stat, , playerBlob, threshold] = nhlPlayer;
+    let teamAbbr = "", lastName = "";
+    for (let teamLen = 4; teamLen >= 2; teamLen--) {
+      const candidate = playerBlob.slice(0, teamLen);
+      if (NHL_TEAMS[candidate]) {
+        teamAbbr = candidate;
+        const tail = playerBlob.slice(teamLen).replace(/\d+$/, "");
+        lastName = tail.length > 1 ? tail.slice(1) : tail;
+        break;
+      }
+    }
+    const lnPretty = lastName ? lastName.charAt(0) + lastName.slice(1).toLowerCase() : "?";
+    const statLabel = stat === "GOAL" ? "goal" : stat === "PTS" ? "points"
+                     : stat === "AST" ? "assists" : "first goal";
+    if (stat === "FIRSTGOAL") {
+      if (side === "yes") return `NHL: ${lnPretty} scores first goal`;
+      return `NHL: ${lnPretty} NOT first goal`;
+    }
+    if (side === "yes") return `NHL: ${lnPretty} ${threshold}+ ${statLabel}`;
+    return `NHL: ${lnPretty} UNDER ${threshold} ${statLabel}`;
+  }
+
+  // ---------- UFC Method of Victory ----------
+  if (ticker.startsWith("KXUFCMOV-")) {
+    const rest = ticker.slice("KXUFCMOV-".length);
+    const [dt, method] = rest.split("-");
+    const m = dt.match(/^(\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3})$/);
+    const matchup = m ? `${m[2]}/${m[3]}` : dt;
+    // Method codes: KO/TKO, SUB, DEC
+    const methodLabel = method === "KO" ? "KO/TKO" : method === "SUB" ? "submission" : method === "DEC" ? "decision" : method;
+    if (side === "yes") return `UFC ${matchup}: wins by ${methodLabel}`;
+    return `UFC ${matchup}: NOT by ${methodLabel}`;
+  }
+
+  // ---------- UFC Round of Victory ----------
+  if (ticker.startsWith("KXUFCVICROUND-")) {
+    const rest = ticker.slice("KXUFCVICROUND-".length);
+    const [dt, round] = rest.split("-");
+    const m = dt.match(/^(\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3})$/);
+    const matchup = m ? `${m[2]}/${m[3]}` : dt;
+    if (side === "yes") return `UFC ${matchup}: wins in round ${round}`;
+    return `UFC ${matchup}: NOT round ${round}`;
+  }
+
+  // ---------- PGA ----------
+  // KXPGATOUR-{TOURNCODE}-{GOLFER}      → outright winner
+  // KXPGATOP5-{TOURNCODE}-{GOLFER}      → Top 5 finisher
+  // KXPGATOP10-... / KXPGATOP20-...
+  // KXPGAMAKECUT-{TOURNCODE}-{GOLFER}   → make the cut
+  // KXPGAR1LEAD-{TOURNCODE}-{GOLFER}    → Round 1 leader
+  const pgaMatch = ticker.match(/^KX(PGATOUR|PGATOP5|PGATOP10|PGATOP20|PGAMAKECUT|PGAR1LEAD)-([A-Z0-9]+)-([A-Z]+)$/);
+  if (pgaMatch) {
+    const [, kind, tournament, golfer] = pgaMatch;
+    const golferPretty = golfer.charAt(0) + golfer.slice(1).toLowerCase();
+    const label = kind === "PGATOUR" ? "win tournament"
+                : kind === "PGATOP5" ? "Top 5 finish"
+                : kind === "PGATOP10" ? "Top 10 finish"
+                : kind === "PGATOP20" ? "Top 20 finish"
+                : kind === "PGAMAKECUT" ? "makes cut"
+                : "Round 1 leader";
+    if (side === "yes") return `PGA: ${golferPretty} — ${label}`;
+    return `PGA: ${golferPretty} — NOT ${label}`;
   }
 
   // Fallback
@@ -409,14 +540,78 @@ export function legTeams(ticker, side) {
     return { sport: tour, teams: [pickAbbr] };
   }
 
-  // Soccer — return both teams so we can render text badges (no logo CDN yet).
+  // Soccer — return both teams + the league so teamLogoUrl can resolve
+  // the correct logo (Kalshi abbrevs aren't unique across leagues).
+  // KXEPLGAME isn't in SOCCER_LEAGUES (game-only labels), so check it
+  // separately too.
+  if (ticker.startsWith("KXEPLGAME-") || ticker.startsWith("KXEPLSPREAD-") ||
+      ticker.startsWith("KXEPLTOTAL-") || ticker.startsWith("KXEPLBTTS-")) {
+    const league = "EPL";
+    const idx = ticker.indexOf("-");
+    const rest = ticker.slice(idx + 1);
+    const [dt] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, SOCCER_TEAMS);
+    return { sport: "soccer", league, teams: [a, b] };
+  }
   for (const pref of Object.keys(SOCCER_LEAGUES)) {
     if (!ticker.startsWith(pref + "-")) continue;
     const rest = ticker.slice(pref.length + 1);
     const [dt] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, SOCCER_TEAMS);
-    return { sport: "soccer", teams: [a, b] };
+    const league = soccerLeagueOf(ticker);
+    return { sport: "soccer", league, teams: [a, b] };
+  }
+
+  // WNBA — same structure as NBA team-side
+  if (ticker.startsWith("KXWNBAGAME-")) {
+    const rest = ticker.slice("KXWNBAGAME-".length);
+    const [dt, pickAbbr] = rest.split("-");
+    if (side === "no") {
+      const { teams } = parseDateTeams(dt);
+      const [a, b] = splitTeams(teams, NBA_TEAMS);
+      const opp = pickAbbr === a ? b : a;
+      return { sport: "wnba", teams: [opp] };
+    }
+    return { sport: "wnba", teams: [pickAbbr] };
+  }
+
+  // NHL player props (PTS, AST, FIRSTGOAL) — return the player's team
+  const nhlPlayerLT = ticker.match(/^KXNHL(GOAL|PTS|AST|FIRSTGOAL)-(\d{2}[A-Z]{3}\d{2}[A-Z]+)-([A-Z]+\d+)(?:-(\d+))?$/);
+  if (nhlPlayerLT) {
+    const blob = nhlPlayerLT[3];
+    for (let n = 4; n >= 2; n--) {
+      const cand = blob.slice(0, n);
+      if (NHL_TEAMS[cand]) return { sport: "nhl", teams: [cand] };
+    }
+  }
+
+  // MLB RFI — first-inning team
+  if (ticker.startsWith("KXMLBRFI-")) {
+    const rest = ticker.slice("KXMLBRFI-".length);
+    const [, teamAbbr] = rest.split("-");
+    return { sport: "mlb", teams: [teamAbbr] };
+  }
+
+  // UFC method / round of victory — no team logos (fighter sports);
+  // recap will render text badges from the matchup abbrevs.
+  if (ticker.startsWith("KXUFCMOV-") || ticker.startsWith("KXUFCVICROUND-")) {
+    const rest = ticker.slice(ticker.indexOf("-") + 1);
+    const [dt] = rest.split("-");
+    const m = dt.match(/^(\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3})$/);
+    if (m) return { sport: "ufc", teams: [m[2], m[3]] };
+    return { sport: "ufc", teams: [] };
+  }
+
+  // PGA — text-only (no per-golfer logo). Return the golfer abbrev as
+  // the "team" so the renderer shows a labeled chip.
+  if (ticker.startsWith("KXPGATOUR-") || ticker.startsWith("KXPGATOP5-") ||
+      ticker.startsWith("KXPGATOP10-") || ticker.startsWith("KXPGATOP20-") ||
+      ticker.startsWith("KXPGAMAKECUT-") || ticker.startsWith("KXPGAR1LEAD-")) {
+    const parts = ticker.split("-");
+    const golfer = parts[parts.length - 1] || "";
+    return { sport: "pga", teams: golfer ? [golfer] : [] };
   }
 
   // MLB
@@ -466,20 +661,26 @@ export function setLogoContext(ctx) {
   if (ctx.playerFlagIdx) _logoCtx.playerFlagIdx = { ..._logoCtx.playerFlagIdx, ...ctx.playerFlagIdx };
 }
 
-/** Logo URL for a (sport, abbr). Falls back to "" when no logo is known —
- *  callers should render a text badge in that case. */
-export function teamLogoUrl(sport, abbr) {
+/** Logo URL for a (sport, abbr). Optionally pass {league} for soccer.
+ *  Falls back to "" when no logo is known — callers should render a text
+ *  badge in that case. */
+export function teamLogoUrl(sport, abbr, opts = {}) {
   if (!sport || !abbr) return "";
   const s = sport.toLowerCase();
   if (s === "atp" || s === "wta") {
-    // Prefer dynamic ESPN-sourced flag if loaded, fall back to static map
-    // (ESPN tennis API surfaces the tournament event but not per-match
-    // athletes during an active Masters/Slam, so the dynamic index is
-    // typically empty — the static map carries us through those windows).
     return _logoCtx.playerFlagIdx?.[abbr] || tennisFlagUrl(abbr);
   }
   if (s === "ipl") return iplLogoUrl(abbr);
-  if (s === "soccer") return "";   // no soccer CDN yet — recap renders a badge
+  if (s === "soccer") {
+    // League required for disambiguation (LEV is Levante in LaLiga AND
+    // Leverkusen in Bundesliga; BRE is Brentford in EPL AND Bremen in
+    // Bundesliga). Callers should pass {league: "EPL"|"LALIGA"|...}.
+    return soccerLogoUrl(opts.league, abbr);
+  }
+  if (s === "wnba") {
+    // ESPN WNBA logos at the same path as NBA but in the wnba category.
+    return `https://a.espncdn.com/i/teamlogos/wnba/500/${abbr.toLowerCase()}.png`;
+  }
   if (s === "nba" || s === "nhl" || s === "mlb") {
     const overrides = ESPN_ABBR_OVERRIDES[s] || {};
     const a = overrides[abbr] || abbr.toLowerCase();

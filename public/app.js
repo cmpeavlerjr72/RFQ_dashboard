@@ -547,9 +547,9 @@ function renderLegExposure() {
 
   const bodyRows = visible.map((r) => {
     const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
-    const { sport, teams: logoTeams } = legTeams(r.ticker, r.ourSide);
+    const { sport, teams: logoTeams, league } = legTeams(r.ticker, r.ourSide);
     const logos = logoTeams.map((abbr) =>
-      `<img class="team-logo" src="${teamLogoUrl(sport, abbr)}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+      `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
     ).join("");
     const dateLabel = legDateLabel(r.ticker);
     const dateHtml = dateLabel ? `<span class="leg-date">${escapeHtml(dateLabel)}</span>` : "";
@@ -916,13 +916,14 @@ function parlayLegLogosHtml(p, max = 8) {
   const out = [];
   for (const leg of p.legs || []) {
     for (const side of ["yes", "no"]) {
-      const { sport, teams } = legTeams(leg.ticker, side) || {};
+      const lt = legTeams(leg.ticker, side) || {};
+      const { sport, teams, league } = lt;
       if (!sport || !teams) continue;
       for (const t of teams) {
-        const key = `${sport}|${t}`;
+        const key = `${sport}|${league || ""}|${t}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push({ sport, abbr: t });
+        out.push({ sport, abbr: t, league });
       }
     }
   }
@@ -931,8 +932,8 @@ function parlayLegLogosHtml(p, max = 8) {
   const extra = out.length > max
     ? `<span class="parlay-logo-more">+${out.length - max}</span>`
     : "";
-  const imgs = truncated.map(({ sport, abbr }) =>
-    `<img class="team-logo" src="${teamLogoUrl(sport, abbr)}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+  const imgs = truncated.map(({ sport, abbr, league }) =>
+    `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
   ).join("");
   return `<span class="parlay-logos">${imgs}${extra}</span>`;
 }
@@ -974,9 +975,9 @@ function renderParlayCard(p, n, probs) {
     // Pass our flipped side so game-pick legs show the OPPOSITE team's logo
     // (e.g. parlay leg picks ATL but we hold long-NO → show COL logo, our
     // rooting interest).
-    const { sport, teams: logoTeams } = legTeams(leg.ticker, ourSide);
+    const { sport, teams: logoTeams, league } = legTeams(leg.ticker, ourSide);
     const logoHtml = logoTeams.map(abbr =>
-      `<img class="team-logo" src="${teamLogoUrl(sport, abbr)}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+      `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
     ).join("");
 
     // Date tag — disambiguates same-matchup legs across multiple dates
