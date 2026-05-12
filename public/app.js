@@ -107,9 +107,18 @@ async function refresh() {
       if (f.parlay_ticker) state.fillsByParlay[f.parlay_ticker] = f;
     }
 
-    const mp = (pos.market_positions || []).filter(
-      (p) => parseFloat(p.position_fp || "0") !== 0 && !isExcludedTicker(p.ticker),
+    // Separate excluded positions (non-sports tickers) so we can still
+    // subtract their current value from the displayed portfolio total —
+    // Kalshi's balance.portfolio_value counts EVERY position. Without the
+    // adjustment, "portfolio value" on the dashboard would include the
+    // hidden GA-01 contracts.
+    const allNonZero = (pos.market_positions || []).filter(
+      (p) => parseFloat(p.position_fp || "0") !== 0,
     );
+    const excludedPositions = allNonZero.filter((p) => isExcludedTicker(p.ticker));
+    state.excludedPortfolioValue = await computeExcludedPortfolioValue(excludedPositions);
+
+    const mp = allNonZero.filter((p) => !isExcludedTicker(p.ticker));
     state.positions = mp.map((p) => {
       const qty = Math.abs(parseFloat(p.position_fp));
       const exposure = parseFloat(p.market_exposure_dollars || "0");
@@ -599,9 +608,34 @@ function renderLegExposure() {
   if (col) col.addEventListener("click", () => { state.cheerExpanded = false; renderLegExposure(); });
 }
 
+/** Look up the current market value of each excluded position and sum.
+ *  Kalshi's balance.portfolio_value can't be filtered server-side, so we
+ *  subtract this from the displayed PV. Long YES → qty*yes_bid, long NO →
+ *  |qty|*no_bid (conservative sell-side, matches what user could realize). */
+async function computeExcludedPortfolioValue(excludedPositions) {
+  if (!excludedPositions || !excludedPositions.length) return 0;
+  let total = 0;
+  for (const p of excludedPositions) {
+    const qty_fp = parseFloat(p.position_fp || "0");
+    if (qty_fp === 0) continue;
+    try {
+      const mr = await api(`/api/kalshi/market/${encodeURIComponent(p.ticker)}`);
+      const m = mr?.market || mr;
+      const price = qty_fp > 0
+        ? parseFloat(m?.yes_bid_dollars || "0")
+        : parseFloat(m?.no_bid_dollars || "0");
+      total += Math.abs(qty_fp) * price;
+    } catch (e) {
+      console.warn("excluded value fetch failed", p.ticker, e);
+    }
+  }
+  return total;
+}
+
 function renderSummary() {
   const cash = parseFloat(state.balance?.balance || 0) / 100;
-  const pv   = parseFloat(state.balance?.portfolio_value || 0) / 100;
+  const pvRaw = parseFloat(state.balance?.portfolio_value || 0) / 100;
+  const pv   = pvRaw - (state.excludedPortfolioValue || 0);
   const totalCost   = state.positions.reduce((s, p) => s + p.cost, 0);
   const maxProfit   = state.positions.reduce((s, p) => s + p.max_profit, 0);
 
