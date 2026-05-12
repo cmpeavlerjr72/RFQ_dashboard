@@ -9,7 +9,7 @@
 
 import {
   NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
-  MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl,
+  MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl,
 } from "/teams.js";
 
 const TEAM_BY_LEN_HINT = {
@@ -472,7 +472,11 @@ export function teamLogoUrl(sport, abbr) {
   if (!sport || !abbr) return "";
   const s = sport.toLowerCase();
   if (s === "atp" || s === "wta") {
-    return _logoCtx.playerFlagIdx?.[abbr] || "";
+    // Prefer dynamic ESPN-sourced flag if loaded, fall back to static map
+    // (ESPN tennis API surfaces the tournament event but not per-match
+    // athletes during an active Masters/Slam, so the dynamic index is
+    // typically empty — the static map carries us through those windows).
+    return _logoCtx.playerFlagIdx?.[abbr] || tennisFlagUrl(abbr);
   }
   if (s === "ipl") return iplLogoUrl(abbr);
   if (s === "soccer") return "";   // no soccer CDN yet — recap renders a badge

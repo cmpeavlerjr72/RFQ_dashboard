@@ -198,23 +198,75 @@ export function buildAthleteFlagIndex(scoreboards) {
 }
 
 /**
- * IPL franchise logos via iplt20.com's public CDN. Stable URLs as of 2026.
- * Falls back to an inline initials badge if Kalshi adds a new team we don't
- * recognise.
+ * IPL franchise logos via iplt20.com's public CDN. URLs verified against
+ * scores.iplt20.com on 2026-05-12 — the alternate /documents/IPLHeaderLogo
+ * path 404s. Falls back to an inline initials badge if Kalshi adds a new
+ * team we don't recognise.
  */
 const IPL_LOGOS = {
-  CSK:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/CSK.png",
-  DC:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/DC.png",
-  GT:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/GT.png",
-  KKR:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/KKR.png",
-  LSG:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/LSG.png",
-  MI:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/MI.png",
-  PBKS: "https://documents.iplt20.com/ipl/IPLHeaderLogo/PBKS.png",
-  RCB:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/RCB.png",
-  RR:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/RR.png",
-  SRH:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/SRH.png",
+  CSK:  "https://scores.iplt20.com/ipl/teamlogos/CSK.png",
+  DC:   "https://scores.iplt20.com/ipl/teamlogos/DC.png",
+  GT:   "https://scores.iplt20.com/ipl/teamlogos/GT.png",
+  KKR:  "https://scores.iplt20.com/ipl/teamlogos/KKR.png",
+  LSG:  "https://scores.iplt20.com/ipl/teamlogos/LSG.png",
+  MI:   "https://scores.iplt20.com/ipl/teamlogos/MI.png",
+  PBKS: "https://scores.iplt20.com/ipl/teamlogos/PBKS.png",
+  RCB:  "https://scores.iplt20.com/ipl/teamlogos/RCB.png",
+  RR:   "https://scores.iplt20.com/ipl/teamlogos/RR.png",
+  SRH:  "https://scores.iplt20.com/ipl/teamlogos/SRH.png",
 };
 
 export function iplLogoUrl(abbr) {
   return IPL_LOGOS[abbr] || "";
+}
+
+/**
+ * Static map: ATP/WTA player 3-letter abbrev → ISO-2 country code.
+ * Used to render a country flag for tennis legs when ESPN's scoreboard
+ * doesn't expose per-match athletes (Rome / French Open tournaments
+ * only surface the tournament event at the top level — buildAthleteFlagIndex
+ * returns empty for these).
+ *
+ * Maintained manually for matches that have RFQ flow. Add entries here as
+ * new players start appearing in our quote stream. Falls back to a text
+ * badge if the player isn't mapped.
+ */
+const TENNIS_PLAYER_COUNTRY = {
+  // ATP Rome 2026-05-12 Round of 16
+  SIN: "it", // Jannik Sinner
+  PEL: "it", // Mattia Pellegrino
+  DAR: "it", // Luciano Darderi
+  ZVE: "de", // Alexander Zverev
+  RUB: "ru", // Andrey Rublev
+  BAS: "ge", // Nikoloz Basilashvili
+  MED: "ru", // Daniil Medvedev (also matches Medjedovic in some contexts)
+  MEJ: "rs", // Hamad Medjedovic (distinct from MED when both play same day)
+  LAN: "es", // Martin Landaluce
+  TIR: "ar", // Thiago Tirante
+  // WTA Rome 2026-05-12
+  GAU: "us", // Coco Gauff
+  AND: "ru", // Mirra Andreeva
+  CIR: "ro", // Sorana Cirstea
+  OST: "lv", // Jelena Ostapenko
+  // ATP/WTA — common tour regulars (extend as needed)
+  DJO: "rs", // Djokovic
+  ALC: "es", // Alcaraz
+  FRI: "us", // Fritz
+  RUN: "no", // Ruud
+  RUUD: "no",
+  HUR: "us", // Hurkacz
+  TSI: "gr", // Tsitsipas
+  ARN: "us", // Arnaldi (Italian) — adjust if collides
+  SWI: "pl", // Swiatek
+  RYB: "kz", // Rybakina
+  PEG: "us", // Pegula
+  SVI: "ua", // Svitolina
+  KEY: "us", // Keys
+  SAB: "by", // Sabalenka
+};
+
+/** Country flag URL for a tennis player abbrev. Empty when unmapped. */
+export function tennisFlagUrl(abbr) {
+  const cc = TENNIS_PLAYER_COUNTRY[abbr];
+  return cc ? `https://flagcdn.com/w40/${cc}.png` : "";
 }
