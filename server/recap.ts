@@ -534,11 +534,20 @@ export async function getRecap(startEt: string, endEt: string, force = false): P
       const { settles, pages: pagesSettle } = await fetchSettlementsBack(startUtcMs);
 
       // Group fills by parlay ticker, restricted to those whose FIRST fill is
-      // inside [start, end).
+      // inside [start, end). Skip non-sports tickers the dashboard is
+      // configured to hide (elections, etc. — see EXCLUDED_TICKER_PREFIXES
+      // in public/teams.js). Kept in sync manually; this list mirrors the
+      // front-end exclusion so server-side aggregates also reflect the
+      // hidden positions.
+      const EXCLUDED_TICKER_PREFIXES = ["KXGAPRIMARY"];
+      const isExcluded = (tk: string): boolean =>
+        EXCLUDED_TICKER_PREFIXES.some((p) => tk.startsWith(p));
+
       const byParlay = new Map<string, KalshiFill[]>();
       for (const f of fills) {
         const tk = f.market_ticker || f.ticker || "";
         if (!tk) continue;
+        if (isExcluded(tk)) continue;
         const arr = byParlay.get(tk) || [];
         arr.push(f);
         byParlay.set(tk, arr);

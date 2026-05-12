@@ -270,3 +270,26 @@ export function tennisFlagUrl(abbr) {
   const cc = TENNIS_PLAYER_COUNTRY[abbr];
   return cc ? `https://flagcdn.com/w40/${cc}.png` : "";
 }
+
+/**
+ * Ticker prefixes the dashboard should hide. The Kalshi account is mixed-use
+ * — sports parlays from the maker bot plus some manual non-sports positions
+ * (elections, etc.) that the user doesn't want surfaced alongside trading
+ * exposure. Filtered out on the live page (open parlays) and in the recap
+ * back-end (per-day fills).
+ *
+ * Match is `ticker.startsWith(prefix)`. Add prefixes as new non-sport
+ * positions appear.
+ */
+export const EXCLUDED_TICKER_PREFIXES = [
+  "KXGAPRIMARY",  // Georgia House primary positions (manually held)
+];
+
+/** True if this ticker should be hidden from the dashboard entirely. */
+export function isExcludedTicker(ticker) {
+  if (!ticker) return false;
+  for (const p of EXCLUDED_TICKER_PREFIXES) {
+    if (ticker.startsWith(p)) return true;
+  }
+  return false;
+}

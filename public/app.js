@@ -3,7 +3,7 @@
 // the buyer took, with NO-side odds. Manual-refresh by default.
 
 import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp, setLogoContext } from "/labels.js";
-import { buildAthleteIndex, buildAthleteFlagIndex } from "/teams.js";
+import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -108,7 +108,7 @@ async function refresh() {
     }
 
     const mp = (pos.market_positions || []).filter(
-      (p) => parseFloat(p.position_fp || "0") !== 0,
+      (p) => parseFloat(p.position_fp || "0") !== 0 && !isExcludedTicker(p.ticker),
     );
     state.positions = mp.map((p) => {
       const qty = Math.abs(parseFloat(p.position_fp));
