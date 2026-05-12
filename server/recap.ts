@@ -539,7 +539,12 @@ export async function getRecap(startEt: string, endEt: string, force = false): P
       // in public/teams.js). Kept in sync manually; this list mirrors the
       // front-end exclusion so server-side aggregates also reflect the
       // hidden positions.
-      const EXCLUDED_TICKER_PREFIXES = ["KXGAPRIMARY"];
+      const EXCLUDED_TICKER_PREFIXES = [
+        "KXGAPRIMARY",
+        // 2026-05-12 yes-side LaLiga parlay fill (pre long-no-only fix).
+        // Single-trade exclude so it doesn't distort recap aggregates.
+        "KXMVECROSSCATEGORY-S2026DCED9D7F34E-03691C96109",
+      ];
       const isExcluded = (tk: string): boolean =>
         EXCLUDED_TICKER_PREFIXES.some((p) => tk.startsWith(p));
 

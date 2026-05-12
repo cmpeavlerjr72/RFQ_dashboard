@@ -462,6 +462,10 @@ export function soccerLogoUrl(league, abbr) {
  */
 export const EXCLUDED_TICKER_PREFIXES = [
   "KXGAPRIMARY",  // Georgia House primary positions (manually held)
+  // 2026-05-12: accidental yes-side fill (1 contract @ $0.01) before the
+  // long-no-only hard guard patch landed. Wrong-side trade, don't let it
+  // distort PnL/ROI. Full ticker so we exclude only this single market.
+  "KXMVECROSSCATEGORY-S2026DCED9D7F34E-03691C96109",
 ];
 
 /** True if this ticker should be hidden from the dashboard entirely. */
