@@ -2,8 +2,8 @@
 // We hold NO on every parlay, so each leg is rendered as the OPPOSITE of what
 // the buyer took, with NO-side odds. Manual-refresh by default.
 
-import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp } from "/labels.js";
-import { buildAthleteIndex } from "/teams.js";
+import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp, setLogoContext } from "/labels.js";
+import { buildAthleteIndex, buildAthleteFlagIndex } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -213,6 +213,7 @@ async function refresh() {
     }));
 
     state.athleteIdx = buildAthleteIndex(state.scoreboards);
+    setLogoContext({ playerFlagIdx: buildAthleteFlagIndex(state.scoreboards) });
 
     // For player props, pull the boxscore for each game we have a prop on.
     await fetchNeededBoxscores();

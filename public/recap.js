@@ -1,7 +1,8 @@
 // Recap page — pull /api/recap for an ET date or date range and render
 // summary KPIs + (optional) cumulative ROI chart + parlay table.
 
-import { legTeams, teamLogoUrl } from "/labels.js";
+import { legTeams, teamLogoUrl, setLogoContext } from "/labels.js";
+import { buildAthleteFlagIndex } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -75,6 +76,34 @@ function yesterdayEt() {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
+// Fetch ATP/WTA scoreboards over the recap date range and feed the player
+// flag index to labels.js so tennis legs render a country flag in the
+// logo strip. Best-effort — failures degrade silently to abbrev-only badges.
+async function loadTennisFlagsForRange(start, end) {
+  const dates = [];
+  for (let cur = new Date(start + "T00:00:00Z"); cur <= new Date(end + "T00:00:00Z"); cur.setUTCDate(cur.getUTCDate() + 1)) {
+    const y = cur.getUTCFullYear();
+    const m = String(cur.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(cur.getUTCDate()).padStart(2, "0");
+    dates.push(`${y}${m}${d}`);
+  }
+  const scoreboards = {};
+  await Promise.all(
+    dates.flatMap((date) =>
+      ["atp", "wta"].map(async (sport) => {
+        try {
+          const r = await fetch(`/api/scoreboard?sport=${sport}&date=${date}`);
+          if (!r.ok) return;
+          const body = await r.json();
+          scoreboards[`${sport}:${date}`] = body.payload || body;
+        } catch (_e) { /* ignore */ }
+      }),
+    ),
+  );
+  const flagIdx = buildAthleteFlagIndex(scoreboards);
+  setLogoContext({ playerFlagIdx: flagIdx });
+}
+
 async function loadRecap({ force = false } = {}) {
   const start = $("start-date").value;
   const useRange = $("range-toggle").checked;
@@ -92,10 +121,14 @@ async function loadRecap({ force = false } = {}) {
   $("load-btn").disabled = true;
   $("refresh-btn").disabled = true;
   try {
+    // Kick off tennis-flag prefetch in parallel with the recap fetch — it
+    // populates the module-level logo context used during render.
+    const flagsP = loadTennisFlagsForRange(start, end);
     const url = `/api/recap?start=${start}&end=${end}${force ? "&fresh=1" : ""}`;
     const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     state.data = await r.json();
+    await flagsP;
     render(state.data);
     setStatus("loaded", "live");
   } catch (e) {
@@ -241,12 +274,18 @@ function logoStripForTickers(parlayMap, tickers, defaultSport, opts = {}) {
   if (!out.length) return "";
   const truncated = out.length > max ? out.slice(0, max) : out;
   const moreChip = out.length > max ? `<span class="leg-count">+${out.length - max}</span>` : "";
-  const imgs = truncated.map(({ sport, abbr }) => {
-    const url = teamLogoUrl(sport, abbr);
-    if (!url) return "";
-    return `<img class="leg-logo" src="${url}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" loading="lazy" />`;
-  }).join("");
+  const imgs = truncated.map(({ sport, abbr }) => renderTeamBadge(sport, abbr)).join("");
   return `<div class="logo-strip">${imgs}${moreChip}</div>`;
+}
+
+/** Render either an <img> (logo/flag) or a small text chip if no logo is known.
+ *  Keeps the soccer / unknown-sport rows from being completely blank. */
+function renderTeamBadge(sport, abbr) {
+  const url = teamLogoUrl(sport, abbr);
+  if (url) {
+    return `<img class="leg-logo" src="${url}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)} (${escapeHtml(sport)})" loading="lazy" />`;
+  }
+  return `<span class="leg-badge" title="${escapeHtml(abbr)} (${escapeHtml(sport)})">${escapeHtml(abbr)}</span>`;
 }
 
 function renderBreakdown(data) {
@@ -347,9 +386,7 @@ function renderLogoStrip(parlay) {
       const key = `${sport}|${t}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const url = teamLogoUrl(sport, t);
-      if (!url) continue;
-      imgs.push(`<img class="leg-logo" src="${url}" alt="${escapeHtml(t)}" title="${escapeHtml(t)}" loading="lazy" />`);
+      imgs.push(renderTeamBadge(sport, t));
     }
   }
   if (!imgs.length) {

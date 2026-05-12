@@ -1,7 +1,7 @@
 // Team and abbreviation mappings used to render bet labels.
-// NHL/MLB/NBA: hardcoded tables (these don't change often).
-// Tennis (ATP/WTA) + UFC: dynamic — we read athlete names off the ESPN
-// scoreboards and match by uppercase last-name prefix.
+// NHL/MLB/NBA/IPL/soccer: hardcoded tables (these don't change often).
+// Tennis (ATP/WTA) + UFC: dynamic — we read athlete names and country
+// flags off the ESPN scoreboards and match by uppercase last-name prefix.
 
 export const NHL_TEAMS = {
   ANA: "Ducks", BOS: "Bruins", BUF: "Sabres", CAR: "Hurricanes",
@@ -26,6 +26,70 @@ export const MLB_TEAMS = {
   PHI: "Phillies", PIT: "Pirates", SD: "Padres",
   SF: "Giants", SEA: "Mariners", STL: "Cardinals",
   TB: "Rays", TEX: "Rangers", TOR: "Blue Jays", WSH: "Nationals",
+};
+
+// IPL (Indian Premier League cricket). Kalshi uses the standard 3-letter
+// abbrev for each franchise. We render full team names on the slip and
+// pull logos from the iplt20.com static CDN, which is publicly hot-linkable.
+export const IPL_TEAMS = {
+  CSK:  "Chennai Super Kings",
+  DC:   "Delhi Capitals",
+  GT:   "Gujarat Titans",
+  KKR:  "Kolkata Knight Riders",
+  LSG:  "Lucknow Super Giants",
+  MI:   "Mumbai Indians",
+  PBKS: "Punjab Kings",
+  RCB:  "Royal Challengers Bengaluru",
+  RR:   "Rajasthan Royals",
+  SRH:  "Sunrisers Hyderabad",
+};
+
+// Soccer leagues — Kalshi uses 3-letter team abbrevs that we resolve here.
+// Names are kept human-friendly; logos are deferred (ESPN soccer logos are
+// keyed by numeric team-id rather than abbrev, so we'd need a separate map).
+export const SOCCER_TEAMS = {
+  // La Liga
+  RVC: "Real Valladolid", GIR: "Girona", RMA: "Real Madrid", BAR: "Barcelona",
+  ATM: "Atletico Madrid", SEV: "Sevilla", BIL: "Athletic Bilbao",
+  RSO: "Real Sociedad", VAL: "Valencia", VLL: "Real Valladolid",
+  CEL: "Celta Vigo", BET: "Real Betis", VIL: "Villarreal", OSU: "Osasuna",
+  RAY: "Rayo Vallecano", GET: "Getafe", LEG: "Leganes", MLL: "Mallorca",
+  ESP: "Espanyol", ALA: "Alaves", LPA: "Las Palmas",
+  // Serie A
+  JUV: "Juventus", INT: "Inter Milan", MIL: "AC Milan", NAP: "Napoli",
+  ROM: "Roma", LAZ: "Lazio", ATA: "Atalanta", FIO: "Fiorentina",
+  BOL: "Bologna", TOR: "Torino", UDI: "Udinese", GEN: "Genoa",
+  VEN: "Venezia", PAR: "Parma", LEC: "Lecce", CAG: "Cagliari",
+  EMP: "Empoli", VER: "Verona", COM: "Como", MZA: "Monza",
+  // Bundesliga
+  BAY: "Bayern Munich", BVB: "Borussia Dortmund", LEV: "Bayer Leverkusen",
+  RBL: "RB Leipzig", VFB: "VfB Stuttgart", FRA: "Eintracht Frankfurt",
+  WOL: "Wolfsburg", FRE: "Freiburg", MAI: "Mainz", AUG: "Augsburg",
+  HOF: "Hoffenheim", HEI: "Heidenheim", BMG: "Borussia Monchengladbach",
+  BRE: "Werder Bremen", UNI: "Union Berlin", KIE: "Holstein Kiel",
+  BOC: "Bochum", STP: "St. Pauli",
+  // Ligue 1
+  PSG: "Paris Saint-Germain", MAR: "Marseille", LYO: "Lyon", MON: "Monaco",
+  LIL: "Lille", REN: "Rennes", NIC: "Nice", NTS: "Nantes", LEN: "Lens",
+  STR: "Strasbourg", REI: "Reims", TLS: "Toulouse", BRT: "Brest",
+  AUX: "Auxerre", ANG: "Angers", LEH: "Le Havre", MTP: "Montpellier",
+  ASE: "Saint-Etienne",
+};
+
+// Soccer league prefixes → human label (used in legLabel).
+export const SOCCER_LEAGUES = {
+  KXLALIGAGAME:     "La Liga",
+  KXLALIGABTTS:     "La Liga BTTS",
+  KXLALIGA1H:       "La Liga 1H",
+  KXSERIEAGAME:     "Serie A",
+  KXSERIEABTTS:     "Serie A BTTS",
+  KXSERIEA1H:       "Serie A 1H",
+  KXBUNDESLIGAGAME: "Bundesliga",
+  KXBUNDESLIGABTTS: "Bundesliga BTTS",
+  KXBUNDESLIGA1H:   "Bundesliga 1H",
+  KXLIGUE1GAME:     "Ligue 1",
+  KXLIGUE1BTTS:     "Ligue 1 BTTS",
+  KXLIGUE11H:       "Ligue 1 1H",
 };
 
 export const NBA_TEAMS = {
@@ -100,4 +164,57 @@ export function buildAthleteIndex(scoreboards) {
     }
   }
   return idx;
+}
+
+/**
+ * Build a tennis/UFC country-flag URL index keyed the same way as
+ * buildAthleteIndex. ESPN puts a flag image URL on athlete.flag.href.
+ * Returns { "SIN": "https://...italy.png", ... }.
+ */
+export function buildAthleteFlagIndex(scoreboards) {
+  const idx = {};
+  for (const sb of Object.values(scoreboards || {})) {
+    if (!sb || !Array.isArray(sb.events)) continue;
+    for (const ev of sb.events) {
+      const competitors = ev?.competitions?.[0]?.competitors || [];
+      for (const c of competitors) {
+        const display = c?.athlete?.displayName
+          || c?.athlete?.fullName
+          || c?.athletes?.[0]?.displayName
+          || "";
+        const flag = c?.athlete?.flag?.href
+          || c?.athlete?.flag?.alt
+          || c?.athletes?.[0]?.flag?.href
+          || "";
+        if (!display || !flag) continue;
+        const last = display.trim().split(/\s+/).pop().toUpperCase();
+        if (last.length >= 2) {
+          idx[last.slice(0, 3)] = flag;
+        }
+      }
+    }
+  }
+  return idx;
+}
+
+/**
+ * IPL franchise logos via iplt20.com's public CDN. Stable URLs as of 2026.
+ * Falls back to an inline initials badge if Kalshi adds a new team we don't
+ * recognise.
+ */
+const IPL_LOGOS = {
+  CSK:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/CSK.png",
+  DC:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/DC.png",
+  GT:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/GT.png",
+  KKR:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/KKR.png",
+  LSG:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/LSG.png",
+  MI:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/MI.png",
+  PBKS: "https://documents.iplt20.com/ipl/IPLHeaderLogo/PBKS.png",
+  RCB:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/RCB.png",
+  RR:   "https://documents.iplt20.com/ipl/IPLHeaderLogo/RR.png",
+  SRH:  "https://documents.iplt20.com/ipl/IPLHeaderLogo/SRH.png",
+};
+
+export function iplLogoUrl(abbr) {
+  return IPL_LOGOS[abbr] || "";
 }

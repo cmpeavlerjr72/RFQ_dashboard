@@ -409,6 +409,17 @@ footer {
   background: var(--card-head); padding: 2px 7px; border-radius: 100px;
   margin-left: 4px;
 }
+/* Text-only team chip used for sports without a logo CDN (soccer leagues,
+   tennis players whose flag isn't loaded yet). Sized to match leg-logo
+   visually so logo and text chips can mix in one strip. */
+.logo-strip .leg-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 22px; min-width: 22px; padding: 0 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: .02em;
+  color: var(--muted);
+  background: var(--card-head); border: 1px solid var(--border);
+  border-radius: 4px; flex-shrink: 0;
+}
 .recap-table .logo-fallback {
   font-size: 12px; color: var(--muted);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;

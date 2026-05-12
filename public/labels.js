@@ -7,12 +7,16 @@
 //   ("KXMLBGAME-26APR281835HOUBAL-BAL", "yes") → "MLB: Orioles win (vs Astros)"
 //   ("KXMLBHRR-26APR281915DETATL-ATLMOLSON28-1", "yes") → "MLB: Olson 1+ hits/runs/RBIs"
 
-import { NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, MLB_STAT_LABELS, NBA_STAT_LABELS } from "/teams.js";
+import {
+  NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
+  MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl,
+} from "/teams.js";
 
 const TEAM_BY_LEN_HINT = {
   KXMLB: MLB_TEAMS,
   KXNHL: NHL_TEAMS,
   KXNBA: NBA_TEAMS,
+  KXIPL: IPL_TEAMS,
 };
 
 function splitTeams(concat, table) {
@@ -195,21 +199,57 @@ export function legLabel(ticker, side, athleteIdx) {
   }
 
   // ---------- Tennis ATP/WTA ----------
-  // KXATPMATCH-26APR29SINJOD-SIN  → "Sinner" if athleteIdx has SIN
+  // KXATPMATCH-26APR29SINJOD-SIN  → "Sinner" if athleteIdx has SIN.
+  // We're long NO — for side="no" we flip to the opponent winning, so the
+  // card reads in the direction we're rooting for ("Pellegrino beats Sinner").
   if (ticker.startsWith("KXATPMATCH-") || ticker.startsWith("KXWTAMATCH-")) {
     const tour = ticker.startsWith("KXATPMATCH-") ? "ATP" : "WTA";
     const rest = ticker.slice(ticker.indexOf("-") + 1);
-    const [dt, winnerAbbr] = rest.split("-");
-    // dt = "26APR29SINJOD" — date(7) + p1(3) + p2(3)
+    const [dt, pickAbbr] = rest.split("-");
     const m = dt.match(/^(\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3})$/);
     let oppAbbr = "";
-    if (m) {
-      oppAbbr = m[2] === winnerAbbr ? m[3] : m[2];
-    }
-    const winnerName = athleteIdx?.[winnerAbbr] || winnerAbbr;
+    if (m) oppAbbr = m[2] === pickAbbr ? m[3] : m[2];
+    const pickName = athleteIdx?.[pickAbbr] || pickAbbr;
     const oppName = athleteIdx?.[oppAbbr] || oppAbbr;
-    if (side === "yes") return `${tour}: ${winnerName} d. ${oppName}`;
-    return `${tour}: ${oppName} d. ${winnerName}`;
+    if (side === "yes") return `${tour}: ${pickName} beats ${oppName}`;
+    return `${tour}: ${oppName} beats ${pickName}`;
+  }
+
+  // ---------- IPL Cricket ----------
+  // KXIPLGAME-26MAY12SRHGT-GT  → "Gujarat Titans win vs Sunrisers Hyderabad"
+  // We're long NO — flip to the opposing franchise winning.
+  if (ticker.startsWith("KXIPLGAME-")) {
+    const rest = ticker.slice("KXIPLGAME-".length);
+    const [dt, pickAbbr] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, IPL_TEAMS);
+    const opp = pickAbbr === a ? b : a;
+    const pickName = teamName(IPL_TEAMS, pickAbbr);
+    const oppName = teamName(IPL_TEAMS, opp);
+    if (side === "yes") return `IPL: ${pickName} win vs ${oppName}`;
+    return `IPL: ${oppName} win vs ${pickName}`;
+  }
+  if (ticker.startsWith("KXIPLTOTAL-") || ticker.startsWith("KXIPLTEAMTOTAL-")) {
+    const prefix = ticker.startsWith("KXIPLTEAMTOTAL-") ? "KXIPLTEAMTOTAL-" : "KXIPLTOTAL-";
+    const rest = ticker.slice(prefix.length);
+    const [dt, n] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, IPL_TEAMS);
+    const matchup = `${teamName(IPL_TEAMS, a)} vs ${teamName(IPL_TEAMS, b)}`;
+    const label = prefix === "KXIPLTEAMTOTAL-" ? "team total" : "match total";
+    if (side === "yes") return `IPL: ${matchup} OVER ${n} runs (${label})`;
+    return `IPL: ${matchup} UNDER ${n} runs (${label})`;
+  }
+  if (ticker.startsWith("KXIPLFIRST10-")) {
+    const rest = ticker.slice("KXIPLFIRST10-".length);
+    const [dt, pickAbbr] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, IPL_TEAMS);
+    const opp = pickAbbr === a ? b : a;
+    const pickName = teamName(IPL_TEAMS, pickAbbr);
+    const oppName = teamName(IPL_TEAMS, opp);
+    if (side === "yes") return `IPL: ${pickName} lead first 10 overs vs ${oppName}`;
+    return `IPL: ${oppName} lead first 10 overs vs ${pickName}`;
   }
 
   // ---------- UFC ----------
@@ -227,17 +267,44 @@ export function legLabel(ticker, side, athleteIdx) {
     return `UFC: ${oppName} d. ${winnerName}`;
   }
 
-  // ---------- Soccer (rough) ----------
-  const soccerLeagues = {
-    KXLALIGAGAME: "La Liga", KXSERIEAGAME: "Serie A",
-    KXBUNDESLIGAGAME: "Bundesliga", KXLIGUE1GAME: "Ligue 1",
-  };
-  for (const [pref, label] of Object.entries(soccerLeagues)) {
-    if (ticker.startsWith(pref + "-")) {
-      const rest = ticker.slice(pref.length + 1);
-      const [dt, pick] = rest.split("-");
-      return `${label}: ${pick} ${side === "yes" ? "win" : "(no win)"} (${ymdHumanFromTicker(dt.slice(0,7))})`;
+  // ---------- Soccer ----------
+  // Game (3-way moneyline incl. TIE pick) — flip to "draw or other team" on NO.
+  for (const [pref, label] of Object.entries(SOCCER_LEAGUES)) {
+    if (!ticker.startsWith(pref + "-")) continue;
+    const rest = ticker.slice(pref.length + 1);
+    const [dt, pickAbbr] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, SOCCER_TEAMS);
+    const aName = teamName(SOCCER_TEAMS, a);
+    const bName = teamName(SOCCER_TEAMS, b);
+
+    if (pref.endsWith("GAME")) {
+      if (pickAbbr === "TIE") {
+        if (side === "yes") return `${label}: Draw — ${aName} vs ${bName}`;
+        return `${label}: Decisive result — ${aName} vs ${bName}`;
+      }
+      const pickName = teamName(SOCCER_TEAMS, pickAbbr);
+      const oppName = pickAbbr === a ? bName : aName;
+      if (side === "yes") return `${label}: ${pickName} win vs ${oppName}`;
+      return `${label}: ${oppName} win or draw vs ${pickName}`;
     }
+    if (pref.endsWith("BTTS")) {
+      // Both teams to score — yes side = both teams score
+      if (side === "yes") return `${label}: Both teams score (${aName} vs ${bName})`;
+      return `${label}: Either team blanked (${aName} vs ${bName})`;
+    }
+    if (pref.endsWith("1H")) {
+      // First-half 3-way moneyline
+      if (pickAbbr === "TIE") {
+        if (side === "yes") return `${label}: 1H draw — ${aName} vs ${bName}`;
+        return `${label}: 1H decisive — ${aName} vs ${bName}`;
+      }
+      const pickName = teamName(SOCCER_TEAMS, pickAbbr);
+      const oppName = pickAbbr === a ? bName : aName;
+      if (side === "yes") return `${label}: ${pickName} lead at half vs ${oppName}`;
+      return `${label}: ${oppName} lead or draw at half vs ${pickName}`;
+    }
+    return `${label}: ${aName} vs ${bName}`;
   }
 
   // Fallback
@@ -307,6 +374,51 @@ export function legTeams(ticker, side) {
     return { sport: "nhl", teams: [a, b] };
   }
 
+  // IPL
+  if (ticker.startsWith("KXIPLGAME-")) {
+    const rest = ticker.slice("KXIPLGAME-".length);
+    const [dt, pickAbbr] = rest.split("-");
+    if (side === "no") {
+      const { teams } = parseDateTeams(dt);
+      const [a, b] = splitTeams(teams, IPL_TEAMS);
+      const opp = pickAbbr === a ? b : a;
+      return { sport: "ipl", teams: [opp] };
+    }
+    return { sport: "ipl", teams: [pickAbbr] };
+  }
+  if (ticker.startsWith("KXIPLTOTAL-") || ticker.startsWith("KXIPLTEAMTOTAL-") || ticker.startsWith("KXIPLFIRST10-")) {
+    const idx = ticker.indexOf("-");
+    const rest = ticker.slice(idx + 1);
+    const [dt] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, IPL_TEAMS);
+    return { sport: "ipl", teams: [a, b] };
+  }
+
+  // Tennis (ATP/WTA) — use the 3-letter player abbrev as the "team"; the
+  // logo resolver below maps it to a country flag via the athlete index.
+  if (ticker.startsWith("KXATPMATCH-") || ticker.startsWith("KXWTAMATCH-")) {
+    const tour = ticker.startsWith("KXATPMATCH-") ? "atp" : "wta";
+    const rest = ticker.slice(ticker.indexOf("-") + 1);
+    const [dt, pickAbbr] = rest.split("-");
+    const m = dt.match(/^(\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3})$/);
+    let oppAbbr = "";
+    if (m) oppAbbr = m[2] === pickAbbr ? m[3] : m[2];
+    // For long-NO we cheer the opponent — show their flag only.
+    if (side === "no") return { sport: tour, teams: [oppAbbr] };
+    return { sport: tour, teams: [pickAbbr] };
+  }
+
+  // Soccer — return both teams so we can render text badges (no logo CDN yet).
+  for (const pref of Object.keys(SOCCER_LEAGUES)) {
+    if (!ticker.startsWith(pref + "-")) continue;
+    const rest = ticker.slice(pref.length + 1);
+    const [dt] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, SOCCER_TEAMS);
+    return { sport: "soccer", teams: [a, b] };
+  }
+
   // MLB
   if (ticker.startsWith("KXMLBGAME-")) {
     const rest = ticker.slice("KXMLBGAME-".length);
@@ -345,12 +457,31 @@ const ESPN_ABBR_OVERRIDES = {
   mlb: { CWS: "chw", AZ: "ari", KC: "kc", SD: "sd", SF: "sf", TB: "tb" },
 };
 
-/** ESPN logo CDN URL for the team. Falls back to lowercase Kalshi abbr. */
+// Logo context — module-level state so teamLogoUrl can resolve tennis flags
+// without recap.js / app.js having to pass scoreboards through every call.
+// Initialise via setLogoContext({ playerFlagIdx: { SIN: "https://...png" } }).
+let _logoCtx = { playerFlagIdx: {} };
+export function setLogoContext(ctx) {
+  if (!ctx) return;
+  if (ctx.playerFlagIdx) _logoCtx.playerFlagIdx = { ..._logoCtx.playerFlagIdx, ...ctx.playerFlagIdx };
+}
+
+/** Logo URL for a (sport, abbr). Falls back to "" when no logo is known —
+ *  callers should render a text badge in that case. */
 export function teamLogoUrl(sport, abbr) {
   if (!sport || !abbr) return "";
-  const overrides = ESPN_ABBR_OVERRIDES[sport] || {};
-  const a = overrides[abbr] || abbr.toLowerCase();
-  return `https://a.espncdn.com/i/teamlogos/${sport}/500/${a}.png`;
+  const s = sport.toLowerCase();
+  if (s === "atp" || s === "wta") {
+    return _logoCtx.playerFlagIdx?.[abbr] || "";
+  }
+  if (s === "ipl") return iplLogoUrl(abbr);
+  if (s === "soccer") return "";   // no soccer CDN yet — recap renders a badge
+  if (s === "nba" || s === "nhl" || s === "mlb") {
+    const overrides = ESPN_ABBR_OVERRIDES[s] || {};
+    const a = overrides[abbr] || abbr.toLowerCase();
+    return `https://a.espncdn.com/i/teamlogos/${s}/500/${a}.png`;
+  }
+  return "";
 }
 
 /**

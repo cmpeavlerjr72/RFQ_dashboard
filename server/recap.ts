@@ -315,8 +315,30 @@ function aggregateParlay(parlayTicker: string, fills: KalshiFill[], settle?: Kal
 // Match Kalshi market-ticker prefix to extract (sport, statCode).
 // e.g. KXNBAPTS-...  -> sport=NBA, stat=PTS (player prop)
 //      KXMLBSPREAD-... -> sport=MLB, stat=SPREAD (game-level)
-const LEG_SPORT_RE = /^KX(NBA|MLB|NHL|NFL|WNBA|NCAA[A-Z]*|UFC|GOLF|F1|TENNIS|MLS|EPL|SOCCER)([A-Z0-9]+)-/;
-const GAME_LEVEL_STATS = new Set(["GAME", "SPREAD", "TOTAL", "F5", "F5SPREAD", "F5TOTAL", "TEAMTOTAL", "RFI", "GOAL"]);
+// Match the KX{SPORT}{STAT}- prefix. SPORT is the longest known league
+// token; STAT is what follows up to the first dash.
+// Tennis tour codes (ATPMATCH, WTAMATCH) are normalised to ATP/WTA below.
+// Soccer league codes (LALIGA, SERIEA, BUNDESLIGA, LIGUE1, EPL) are
+// normalised to SOCCER.
+const LEG_SPORT_RE = /^KX(NBA|MLB|NHL|NFL|WNBA|NCAA[A-Z]*|UFC|GOLF|F1|TENNIS|ATPMATCH|WTAMATCH|MLS|EPL|LALIGA|SERIEA|BUNDESLIGA|LIGUE1|SOCCER|IPL|CRICKET)([A-Z0-9]+)-/;
+const GAME_LEVEL_STATS = new Set([
+  "GAME", "SPREAD", "TOTAL", "F5", "F5SPREAD", "F5TOTAL", "TEAMTOTAL",
+  "RFI", "GOAL",
+  // IPL game-level stats
+  "FIRST10",
+  // Soccer game-level stats (full match, BTTS, first half)
+  "BTTS", "1H",
+]);
+
+const SOCCER_LEAGUE_CODES = new Set(["LALIGA", "SERIEA", "BUNDESLIGA", "LIGUE1", "EPL", "MLS"]);
+const TENNIS_TOUR_CODES = new Set(["ATPMATCH", "WTAMATCH"]);
+
+function normaliseSportCode(code: string): string {
+  if (TENNIS_TOUR_CODES.has(code)) return code === "ATPMATCH" ? "ATP" : "WTA";
+  if (SOCCER_LEAGUE_CODES.has(code)) return "SOCCER";
+  if (code === "CRICKET") return "IPL";
+  return code;
+}
 
 function classifyParlay(legs: RecapLeg[]): { sport: string; type: "player" | "game" } {
   const sports = new Set<string>();
@@ -324,7 +346,7 @@ function classifyParlay(legs: RecapLeg[]): { sport: string; type: "player" | "ga
   for (const l of legs) {
     const m = l.ticker.match(LEG_SPORT_RE);
     if (!m) continue;
-    sports.add(m[1]);
+    sports.add(normaliseSportCode(m[1]));
     if (GAME_LEVEL_STATS.has(m[2])) hasGame = true;
     else hasPlayer = true;
   }
