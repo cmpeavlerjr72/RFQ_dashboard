@@ -473,6 +473,18 @@ footer {
 }
 .bk-sub-tick { color: var(--muted-2); font-family: ui-monospace, monospace; }
 .bk-sub-name { color: var(--muted); font-size: 13px; }
+.bk-stat-cell {
+  display: flex; align-items: center; gap: 8px;
+  padding-left: 28px;
+}
+.bk-stat-tick { color: var(--muted-2); font-family: ui-monospace, monospace; opacity: .7; }
+.bk-stat-name { color: var(--muted); font-size: 12px; }
+.bk-stat-code {
+  font-size: 10px; font-family: ui-monospace, monospace;
+  color: var(--muted-2); background: var(--card-head);
+  padding: 1px 6px; border-radius: 100px;
+  letter-spacing: .04em;
+}
 
 .breakdown-table tbody tr.breakdown-sport > td {
   border-top: 2px solid var(--border);
@@ -485,6 +497,13 @@ footer {
   font-size: 12px;
 }
 .breakdown-table tbody tr.breakdown-sub:hover { background: var(--card-head); }
+.breakdown-table tbody tr.breakdown-stat > td {
+  background: var(--card);
+  font-size: 11.5px;
+  padding-top: 4px; padding-bottom: 4px;
+  color: var(--muted);
+}
+.breakdown-table tbody tr.breakdown-stat:hover { background: var(--card-head); }
 .breakdown-table .logo-strip .leg-logo {
   height: 18px; width: 18px;
 }

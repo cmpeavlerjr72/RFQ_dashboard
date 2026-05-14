@@ -2,7 +2,41 @@
 // summary KPIs + (optional) cumulative ROI chart + parlay table.
 
 import { legTeams, teamLogoUrl, setLogoContext } from "/labels.js";
-import { buildAthleteFlagIndex } from "/teams.js";
+import { buildAthleteFlagIndex, MLB_STAT_LABELS, NBA_STAT_LABELS } from "/teams.js";
+
+// Stat-code → human label dictionaries the breakdown rows draw from. The MLB
+// and NBA player maps live in teams.js; the rest are inline because they're
+// small and don't need to be shared.
+const NHL_STAT_LABELS = {
+  GOAL: "goal", PTS: "points", AST: "assists", FIRSTGOAL: "first goal",
+};
+const GAME_STAT_LABELS = {
+  GAME: "moneyline", SPREAD: "spread", TOTAL: "total",
+  F5: "first-5", F5SPREAD: "first-5 spread", F5TOTAL: "first-5 total",
+  TEAMTOTAL: "team total", RFI: "run in 1st",
+  FIRST10: "first 10 overs",
+  BTTS: "both teams score", "1H": "1st half result",
+};
+
+// Map a single stat code to a pretty label, scoped to a sport when possible
+// so "PTS" resolves correctly across NBA/NHL.
+function statCodeLabel(code, sport) {
+  const s = (sport || "").toUpperCase();
+  if (GAME_STAT_LABELS[code]) return GAME_STAT_LABELS[code];
+  if (s === "MLB" && MLB_STAT_LABELS[code]) return MLB_STAT_LABELS[code];
+  if (s === "NBA" && NBA_STAT_LABELS[code]) return NBA_STAT_LABELS[code];
+  if (s === "WNBA" && NBA_STAT_LABELS[code]) return NBA_STAT_LABELS[code];
+  if (s === "NHL" && NHL_STAT_LABELS[code]) return NHL_STAT_LABELS[code];
+  // Fallback to whichever bucket has it
+  return MLB_STAT_LABELS[code] || NBA_STAT_LABELS[code] || NHL_STAT_LABELS[code] || code.toLowerCase();
+}
+
+// Render the stat-set label for a sub-row. Multi-stat parlays show e.g.
+// "points + rebounds + assists"; single-stat shows "points".
+function statSetLabel(stats, sport) {
+  if (!stats || !stats.length) return "Unknown";
+  return stats.map((s) => statCodeLabel(s, sport)).join(" + ");
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -328,7 +362,7 @@ function renderBreakdown(data) {
     const subs = (row.by_type || []).map((t) => {
       const ta = t.agg;
       const typeLabel = t.type === "player" ? "Player props" : "Game level";
-      return `
+      const typeRow = `
         <tr class="breakdown-sub">
           <td class="bk-sport">
             <div class="bk-sub-cell">
@@ -344,6 +378,31 @@ function renderBreakdown(data) {
           <td class="t-num">${wlvLabel(ta)}</td>
         </tr>
       `;
+      const statRows = (t.by_stat || []).map((s) => {
+        const sa = s.agg;
+        const label = statSetLabel(s.stats, row.sport);
+        const codeChip = s.stat_set && s.stat_set !== "UNKNOWN"
+          ? `<span class="bk-stat-code" title="raw stat code(s)">${escapeHtml(s.stat_set)}</span>`
+          : "";
+        return `
+          <tr class="breakdown-stat">
+            <td class="bk-sport">
+              <div class="bk-stat-cell">
+                <span class="bk-stat-tick">└─</span>
+                <span class="bk-stat-name">${escapeHtml(label)}</span>
+                ${codeChip}
+              </div>
+            </td>
+            <td class="t-num">${sa.n_parlays}</td>
+            <td class="t-num">${fmtMoney(sa.cash_deployed)}</td>
+            <td class="t-num ${pnlClass(sa.realized_pnl)}">${fmtMoney(sa.realized_pnl, true)}</td>
+            <td class="t-num ${pnlClass(sa.roi_pct)}">${fmtPct(sa.roi_pct)}</td>
+            <td class="bk-trust">${confidenceChip(sa.confidence, sa.roi_pct)}</td>
+            <td class="t-num">${wlvLabel(sa)}</td>
+          </tr>
+        `;
+      }).join("");
+      return typeRow + statRows;
     }).join("");
     return head + subs;
   }).join("");
@@ -351,7 +410,7 @@ function renderBreakdown(data) {
   wrap.innerHTML = `
     <div class="row section-head">
       <h2>By Sport</h2>
-      <span class="hint">player-prop parlays vs game-level (spread/total/ML) parlays</span>
+      <span class="hint">sport → player-prop vs game-level → individual stat type</span>
     </div>
     <table class="recap-table breakdown-table">
       <thead>

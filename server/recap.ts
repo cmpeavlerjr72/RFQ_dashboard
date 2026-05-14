@@ -90,10 +90,18 @@ export interface RecapAgg {
   confidence: ConfidenceInfo;
 }
 
+export interface BreakdownStatRow {
+  stat_set: string;             // sorted-distinct stat codes joined by "+", e.g. "PTS+REB+AST"
+  stats: string[];              // raw stat codes (sorted)
+  parlay_tickers: string[];
+  agg: RecapAgg;
+}
+
 export interface BreakdownTypeRow {
   type: "player" | "game";      // any-player-leg = player; otherwise game
   parlay_tickers: string[];     // members; frontend uses these for logo derivation
   agg: RecapAgg;
+  by_stat: BreakdownStatRow[];  // stat-level sub-buckets, sorted by # parlays desc
 }
 
 export interface SportBreakdownRow {
@@ -340,32 +348,47 @@ function normaliseSportCode(code: string): string {
   return code;
 }
 
-function classifyParlay(legs: RecapLeg[]): { sport: string; type: "player" | "game" } {
+function classifyParlay(legs: RecapLeg[]): { sport: string; type: "player" | "game"; stats: string[] } {
   const sports = new Set<string>();
-  let hasPlayer = false, hasGame = false;
+  const playerStats = new Set<string>();
+  const gameStats = new Set<string>();
   for (const l of legs) {
     const m = l.ticker.match(LEG_SPORT_RE);
     if (!m) continue;
     sports.add(normaliseSportCode(m[1]));
-    if (GAME_LEVEL_STATS.has(m[2])) hasGame = true;
-    else hasPlayer = true;
+    const stat = m[2];
+    if (GAME_LEVEL_STATS.has(stat)) gameStats.add(stat);
+    else playerStats.add(stat);
   }
   const sport = sports.size === 0 ? "UNKNOWN" : sports.size === 1 ? Array.from(sports)[0] : "CROSS";
   // A parlay with any player-prop leg is a "player" parlay; otherwise game-level.
-  const type: "player" | "game" = hasPlayer ? "player" : "game";
-  return { sport, type };
+  const type: "player" | "game" = playerStats.size > 0 ? "player" : "game";
+  // Stat set is drawn from the relevant bucket: player parlays bucket by their
+  // player stats (e.g. "PTS+REB+AST"), game parlays by their game stats
+  // ("SPREAD+TOTAL"). Sorted for stable bucket keys.
+  const statSet = type === "player" ? playerStats : gameStats;
+  const stats = Array.from(statSet).sort();
+  return { sport, type, stats };
 }
 
 function buildSportBreakdown(rows: ParlayRow[]): SportBreakdownRow[] {
   const bySport = new Map<string, ParlayRow[]>();
   const byBucket = new Map<string, ParlayRow[]>();   // key = "${sport}|${type}"
+  // Stat-level grouping: "${sport}|${type}|${stat_set}" → rows. Each parlay
+  // contributes to exactly one stat bucket (the sorted-join of its distinct
+  // stat codes), so per-stat aggregates sum back to the parent type-row.
+  const byStat = new Map<string, { stats: string[]; rows: ParlayRow[] }>();
   for (const r of rows) {
-    const { sport, type } = classifyParlay(r.legs);
+    const { sport, type, stats } = classifyParlay(r.legs);
     if (!bySport.has(sport)) bySport.set(sport, []);
     bySport.get(sport)!.push(r);
     const bk = `${sport}|${type}`;
     if (!byBucket.has(bk)) byBucket.set(bk, []);
     byBucket.get(bk)!.push(r);
+    const statSet = stats.length ? stats.join("+") : "UNKNOWN";
+    const sk = `${bk}|${statSet}`;
+    if (!byStat.has(sk)) byStat.set(sk, { stats, rows: [] });
+    byStat.get(sk)!.rows.push(r);
   }
   const out: SportBreakdownRow[] = [];
   for (const [sport, sportRows] of bySport) {
@@ -373,10 +396,29 @@ function buildSportBreakdown(rows: ParlayRow[]): SportBreakdownRow[] {
     for (const t of ["player", "game"] as const) {
       const tRows = byBucket.get(`${sport}|${t}`) || [];
       if (!tRows.length) continue;
+      // Collect stat sub-buckets for this (sport, type), sorted by #parlays desc.
+      const statRows: BreakdownStatRow[] = [];
+      for (const [key, bucket] of byStat) {
+        if (!key.startsWith(`${sport}|${t}|`)) continue;
+        const statSet = key.slice(`${sport}|${t}|`.length);
+        statRows.push({
+          stat_set: statSet,
+          stats: bucket.stats,
+          parlay_tickers: bucket.rows.map((r) => r.parlay_ticker),
+          agg: aggregateAll(bucket.rows),
+        });
+      }
+      statRows.sort((a, b) => {
+        // Push UNKNOWN to the bottom; otherwise rank by #parlays desc.
+        const rank = (s: string) => (s === "UNKNOWN" ? 1 : 0);
+        if (rank(a.stat_set) !== rank(b.stat_set)) return rank(a.stat_set) - rank(b.stat_set);
+        return b.parlay_tickers.length - a.parlay_tickers.length;
+      });
       byType.push({
         type: t,
         parlay_tickers: tRows.map((r) => r.parlay_ticker),
         agg: aggregateAll(tRows),
+        by_stat: statRows,
       });
     }
     out.push({
