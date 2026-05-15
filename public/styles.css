@@ -539,3 +539,7 @@ footer {
   text-transform: uppercase; color: var(--muted-2); font-size: 10px;
 }
 .legend-hint { color: var(--muted-2); font-size: 11px; margin-left: 6px; }
+.parlay .top .fill-ts {
+  margin-left: auto; color: var(--muted); font-size: 11px;
+  white-space: nowrap; padding-right: 8px;
+}

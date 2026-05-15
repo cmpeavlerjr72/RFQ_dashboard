@@ -88,6 +88,17 @@ function ymdHumanFromTicker(date /* "26APR28" */) {
 
 // ---------- main ----------
 
+// Kalshi total markets are integer-N "Over N? YES" contracts that settle
+// strictly ABOVE N (a 2-goal game LOSES an "Over 2?" YES → wins the under).
+// That's equivalent to a standard N.5 line with no push, so display N + 0.5
+// to avoid the "UNDER 2 (but 2 actually wins)" confusion. Applies to ALL
+// totals (goals/runs/points/team totals). Odds/probabilities are unaffected
+// — this is purely the displayed line label.
+function totalLine(v) {
+  const x = Number(v);
+  return Number.isFinite(x) ? String(x + 0.5) : v;
+}
+
 export function legLabel(ticker, side, athleteIdx) {
   side = (side || "yes").toLowerCase();
 
@@ -109,8 +120,8 @@ export function legLabel(ticker, side, athleteIdx) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NHL_TEAMS);
     const matchup = `${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)}`;
-    if (side === "yes") return `NHL: ${matchup} OVER ${n} goals`;
-    return `NHL: ${matchup} UNDER ${n} goals`;
+    if (side === "yes") return `NHL: ${matchup} OVER ${totalLine(n)} goals`;
+    return `NHL: ${matchup} UNDER ${totalLine(n)} goals`;
   }
   if (ticker.startsWith("KXNHLSPREAD-")) {
     const rest = ticker.slice("KXNHLSPREAD-".length);
@@ -138,8 +149,8 @@ export function legLabel(ticker, side, athleteIdx) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, MLB_TEAMS);
     const matchup = `${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)}`;
-    if (side === "yes") return `MLB: ${matchup} OVER ${n} runs`;
-    return `MLB: ${matchup} UNDER ${n} runs`;
+    if (side === "yes") return `MLB: ${matchup} OVER ${totalLine(n)} runs`;
+    return `MLB: ${matchup} UNDER ${totalLine(n)} runs`;
   }
   if (ticker.startsWith("KXMLBSPREAD-")) {
     const rest = ticker.slice("KXMLBSPREAD-".length);
@@ -191,8 +202,8 @@ export function legLabel(ticker, side, athleteIdx) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NBA_TEAMS);
     const matchup = `${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)}`;
-    if (side === "yes") return `NBA: ${matchup} OVER ${n} points`;
-    return `NBA: ${matchup} UNDER ${n} points`;
+    if (side === "yes") return `NBA: ${matchup} OVER ${totalLine(n)} points`;
+    return `NBA: ${matchup} UNDER ${totalLine(n)} points`;
   }
   if (ticker.startsWith("KXNBASPREAD-")) {
     const rest = ticker.slice("KXNBASPREAD-".length);
@@ -267,8 +278,8 @@ export function legLabel(ticker, side, athleteIdx) {
     const [a, b] = splitTeams(teams, IPL_TEAMS);
     const matchup = `${teamName(IPL_TEAMS, a)} vs ${teamName(IPL_TEAMS, b)}`;
     const label = prefix === "KXIPLTEAMTOTAL-" ? "team total" : "match total";
-    if (side === "yes") return `IPL: ${matchup} OVER ${n} runs (${label})`;
-    return `IPL: ${matchup} UNDER ${n} runs (${label})`;
+    if (side === "yes") return `IPL: ${matchup} OVER ${totalLine(n)} runs (${label})`;
+    return `IPL: ${matchup} UNDER ${totalLine(n)} runs (${label})`;
   }
   if (ticker.startsWith("KXIPLFIRST10-")) {
     const rest = ticker.slice("KXIPLFIRST10-".length);
@@ -325,8 +336,8 @@ export function legLabel(ticker, side, athleteIdx) {
       return `${label}: ${aName} vs ${bName} spread NOT ${suffix}`;
     }
     if (pref.endsWith("TOTAL")) {
-      if (side === "yes") return `${label}: ${aName} vs ${bName} OVER ${suffix} goals`;
-      return `${label}: ${aName} vs ${bName} UNDER ${suffix} goals`;
+      if (side === "yes") return `${label}: ${aName} vs ${bName} OVER ${totalLine(suffix)} goals`;
+      return `${label}: ${aName} vs ${bName} UNDER ${totalLine(suffix)} goals`;
     }
     if (pref.endsWith("BTTS")) {
       if (side === "yes") return `${label}: Both teams score (${aName} vs ${bName})`;

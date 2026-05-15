@@ -42,6 +42,19 @@ function fmtMoney(n) {
   const sign = n < 0 ? "-" : "";
   return `${sign}$${Math.abs(n).toFixed(2)}`;
 }
+
+// Fill timestamp → short local "MMM D, h:mm:ss am/pm" for the parlay card.
+// Uses the fill epoch seconds (preferred) or the ISO string.
+function fmtFillTs(p) {
+  const d = (typeof p.fillTs === "number")
+    ? new Date(p.fillTs * 1000)
+    : (p.fillIso ? new Date(p.fillIso) : null);
+  if (!d || isNaN(d.getTime())) return null;
+  return d.toLocaleString([], {
+    month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit", second: "2-digit",
+  });
+}
 function pnlClass(n) {
   if (n == null || n === 0) return "";
   return n > 0 ? "pos" : "neg";
@@ -133,6 +146,8 @@ async function refresh() {
         rfq_id: f.rfq_id,
         source: f.source_runner,
         sport: f.sport_hint,
+        fillTs: typeof f.ts === "number" ? f.ts : null,
+        fillIso: f.ts_iso || null,
         midC: null, unreal: null,
         legMids: {},
       };
@@ -664,6 +679,7 @@ function renderSummary() {
 // Sort options for the parlay list. Each value-extractor takes the position
 // record and its precomputed { probs } so we don't recompute per comparator.
 const PARLAY_SORT_OPTIONS = [
+  { key: "fillTs", label: "Fill Time", get: (p, x) => p.fillTs ?? -Infinity },
   { key: "cost",   label: "Risk",     get: (p, x) => p.cost },
   { key: "maxWin", label: "To Win",   get: (p, x) => p.max_profit },
   { key: "pWin",   label: "Win Chance", get: (p, x) => x.probs.pWin ?? -1 },
@@ -1033,11 +1049,17 @@ function renderParlayCard(p, n, probs) {
     ? `<div class="col"><div class="lbl">Current ROI</div><div class="val ${pnlClass(probs.expectedPnl)}">${(probs.expectedPnl/p.cost*100).toFixed(0)}%</div></div>`
     : "";
 
+  const fillStr = fmtFillTs(p);
+  const fillTsHtml = fillStr
+    ? `<span class="fill-ts" title="When this parlay filled">🕒 ${escapeHtml(fillStr)}</span>`
+    : "";
+
   return `<div class="parlay ${expanded ? "expanded" : "collapsed"}">
     <div class="head" data-ticker="${escapeHtml(p.ticker)}" role="button" aria-expanded="${expanded}" tabindex="0">
       <div class="top">
         <span class="badge ${cardBadgeCls}">#${n} · ${cardBadge}</span>
         ${parlayLegLogosHtml(p)}
+        ${fillTsHtml}
         <span class="chev" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
       </div>
       <div class="stake">
