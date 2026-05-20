@@ -218,9 +218,13 @@ function render(data) {
 
   const wlv = wlvLabel(a);
   const wrCls = wrVsBeClass(a.win_rate_pct, a.breakeven_wr_pct);
-  const wrTip = (a.win_rate_pct != null && a.breakeven_wr_pct != null)
-    ? `Win rate ${fmtPct(a.win_rate_pct, false)} vs break-even ${fmtPct(a.breakeven_wr_pct, false)} — gap ${fmtPct(a.win_rate_pct - a.breakeven_wr_pct, true)}. For long-NO at avg price p, EV is zero when WR equals p; above is net-positive in expectation.`
+  const gapPt = (a.win_rate_pct != null && a.breakeven_wr_pct != null)
+    ? a.win_rate_pct - a.breakeven_wr_pct
+    : null;
+  const wrTip = (gapPt != null)
+    ? `Win ${fmtPct(a.win_rate_pct, false)} of your fills; need to win > ${fmtPct(a.breakeven_wr_pct, false)} on average to be profitable. Edge per parlay: ${fmtPct(gapPt, true)}.`
     : "";
+  const beTip = `The win rate you need to clear to make money. Computed as the average fill price across decided parlays — at any fill priced p, EV is zero when you win with prob exactly p, so on average you need WR > mean(p). Realized ROI can deviate (size of bet matters in dollars) but this is the right single threshold to compare your WR against.`;
   $("summary").innerHTML = [
     kpi("Money risked", fmtMoney(a.cash_deployed)),
     kpi("Net P&amp;L <small>(settled only)</small>", fmtMoney(a.realized_pnl, true), pnlClass(a.realized_pnl)),
@@ -235,13 +239,13 @@ function render(data) {
       "Win rate <small>(wins / decided)</small>",
       fmtPct(a.win_rate_pct, false),
       wrCls,
-      wrTip ? `<div class="kpi-sub" title="${escapeHtml(wrTip)}">vs break-even ${fmtPct(a.breakeven_wr_pct, false)}</div>` : "",
+      wrTip ? `<div class="kpi-sub" title="${escapeHtml(wrTip)}">need &gt; ${fmtPct(a.breakeven_wr_pct, false)} to profit · edge ${fmtPct(gapPt, true)}</div>` : "",
     ),
     kpi(
-      "Break-even WR <small>(avg fill $)</small>",
+      "Break-even target <small>(avg fill price)</small>",
       fmtPct(a.breakeven_wr_pct, false),
       "",
-      `<div class="kpi-sub muted">dollar-weighted avg price per contract on settled parlays</div>`,
+      `<div class="kpi-sub muted" title="${escapeHtml(beTip)}">win rate needed to break even on average</div>`,
     ),
   ].join("");
 

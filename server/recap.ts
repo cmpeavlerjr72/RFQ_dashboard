@@ -90,11 +90,17 @@ export interface RecapAgg {
   // Win rate over decided settlements: 100 * wins / (wins + losses). Voids
   // excluded from both numerator and denominator.
   win_rate_pct: number | null;
-  // Dollar-weighted average fill price across settled parlays, in percent
-  // (e.g. 72.0 means avg fill price was $0.72/contract). This equals the
-  // break-even win rate for our long-NO trades: at price p we win $1-p and
-  // lose $p per contract, so EV is zero when WR == p. If win_rate_pct
-  // exceeds this, we are net-positive in expectation; below it, net-negative.
+  // Equal-weighted average fill price across decided parlays (wins + losses,
+  // voids excluded), in percent. Each parlay's per-contract price (cost/qty)
+  // counted once, regardless of size. This is the apples-to-apples threshold
+  // for parlay-count win rate: at any single fill priced p you need to win
+  // with prob > p to be EV-positive, so on average you need WR > mean(p).
+  // If win_rate_pct exceeds this, the strategy has positive per-parlay edge.
+  //
+  // NOTE: this is the parlay-count interpretable threshold. Realized ROI can
+  // deviate from (WR - this) per-parlay because larger fills weight more in
+  // the dollar PnL — but on a representative sample, beating this number
+  // tracks net profitability.
   breakeven_wr_pct: number | null;
   confidence: ConfidenceInfo;
 }
@@ -526,14 +532,18 @@ function aggregateAll(rows: ParlayRow[]): RecapAgg {
   const voids = settled.filter((r) => r.status === "void");
   const pnl = settled.reduce((a, r) => a + (r.pnl || 0), 0);
   const settledCost = settled.reduce((a, r) => a + r.cost, 0);
-  const settledQty = settled.reduce((a, r) => a + r.qty, 0);
   const payouts = wins.reduce((a, r) => a + r.qty, 0);
   const roiPct = settledCost > 0 ? (100 * pnl) / settledCost : null;
-  const wlDenom = wins.length + losses.length;
+  const decided = [...wins, ...losses];
+  const wlDenom = decided.length;
   const winRatePct = wlDenom > 0 ? (100 * wins.length) / wlDenom : null;
-  // Dollar-weighted avg fill price across settled parlays. cost is in dollars,
-  // qty is contracts, so cost/qty is dollars per contract = price (0..1). x100 = pct.
-  const breakevenWrPct = settledQty > 0 ? (100 * settledCost) / settledQty : null;
+  // Equal-weighted avg fill price across DECIDED parlays (wins + losses only;
+  // voids excluded since they refund cost). Each parlay's per-contract price
+  // (cost/qty) counts once regardless of qty. This is the parlay-count
+  // interpretable break-even threshold — beat it on WR and you have edge.
+  const breakevenWrPct = wlDenom > 0
+    ? (100 * decided.reduce((a, r) => a + (r.qty > 0 ? r.cost / r.qty : 0), 0)) / wlDenom
+    : null;
   return {
     n_parlays: n,
     cash_deployed: cash,
