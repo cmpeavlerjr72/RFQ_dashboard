@@ -68,6 +68,14 @@ function pnlClass(n) {
   if (n == null || n === 0) return "";
   return n > 0 ? "pos" : "neg";
 }
+// Color the win rate green/red relative to break-even. Tiny gaps (< 0.5pt)
+// stay neutral — sample noise dominates differences inside that band.
+function wrVsBeClass(wr, be) {
+  if (wr == null || be == null) return "";
+  const gap = wr - be;
+  if (Math.abs(gap) < 0.5) return "";
+  return gap > 0 ? "pos" : "neg";
+}
 function statusBadge(s) {
   switch (s) {
     case "won":  return `<span class="badge alive">won</span>`;
@@ -209,6 +217,10 @@ function render(data) {
     `${dateLabel} · ${a.n_parlays} parlays · ${data.pages_fills}p fills, ${data.pages_settlements}p settle · cached ${new Date(data.fetched_at).toLocaleTimeString()}`;
 
   const wlv = wlvLabel(a);
+  const wrCls = wrVsBeClass(a.win_rate_pct, a.breakeven_wr_pct);
+  const wrTip = (a.win_rate_pct != null && a.breakeven_wr_pct != null)
+    ? `Win rate ${fmtPct(a.win_rate_pct, false)} vs break-even ${fmtPct(a.breakeven_wr_pct, false)} — gap ${fmtPct(a.win_rate_pct - a.breakeven_wr_pct, true)}. For long-NO at avg price p, EV is zero when WR equals p; above is net-positive in expectation.`
+    : "";
   $("summary").innerHTML = [
     kpi("Money risked", fmtMoney(a.cash_deployed)),
     kpi("Net P&amp;L <small>(settled only)</small>", fmtMoney(a.realized_pnl, true), pnlClass(a.realized_pnl)),
@@ -219,6 +231,18 @@ function render(data) {
       confidenceChip(a.confidence, a.roi_pct),
     ),
     kpi("W &middot; L &middot; V", wlv),
+    kpi(
+      "Win rate <small>(wins / decided)</small>",
+      fmtPct(a.win_rate_pct, false),
+      wrCls,
+      wrTip ? `<div class="kpi-sub" title="${escapeHtml(wrTip)}">vs break-even ${fmtPct(a.breakeven_wr_pct, false)}</div>` : "",
+    ),
+    kpi(
+      "Break-even WR <small>(avg fill $)</small>",
+      fmtPct(a.breakeven_wr_pct, false),
+      "",
+      `<div class="kpi-sub muted">dollar-weighted avg price per contract on settled parlays</div>`,
+    ),
   ].join("");
 
   // Sport breakdown

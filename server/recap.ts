@@ -87,6 +87,15 @@ export interface RecapAgg {
   realized_pnl: number;         // sum pnl of settled parlays
   payouts: number;              // gross "money won": for winners, qty*1.0
   roi_pct: number | null;       // 100 * realized_pnl / cost_of_settled
+  // Win rate over decided settlements: 100 * wins / (wins + losses). Voids
+  // excluded from both numerator and denominator.
+  win_rate_pct: number | null;
+  // Dollar-weighted average fill price across settled parlays, in percent
+  // (e.g. 72.0 means avg fill price was $0.72/contract). This equals the
+  // break-even win rate for our long-NO trades: at price p we win $1-p and
+  // lose $p per contract, so EV is zero when WR == p. If win_rate_pct
+  // exceeds this, we are net-positive in expectation; below it, net-negative.
+  breakeven_wr_pct: number | null;
   confidence: ConfidenceInfo;
 }
 
@@ -517,8 +526,14 @@ function aggregateAll(rows: ParlayRow[]): RecapAgg {
   const voids = settled.filter((r) => r.status === "void");
   const pnl = settled.reduce((a, r) => a + (r.pnl || 0), 0);
   const settledCost = settled.reduce((a, r) => a + r.cost, 0);
+  const settledQty = settled.reduce((a, r) => a + r.qty, 0);
   const payouts = wins.reduce((a, r) => a + r.qty, 0);
   const roiPct = settledCost > 0 ? (100 * pnl) / settledCost : null;
+  const wlDenom = wins.length + losses.length;
+  const winRatePct = wlDenom > 0 ? (100 * wins.length) / wlDenom : null;
+  // Dollar-weighted avg fill price across settled parlays. cost is in dollars,
+  // qty is contracts, so cost/qty is dollars per contract = price (0..1). x100 = pct.
+  const breakevenWrPct = settledQty > 0 ? (100 * settledCost) / settledQty : null;
   return {
     n_parlays: n,
     cash_deployed: cash,
@@ -530,6 +545,8 @@ function aggregateAll(rows: ParlayRow[]): RecapAgg {
     realized_pnl: pnl,
     payouts,
     roi_pct: roiPct,
+    win_rate_pct: winRatePct,
+    breakeven_wr_pct: breakevenWrPct,
     confidence: classifyConfidence(roiPct, settled.length),
   };
 }
