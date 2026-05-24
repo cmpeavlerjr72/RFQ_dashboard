@@ -616,3 +616,18 @@ footer {
 .roi-chart.compare .axis-y line { stroke: var(--border); }
 .roi-chart.compare .axis-y text,
 .roi-chart.compare .axis-x text { fill: var(--muted-2); font-size: 11px; }
+
+/* ---------- comparison tab: hidden-breakdown placeholders ---------- */
+.hidden-breakdown {
+  border: 1px dashed var(--border); border-radius: 8px;
+  padding: 16px 18px; color: var(--muted-2); font-size: 13px;
+  background: var(--card); margin-top: 6px;
+}
+.hidden-breakdown b { color: var(--muted); }
+.link-btn {
+  display: inline-block; margin-left: 6px; padding: 4px 10px;
+  font-size: 12px; cursor: pointer;
+  background: var(--card-head); color: var(--accent, #1976d2);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.link-btn:hover { background: rgba(25, 118, 210, 0.08); }
