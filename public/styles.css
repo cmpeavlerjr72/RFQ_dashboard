@@ -548,3 +548,71 @@ footer {
   margin-left: auto; color: var(--muted); font-size: 11px;
   white-space: nowrap; padding-right: 8px;
 }
+
+/* ---------- comparison page ---------- */
+.compare-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 16px; box-shadow: var(--shadow);
+}
+.kpi-label {
+  color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+}
+.kpi-val {
+  font-size: 22px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 4px; font-weight: 600;
+}
+.kpi-val.pos { color: var(--pos); }
+.kpi-val.neg { color: var(--neg); }
+.kpi-note {
+  margin-top: 8px; font-size: 11px; color: var(--muted-2); font-style: italic;
+}
+.compare-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px;
+}
+.compare-side-label {
+  color: var(--muted-2); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
+}
+
+.compare-table, .prop-table {
+  border-collapse: collapse; width: 100%; margin-top: 6px;
+  font-size: 13px;
+}
+.compare-table th, .compare-table td,
+.prop-table th, .prop-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px; text-align: right;
+}
+.compare-table th:first-child, .compare-table td:first-child,
+.prop-table th:first-child, .prop-table td:first-child {
+  text-align: left;
+}
+.compare-table thead tr:first-child th { text-align: center; }
+.compare-table thead .sub-head th {
+  font-size: 11px; color: var(--muted-2);
+  text-transform: uppercase; letter-spacing: .05em;
+  border-bottom: 2px solid var(--border);
+}
+.compare-table .ours-col { color: #1976d2; background: rgba(25, 118, 210, 0.05); }
+.compare-table .theirs-col { color: #d32f2f; background: rgba(211, 47, 47, 0.05); }
+.compare-table tbody td.pos { color: var(--pos); font-weight: 600; }
+.compare-table tbody td.neg { color: var(--neg); font-weight: 600; }
+.compare-table tbody tr:hover { background: var(--card-head); }
+
+.prop-table tbody td.pos { color: var(--pos); font-weight: 600; }
+.prop-table tbody td.neg { color: var(--neg); font-weight: 600; }
+.prop-table tbody tr:hover { background: var(--card-head); }
+
+.two-col-tables {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.two-col-tables h3 {
+  margin: 0 0 6px; font-size: 13px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em;
+}
+
+.roi-chart.compare .zero { stroke: var(--muted); stroke-dasharray: 4 4; }
+.roi-chart.compare .axis-y line { stroke: var(--border); }
+.roi-chart.compare .axis-y text,
+.roi-chart.compare .axis-x text { fill: var(--muted-2); font-size: 11px; }

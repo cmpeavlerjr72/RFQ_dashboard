@@ -28,6 +28,7 @@ import {
   boxscoreCacheStats,
 } from "./espn.js";
 import { getRecap } from "./recap.js";
+import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 
 // Load .env from dashboard/.env (next to package.json)
 const __filename = fileURLToPath(import.meta.url);
@@ -186,6 +187,25 @@ app.get("/api/recap", async (req, res, next) => {
     const payload = await getRecap(start, end, force);
     res.json(payload);
   } catch (e) { next(e); }
+});
+
+// ----------------------------------------------------------------------------
+// Partner recap — scrapes http://137.184.206.173:8877/ for side-by-side
+// comparison against our own /api/recap. Long TTL (10 min); stale fallback
+// on upstream failure rather than throwing. See dashboard/server/partner.ts.
+// ----------------------------------------------------------------------------
+
+app.get("/api/partner-recap", async (req, res, next) => {
+  try {
+    const force = String(req.query.fresh || "") === "1";
+    upstreamCallCount++;
+    const payload = await getPartnerRecap(force);
+    res.json(payload);
+  } catch (e) { next(e); }
+});
+
+app.get("/api/partner-recap/health", (_req, res) => {
+  res.json(partnerCacheStats());
 });
 
 // ----------------------------------------------------------------------------
