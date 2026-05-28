@@ -1193,19 +1193,18 @@ function aggregateGameCards() {
         league,
         teams: logoTeams,
         dateLabel: legDateLabel(leg.ticker),
-        legs: [],          // all pending legs in this game
-        anyResolvedLegs: [], // legs already alive/dead — quick context line
+        // EVERY leg (pending, alive, dead) goes here. Resolved legs stay
+        // visible in the card so users can see what won / lost. Chip
+        // shading + strikethrough handle the visual differentiation
+        // (alive -> full green; dead -> full red + line-through).
+        legs: [],
         parlayTickers: new Set(),
         exposure: 0,
         maxWin: 0,
       };
       games.set(key, g);
     }
-    if (leg.eff === "alive" || leg.eff === "dead") {
-      g.anyResolvedLegs.push(leg);
-    } else {
-      g.legs.push(leg);
-    }
+    g.legs.push(leg);
   }
   // Game-level exposure/maxWin/expectedPnl are the SUM of unique parlays
   // touching the game (each parlay counted once per game), not the sum of
@@ -1267,11 +1266,12 @@ function aggregateGameCards() {
 function renderGameCards() {
   const wrap = $("game-cards");
   const cards = aggregateGameCards();
-  // Only show cards that still have pending legs to cheer for; if every leg
-  // in a game has already resolved, it's no longer actionable.
+  // Render every card that has any legs, including all-resolved ones —
+  // they stay visible (alive = green, dead = red+strike) so the user can
+  // see how the slate landed.
   const live = cards.filter((g) => g.legs.length > 0);
   if (!live.length) {
-    wrap.innerHTML = `<div class="empty">no games with pending exposure</div>`;
+    wrap.innerHTML = `<div class="empty">no open exposure</div>`;
     return;
   }
 
@@ -1698,9 +1698,9 @@ function renderGameCards() {
 
     const bodyContent = `${gameSection}${playerSection}`;
 
-    const resolvedNote = g.anyResolvedLegs.length
-      ? `<div class="cheer-resolved">${g.anyResolvedLegs.length} leg${g.anyResolvedLegs.length === 1 ? "" : "s"} already resolved</div>`
-      : "";
+    // resolvedNote retired — resolved legs now render inline (green for
+    // wins, red+strikethrough for losses) so the count line is redundant.
+    const resolvedNote = "";
 
     // Scenario rows — game-level legs evaluated deterministically; player
     // and total legs handled as a best/worst envelope.
