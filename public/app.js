@@ -530,6 +530,79 @@ function findEspnEventForGameKey(gameKey) {
   return null;
 }
 
+// Bucket a game-level leg into a display group ("Moneyline" / "Spread" /
+// "Total" / "First 5" / "First 5 spread" / "First 5 total" / "Team total" /
+// "Run in 1st" / "Both teams to score" / "First half"). Returns null for
+// player-prop and unrecognized tickers — caller routes those into the
+// player section instead.
+const GAME_LEVEL_GROUP_BY_STAT = {
+  GAME: "Moneyline",
+  SPREAD: "Spread",
+  TOTAL: "Total",
+  F5: "First 5 moneyline",
+  F5SPREAD: "First 5 spread",
+  F5TOTAL: "First 5 total",
+  TEAMTOTAL: "Team total",
+  RFI: "Run in 1st",
+  BTTS: "Both teams to score",
+  "1H": "First half",
+  FIRST10: "First 10 overs",
+};
+// Display order within a card — ML first, then spread/total, then sport
+// extras. Anything not listed sorts alphabetically at the end.
+const GAME_LEVEL_GROUP_ORDER = [
+  "Moneyline", "Spread", "Total",
+  "First 5 moneyline", "First 5 spread", "First 5 total",
+  "Team total", "Run in 1st", "Both teams to score", "First half",
+  "First 10 overs",
+];
+function legGameLevelGroup(ticker) {
+  if (!ticker || !ticker.startsWith("KX")) return null;
+  // Match "KX{SPORT_PREFIX}{STAT}-..." — sport prefix is the leading word
+  // (KXMLB, KXNBA, KXNHL, KXLALIGA, etc.); STAT is what's between that and
+  // the first dash. We anchor on the dash to avoid grabbing player blobs.
+  const m = ticker.match(/^KX([A-Z0-9]+)-/);
+  if (!m) return null;
+  const head = m[1];
+  // Try every known stat key as a suffix of `head` so we can support both
+  // 3-letter sport prefixes (KXMLB+GAME) and longer ones (KXLALIGA+TOTAL).
+  for (const stat of Object.keys(GAME_LEVEL_GROUP_BY_STAT)) {
+    if (head.endsWith(stat)) return GAME_LEVEL_GROUP_BY_STAT[stat];
+  }
+  return null;
+}
+
+// Pull headshot + jersey + position for a player prop, looking through the
+// already-loaded ESPN boxscore. Returns null if the boxscore isn't loaded
+// yet (game pregame) or the athlete can't be found by last-name match.
+function findAthleteMeta(prop, boxscores) {
+  if (!prop) return null;
+  const ev = findEspnEvent(prop.gameKey, state.scoreboards);
+  const eventId = String(ev?.id || "");
+  if (!eventId) return null;
+  const box = boxscores[`${prop.sport}:${eventId}`];
+  const players = box?.boxscore?.players || [];
+  const teamGroup = players.find(
+    (g) => (g?.team?.abbreviation || "").toUpperCase() === prop.team.toUpperCase(),
+  );
+  if (!teamGroup) return null;
+  for (const sg of teamGroup.statistics || []) {
+    for (const a of sg.athletes || []) {
+      const nm = (a?.athlete?.displayName || "").trim();
+      const last = nm.split(/\s+/).pop().toUpperCase();
+      if (last === prop.lastName.toUpperCase()) {
+        return {
+          displayName: nm,
+          headshot: a.athlete?.headshot?.href || null,
+          jersey: a.athlete?.jersey || null,
+          position: a.athlete?.position?.abbreviation || null,
+        };
+      }
+    }
+  }
+  return null;
+}
+
 // ---------- Game-level scenario tracker ------------------------------------
 // Parses a leg into a structured game-level predicate, or returns null if it's
 // a player prop / not a recognized game-level market. The scenario evaluator
@@ -739,6 +812,7 @@ function liveStateFor(ev) {
   const homeAbbr = normAbbrForKalshi((home?.team?.abbreviation || "").toUpperCase());
   const awayScore = parseInt(away?.score ?? "0", 10);
   const homeScore = parseInt(home?.score ?? "0", 10);
+  const recordOf = (c) => (c?.records?.[0]?.summary || c?.records?.[0]?.displayValue || "");
   let periodLabel = "";
   if (state === "pre") periodLabel = detail || "Pregame";
   else if (state === "post") periodLabel = detail || "Final";
@@ -748,7 +822,18 @@ function liveStateFor(ev) {
   }
   return {
     state, periodLabel,
-    awayAbbr, homeAbbr, awayScore, homeScore,
+    away: {
+      abbr: awayAbbr,
+      name: away?.team?.shortDisplayName || away?.team?.name || awayAbbr,
+      score: awayScore,
+      record: recordOf(away),
+    },
+    home: {
+      abbr: homeAbbr,
+      name: home?.team?.shortDisplayName || home?.team?.name || homeAbbr,
+      score: homeScore,
+      record: recordOf(home),
+    },
     raw: ev,
   };
 }
@@ -932,40 +1017,75 @@ function renderGameCards() {
     const chevron = collapsed ? "▸" : "▾";
 
     const live = liveStateFor(findEspnEventForGameKey(g.key));
-    let liveRow = "";
+    let scorePanel = "";
     if (live) {
       const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
-      const winningAway = live.state !== "pre" && live.awayScore > live.homeScore;
-      const winningHome = live.state !== "pre" && live.homeScore > live.awayScore;
-      liveRow = `
-        <div class="game-live">
-          <span class="${dotCls}"></span>
-          <span class="live-period">${escapeHtml(live.periodLabel)}</span>
-          <span class="live-score">
-            <span class="team-abbr">${escapeHtml(live.awayAbbr)}</span>
-            <span class="team-score ${winningAway ? "leading" : ""}">${live.awayScore}</span>
-            <span class="sep">-</span>
-            <span class="team-score ${winningHome ? "leading" : ""}">${live.homeScore}</span>
-            <span class="team-abbr">${escapeHtml(live.homeAbbr)}</span>
-          </span>
-        </div>
-      `;
+      const awayLeading = live.state !== "pre" && live.away.score > live.home.score;
+      const homeLeading = live.state !== "pre" && live.home.score > live.away.score;
+      const teamRow = (t, leading) => {
+        const logoUrl = teamLogoUrl(g.sportLogoKey, t.abbr, { league: g.league });
+        const logoImg = logoUrl
+          ? `<img class="team-logo" src="${logoUrl}" alt="${escapeHtml(t.abbr)}" onerror="this.style.display='none'">`
+          : "";
+        return `
+          <div class="score-team ${leading ? "leading" : ""}">
+            <span class="score-logo">${logoImg}</span>
+            <span class="score-abbr">${escapeHtml(t.abbr)}</span>
+            <span class="score-name">${escapeHtml(t.name)}</span>
+            ${t.record ? `<span class="score-record">${escapeHtml(t.record)}</span>` : ""}
+            <span class="score-num">${live.state === "pre" ? "" : t.score}</span>
+          </div>`;
+      };
+      scorePanel = `
+        <div class="score-panel">
+          <div class="score-status"><span class="${dotCls}"></span><span>${escapeHtml(live.periodLabel)}</span></div>
+          ${teamRow(live.away, awayLeading)}
+          ${teamRow(live.home, homeLeading)}
+        </div>`;
     }
 
-    const legRows = g.legs.map((r) => {
+    // ---- Bucket pending legs into game-level groups + per-player groups ----
+    const gameGroups = new Map();   // group name -> legs[]
+    const playerGroups = new Map(); // "team|LAST" -> {team, lastName, prop, meta, legs[]}
+    const otherLegs = [];
+    for (const r of g.legs) {
+      const groupName = legGameLevelGroup(r.ticker);
+      if (groupName) {
+        if (!gameGroups.has(groupName)) gameGroups.set(groupName, []);
+        gameGroups.get(groupName).push(r);
+        continue;
+      }
+      const prop = parsePlayerProp(r.ticker);
+      if (prop && prop.team && prop.lastName) {
+        const key = `${prop.team}|${prop.lastName}`;
+        let pg = playerGroups.get(key);
+        if (!pg) {
+          pg = {
+            team: prop.team,
+            lastName: prop.lastName,
+            jersey: prop.jersey,
+            prop,
+            meta: findAthleteMeta(prop, state.boxscores),
+            legs: [],
+          };
+          playerGroups.set(key, pg);
+        }
+        pg.legs.push({ row: r, prop });
+        continue;
+      }
+      otherLegs.push(r);
+    }
+
+    // Per-leg row HTML used by both game and player sections.
+    const legRowHtml = (r, prop) => {
       const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
       const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
-      // Live per-leg state — for player props this is the player's current
-      // stat vs threshold; for team-level legs it's whatever string the
-      // existing legResolutionForUs surfaced (current score / period).
       let liveStat = "";
-      const prop = parsePlayerProp(r.ticker);
       if (prop) {
         const pr = resolvePlayerProp(prop, state.scoreboards, state.boxscores);
         if (pr && pr.current != null) {
           const overThreshold = pr.current >= prop.threshold;
-          const liveCls = overThreshold ? "neg" : "pos";
-          liveStat = `<span class="cheer-live ${liveCls}" title="player's current value vs threshold">${pr.current} / ${prop.threshold}</span>`;
+          liveStat = `<span class="cheer-live ${overThreshold ? "neg" : "pos"}" title="player's current value vs threshold">${pr.current} / ${prop.threshold}</span>`;
         }
       } else if (r.statText) {
         liveStat = `<span class="cheer-live" title="current game state">${escapeHtml(r.statText)}</span>`;
@@ -982,9 +1102,80 @@ function renderGameCards() {
             <span class="pos" title="$ we win if this leg breaks our way">+${r.maxWin.toFixed(2)}</span>
             <span title="estimated chance this leg breaks our way">${pUsPct}</span>
           </div>
-        </div>
-      `;
-    }).join("");
+        </div>`;
+    };
+
+    // ---- Game-level section ----
+    let gameSection = "";
+    if (gameGroups.size > 0 || otherLegs.length > 0) {
+      const ordered = [...gameGroups.keys()].sort((a, b) => {
+        const ai = GAME_LEVEL_GROUP_ORDER.indexOf(a);
+        const bi = GAME_LEVEL_GROUP_ORDER.indexOf(b);
+        const ax = ai < 0 ? 999 : ai;
+        const bx = bi < 0 ? 999 : bi;
+        if (ax !== bx) return ax - bx;
+        return a.localeCompare(b);
+      });
+      const groupBlocks = ordered.map((name) => {
+        const items = gameGroups.get(name).slice().sort((a, b) => b.maxWin - a.maxWin);
+        return `
+          <div class="leg-group">
+            <div class="leg-group-head">${escapeHtml(name)}</div>
+            ${items.map((r) => legRowHtml(r, null)).join("")}
+          </div>`;
+      }).join("");
+      const otherBlock = otherLegs.length ? `
+        <div class="leg-group">
+          <div class="leg-group-head">Other</div>
+          ${otherLegs.map((r) => legRowHtml(r, parsePlayerProp(r.ticker))).join("")}
+        </div>` : "";
+      gameSection = `
+        <div class="card-section">
+          <div class="section-title">Game</div>
+          ${groupBlocks}${otherBlock}
+        </div>`;
+    }
+
+    // ---- Player section ----
+    let playerSection = "";
+    if (playerGroups.size > 0) {
+      const players = [...playerGroups.values()].sort((a, b) => {
+        const aMax = Math.max(...a.legs.map((l) => l.row.maxWin));
+        const bMax = Math.max(...b.legs.map((l) => l.row.maxWin));
+        return bMax - aMax;
+      });
+      const blocks = players.map((p) => {
+        const meta = p.meta || {};
+        const pretty = p.lastName.charAt(0) + p.lastName.slice(1).toLowerCase();
+        const headshot = meta.headshot
+          ? `<img class="player-head" src="${meta.headshot}" alt="${escapeHtml(pretty)}" onerror="this.style.display='none'">`
+          : `<div class="player-head fallback">${escapeHtml(p.lastName.slice(0, 1))}</div>`;
+        const jersey = meta.jersey || p.jersey;
+        const posCell = [p.team, meta.position, jersey ? `#${jersey}` : ""].filter(Boolean).join(" · ");
+        const legs = p.legs
+          .slice()
+          .sort((a, b) => b.row.maxWin - a.row.maxWin)
+          .map(({ row, prop }) => legRowHtml(row, prop)).join("");
+        return `
+          <div class="player-block">
+            <div class="player-head-row">
+              ${headshot}
+              <div class="player-meta">
+                <div class="player-name">${escapeHtml(meta.displayName || pretty)}</div>
+                <div class="player-pos">${escapeHtml(posCell)}</div>
+              </div>
+            </div>
+            ${legs}
+          </div>`;
+      }).join("");
+      playerSection = `
+        <div class="card-section">
+          <div class="section-title">Players</div>
+          ${blocks}
+        </div>`;
+    }
+
+    const bodyContent = `${gameSection}${playerSection}`;
 
     const resolvedNote = g.anyResolvedLegs.length
       ? `<div class="cheer-resolved">${g.anyResolvedLegs.length} leg${g.anyResolvedLegs.length === 1 ? "" : "s"} already resolved</div>`
@@ -1032,7 +1223,7 @@ function renderGameCards() {
             <span class="game-name">${escapeHtml(title)}</span>
             ${dateHtml}
           </div>
-          ${liveRow}
+          ${scorePanel}
           <div class="game-stats">
             <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
             <span class="stat"><span class="label">at risk</span><span class="value">${fmtMoney(g.exposure)}</span></span>
@@ -1046,8 +1237,7 @@ function renderGameCards() {
         </div>
         ${collapsed ? "" : `
         <div class="game-card-body">
-          <div class="cheer-list-head">Cheering for:</div>
-          ${legRows}
+          ${bodyContent || `<div class="empty">no pending legs</div>`}
           ${resolvedNote}
           ${scenarioHtml}
         </div>`}

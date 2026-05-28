@@ -371,31 +371,54 @@ h2 {
   font-size: 11px; color: var(--muted); font-weight: 500;
   background: rgba(0,0,0,.04); padding: 1px 6px; border-radius: 4px;
 }
-.game-card-head .game-live {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 12px; color: var(--fg);
+/* ---- CBS-style score panel (replaces inline game-live row) ---- */
+.game-card-head .score-panel {
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 4px;
 }
-.game-card-head .game-live .live-dot {
+.game-card-head .score-panel .score-status {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-bottom: 2px;
+}
+.live-dot {
   width: 8px; height: 8px; border-radius: 50%;
   display: inline-block; flex-shrink: 0;
 }
-.game-card-head .game-live .live-dot.pre  { background: var(--muted-2); }
-.game-card-head .game-live .live-dot.live { background: var(--pos); box-shadow: 0 0 6px rgba(21,128,61,.5); animation: pulse 1.4s ease-in-out infinite; }
-.game-card-head .game-live .live-dot.post { background: var(--accent); }
-.game-card-head .game-live .live-period { color: var(--muted); font-weight: 500; }
-.game-card-head .game-live .live-score {
-  display: inline-flex; align-items: center; gap: 6px;
+.live-dot.pre  { background: var(--muted-2); }
+.live-dot.live { background: var(--pos); box-shadow: 0 0 6px rgba(21,128,61,.5); animation: pulse 1.4s ease-in-out infinite; }
+.live-dot.post { background: var(--accent); }
+.game-card-head .score-panel .score-team {
+  display: grid;
+  grid-template-columns: 22px auto auto 1fr auto;
+  align-items: center; gap: 8px;
+  padding: 2px 0;
+}
+.game-card-head .score-panel .score-team .score-logo .team-logo {
+  height: 20px; width: 20px; object-fit: contain;
+}
+.game-card-head .score-panel .score-team .score-abbr {
+  font-weight: 700; font-size: 13px; color: var(--fg);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
-.game-card-head .game-live .live-score .team-abbr {
-  color: var(--muted); font-size: 11px; font-weight: 600;
+.game-card-head .score-panel .score-team .score-name {
+  font-size: 13px; color: var(--muted);
 }
-.game-card-head .game-live .live-score .team-score {
-  font-size: 14px; font-weight: 700; color: var(--fg);
-  min-width: 18px; text-align: center;
+.game-card-head .score-panel .score-team .score-record {
+  font-size: 11px; color: var(--muted-2);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
-.game-card-head .game-live .live-score .team-score.leading { color: var(--pos); }
-.game-card-head .game-live .live-score .sep { color: var(--muted-2); }
+.game-card-head .score-panel .score-team .score-num {
+  font-size: 18px; font-weight: 700; color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  text-align: right; min-width: 28px;
+}
+.game-card-head .score-panel .score-team.leading .score-num,
+.game-card-head .score-panel .score-team.leading .score-abbr {
+  color: var(--pos);
+}
 .game-card-head .game-stats {
   display: flex; gap: 14px; flex-wrap: wrap;
 }
@@ -442,6 +465,42 @@ h2 {
 .game-card-body .cheer-resolved {
   margin-top: 8px; font-size: 11px; color: var(--muted-2);
   font-style: italic;
+}
+/* ---- Game / Players sections inside card body ---- */
+.game-card-body .card-section + .card-section { margin-top: 12px; }
+.game-card-body .section-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--muted); font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px; margin-bottom: 6px;
+}
+.game-card-body .leg-group + .leg-group { margin-top: 8px; }
+.game-card-body .leg-group .leg-group-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted-2); font-weight: 600;
+  margin: 4px 0 2px;
+}
+/* Player block: headshot + name + jersey/pos, then nested leg rows */
+.game-card-body .player-block {
+  padding: 6px 0; border-top: 1px dashed var(--border);
+}
+.game-card-body .player-block:first-child { border-top: 0; }
+.game-card-body .player-head-row {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 4px;
+}
+.game-card-body .player-head {
+  width: 32px; height: 32px; border-radius: 50%;
+  object-fit: cover; background: var(--card-head); flex-shrink: 0;
+  border: 1px solid var(--border);
+}
+.game-card-body .player-head.fallback {
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; color: var(--muted);
+}
+.game-card-body .player-name { font-weight: 600; font-size: 13px; color: var(--fg); }
+.game-card-body .player-pos {
+  font-size: 11px; color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 .game-card-body .scenarios {
   margin-top: 10px; padding-top: 8px;
