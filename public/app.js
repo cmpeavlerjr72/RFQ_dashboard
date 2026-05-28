@@ -379,7 +379,7 @@ async function fetchNeededRosters() {
     const flat = top.flatMap((x) => (Array.isArray(x.items) ? x.items : [x]));
     for (const a of flat) {
       const dn = (a?.displayName || a?.fullName || `${a?.firstName || ""} ${a?.lastName || ""}`.trim());
-      const last = normLast(a?.lastName || dn.split(/\s+/).pop() || "");
+      const last = normLast(a?.lastName || lastNameFromDisplay(dn));
       if (!last) continue;
       state.athletesByKey[`${sport}:${teamAbbr}:${last}`] = {
         displayName: dn || last,
@@ -442,7 +442,7 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
     const keys = sg.keys || [];
     const ath = (sg.athletes || []).find((a) => {
       const nm = (a?.athlete?.displayName || "").trim();
-      return normLast(nm.split(/\s+/).pop()) === propLast;
+      return normLast(a?.athlete?.lastName || lastNameFromDisplay(nm)) === propLast;
     });
     if (!ath) continue;
     const stats = ath.stats || [];
@@ -587,10 +587,32 @@ function normAbbrForKalshi(espnAbbr, sport) {
   if (!espnAbbr) return espnAbbr;
   return ESPN_TO_KALSHI_ABBR[sport]?.[espnAbbr] || espnAbbr;
 }
-// Strip non-alpha so hyphens, apostrophes, periods, and spaces don't keep
-// "Gilgeous-Alexander" from matching Kalshi's "GILGEOUSALEXANDER".
+// Player-name normaliser used on both sides of every roster/boxscore
+// match. Has to swallow three things Kalshi flattens away:
+//   1. Diacritics via NFD decomposition (Acuña -> Acuna, García -> Garcia)
+//   2. Non-decomposing Latin letters (Đoković -> Djokovic, Søderling ->
+//      Soderling, Björn -> Bjorn) — these can't be NFD'd; we map them.
+//   3. Suffix tokens (Jr., Sr., II/III/IV) that ESPN appends but Kalshi's
+//      ticker tag doesn't carry.
+const NON_LATIN_FLATTEN = {
+  "Đ":"D","Ð":"D","Ø":"O","Æ":"AE","Œ":"OE","ß":"SS","Ł":"L","Þ":"TH",
+  "đ":"d","ð":"d","ø":"o","æ":"ae","œ":"oe","ł":"l","þ":"th",
+};
+const NAME_SUFFIX_RE = /\s+(JR|SR|II|III|IV|V)\.?$/;
 function normLast(s) {
-  return (s || "").toUpperCase().replace(/[^A-Z]/g, "");
+  if (!s) return "";
+  let t = String(s).normalize("NFD").replace(/[̀-ͯ]/g, "");
+  t = t.split("").map((c) => NON_LATIN_FLATTEN[c] || c).join("");
+  t = t.toUpperCase().replace(NAME_SUFFIX_RE, "");
+  return t.replace(/[^A-Z]/g, "");
+}
+// Last-name extraction from a free-form displayName. "Ronald Acuña Jr." -> "Acuña Jr."
+// (then normLast strips the suffix). "Shai Gilgeous-Alexander" -> "Gilgeous-Alexander".
+// We prefer ESPN's lastName field where present; this is the fallback.
+function lastNameFromDisplay(dn) {
+  if (!dn) return "";
+  const tokens = String(dn).trim().split(/\s+/);
+  return tokens.length < 2 ? (tokens[0] || "") : tokens.slice(1).join(" ");
 }
 
 // Find the ESPN event for a game-card key, restricted to that game's sport
@@ -685,7 +707,7 @@ function findAthleteMeta(prop, boxscores) {
     for (const sg of teamGroup.statistics || []) {
       for (const a of sg.athletes || []) {
         const nm = (a?.athlete?.displayName || "").trim();
-        const last = normLast(nm.split(/\s+/).pop());
+        const last = normLast(a?.athlete?.lastName || lastNameFromDisplay(nm));
         if (last === propLast) {
           boxMeta = {
             displayName: nm,
