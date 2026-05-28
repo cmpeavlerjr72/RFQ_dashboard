@@ -30,10 +30,6 @@
       End
       <input type="date" id="end-date" />
     </label>
-    <label class="auto">
-      <input type="checkbox" id="pregame-only" checked />
-      Compare partner's <b>pregame only</b> (we don't trade live)
-    </label>
     <button id="load-btn">Load</button>
     <button id="refresh-btn" title="Force refresh both upstreams">Refresh</button>
     <span class="meta" id="meta-text"></span>
@@ -42,8 +38,10 @@
   <div class="row">
     <span class="hint">
       Comparing our <b>/api/recap</b> against partner's <b>http://137.184.206.173:8877/</b>.
-      Their volume is ~10× ours — all comparisons are normalised (ROI %, win rate %, $/fill),
-      no raw $ P&amp;L head-to-head.
+      Their per-day and per-sport breakdowns are <b>combined pregame+live</b> &mdash; they don&rsquo;t
+      expose finer pregame splits, so per-day cells are badged <span class="combined-badge">combined</span>
+      with the lifetime pregame share. Per-prop-type uses their pregame-only table. Volume is ~10&times; ours,
+      so all comparisons are normalised (ROI %, WR %, $/fill).
     </span>
   </div>
 </header>

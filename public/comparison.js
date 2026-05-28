@@ -4,8 +4,11 @@
 // Design choices:
 //  - All comparisons use ROI %, win-rate %, $/fill — NEVER raw $ PnL. Their
 //    volume is ~10× ours so $ comparison would be misleading.
-//  - "Pregame only" toggle on by default since we don't trade live; we want
-//    apples-to-apples.
+//  - Partner-side: per-day and per-sport tables on their dashboard are
+//    combined pregame+live (they don't expose a finer pregame split at those
+//    granularities). Per-prop-type IS exposed as pregame-only, so we use
+//    pregame_by_prop_type there. Every combined cell is badged with the
+//    lifetime pregame share so the user can read past the mix.
 //  - Per-sport is the cleanest join (sport names match). Per-prop-type is
 //    shown side-by-side without forced alignment (their "Total (NBA)" doesn't
 //    map cleanly to our "TOTAL" / "GAME+TOTAL" / etc. stat_sets).
@@ -64,6 +67,35 @@ function todayEt() {
 }
 function ymdToTs(ymd) {
   return Date.parse(ymd + "T00:00:00Z");
+}
+
+/**
+ * Lifetime pregame share of partner's volume — used to badge combined cells
+ * so the user knows roughly how much of the partner number is pregame.
+ * Returns {pnlPct, nPct} both in 0..100, or null if the pregame_vs_live
+ * table wasn't scraped successfully.
+ */
+function partnerPregameShare(theirs) {
+  const rows = theirs?.pregame_vs_live || [];
+  const pre = rows.find((r) => /pregame/i.test(r.label || ""));
+  const live = rows.find((r) => /live/i.test(r.label || ""));
+  if (!pre || !live) return null;
+  const totalPnl = (pre.pnl_dollars || 0) + (live.pnl_dollars || 0);
+  const totalN = (pre.n || 0) + (live.n || 0);
+  return {
+    pnlPct: totalPnl > 0 ? (100 * (pre.pnl_dollars || 0)) / totalPnl : null,
+    nPct: totalN > 0 ? (100 * (pre.n || 0)) / totalN : null,
+  };
+}
+
+/** Tiny inline badge with a tooltip explaining the combined-data caveat. */
+function combinedBadge(share) {
+  const pct = share?.pnlPct;
+  const text = pct != null ? `combined · ~${Math.round(pct)}% pregame` : "combined";
+  const tip = pct != null
+    ? `Partner exposes only combined (pregame+live) numbers at this granularity. Lifetime split: pregame is ~${pct.toFixed(0)}% of their P&L and ~${(share?.nPct ?? 0).toFixed(0)}% of their fills.`
+    : "Partner exposes only combined (pregame+live) numbers at this granularity.";
+  return `<span class="combined-badge" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
 }
 
 /**
@@ -138,30 +170,25 @@ function render() {
 
 function renderSummary() {
   const ours = state.ours.agg;
-  // Recompute partner aggregate from their by_day filtered to OUR date range.
-  // (Their pregame_vs_live is a lifetime split — using it directly would make
-  // the summary cards immune to the date picker. by_day is per-date and
-  // includes wins/losses/volume/pnl so we can recompute clean aggregates.)
-  // Note: pregame_vs_live doesn't have per-date breakdown, so the
-  // "Compare partner's pregame only" toggle CANNOT apply to this card. We
-  // surface that asymmetry in the kpi-note so users aren't surprised.
+  // Partner aggregate = sum of by_day rows in the picked window. This is
+  // COMBINED pregame+live since partner doesn't expose a finer per-day split.
+  // The per-card combined-badge surfaces that so users aren't misled.
   const theirAgg = aggregatePartnerByDay(state.theirs, state.start, state.end);
-  const theirAggRoi = theirAgg.roi_pct;
-  const theirAggN = theirAgg.n;
-  const theirAggWR = theirAgg.win_rate_pct;
+  const share = partnerPregameShare(state.theirs);
+  const badge = combinedBadge(share);
 
   const cards = [
     {
-      label: "ROI (settled)", ours: ours.roi_pct, theirs: theirAggRoi,
-      fmt: (v) => fmtPct(v, true), cls: roiClass,
+      label: "ROI (settled)", ours: ours.roi_pct, theirs: theirAgg.roi_pct,
+      fmt: (v) => fmtPct(v, true), cls: roiClass, badge,
     },
     {
-      label: "Win rate", ours: ours.win_rate_pct, theirs: theirAggWR,
-      fmt: (v) => fmtPct(v, false), cls: (v) => (v != null && v > 50 ? "pos" : ""),
+      label: "Win rate", ours: ours.win_rate_pct, theirs: theirAgg.win_rate_pct,
+      fmt: (v) => fmtPct(v, false), cls: (v) => (v != null && v > 50 ? "pos" : ""), badge,
     },
     {
-      label: "Settled parlays", ours: ours.settled_count, theirs: theirAggN,
-      fmt: fmtN, cls: () => "",
+      label: "Settled parlays", ours: ours.settled_count, theirs: theirAgg.n,
+      fmt: fmtN, cls: () => "", badge,
     },
     {
       label: "Break-even WR", ours: ours.breakeven_wr_pct,
@@ -179,7 +206,7 @@ function renderSummary() {
           <div class="kpi-val ${c.cls(c.ours)}">${c.fmt(c.ours)}</div>
         </div>
         <div>
-          <div class="compare-side-label">Theirs</div>
+          <div class="compare-side-label">Theirs ${c.badge || ""}</div>
           <div class="kpi-val ${c.cls(c.theirs)}">${c.fmt(c.theirs)}</div>
         </div>
       </div>
@@ -188,59 +215,12 @@ function renderSummary() {
   `).join("");
 }
 
-/**
- * Partner exposes by_day with per-date numbers but only LIFETIME for by_sport
- * and by_prop_type. So we can date-filter the summary / chart / daily table
- * fully, but the sport and prop-type tables only make sense when the picked
- * window matches their lifetime. This helper returns true iff the current
- * window spans (or exceeds) partner's full by_day range. When false, the
- * sport/prop tables hide themselves with a "switch to lifetime" hint.
- */
-function pickedWindowCoversPartnerLifetime() {
-  const days = state.theirs?.by_day || [];
-  if (!days.length || !state.start || !state.end) return false;
-  let min = days[0].label, max = days[0].label;
-  for (const r of days) {
-    if (r.label < min) min = r.label;
-    if (r.label > max) max = r.label;
-  }
-  return state.start <= min && state.end >= max;
-}
-
-function partnerLifetimeBounds() {
-  const days = state.theirs?.by_day || [];
-  if (!days.length) return null;
-  let min = days[0].label, max = days[0].label;
-  for (const r of days) {
-    if (r.label < min) min = r.label;
-    if (r.label > max) max = r.label;
-  }
-  return { min, max };
-}
-
 function renderSportTable() {
-  // Normalize our sport rows (already aggregated). Map partner's sport
-  // labels — they use "NBA"/"MLB"/"Soccer"/"Tennis"/"Other" and cross
-  // categories like "MLB+NBA". We do likewise. Join on uppercase sport.
-
-  // Hide when picked window doesn't cover partner's full lifetime — partner
-  // doesn't expose per-date sport data, so mixing our date-filtered side with
-  // their lifetime would be apples-to-oranges. Show a "switch to lifetime"
-  // hint so the user can see the tables if they want.
-  if (!pickedWindowCoversPartnerLifetime()) {
-    const b = partnerLifetimeBounds();
-    $("sport-table-wrap").innerHTML = `
-      <div class="empty hidden-breakdown">
-        Hidden — partner doesn't expose per-date sport breakdowns; their numbers are <b>lifetime</b>
-        and would mismatch your <b>${escapeHtml(state.start)}…${escapeHtml(state.end)}</b> window.
-        ${b ? `<button class="link-btn" id="use-lifetime-sport">Switch to partner lifetime (${escapeHtml(b.min)}…${escapeHtml(b.max)})</button>` : ""}
-      </div>
-    `;
-    const btn = document.getElementById("use-lifetime-sport");
-    if (btn) btn.addEventListener("click", () => useLifetimeWindow());
-    return;
-  }
-
+  // Partner's by_sport is combined pregame+live AND lifetime (no per-date),
+  // so we just show it badged. The picked-window gate we used to apply here
+  // was solving the wrong problem — pregame split isn't available per-sport
+  // either, so gating by date didn't actually buy pregame; it just hid the
+  // table. Better to surface it always with a clear "combined · lifetime" tag.
   const ours = (state.ours.sport_breakdown || []).map((s) => ({
     sport: s.sport.toUpperCase(),
     n: s.agg.n_parlays,
@@ -279,12 +259,14 @@ function renderSportTable() {
     return bn - an;
   });
 
+  const sportShare = partnerPregameShare(state.theirs);
+  const sportBadge = combinedBadge(sportShare);
   $("sport-table-wrap").innerHTML = `
     <table class="compare-table">
       <thead><tr>
         <th>Sport</th>
         <th colspan="3" class="ours-col">Ours</th>
-        <th colspan="3" class="theirs-col">Theirs</th>
+        <th colspan="3" class="theirs-col">Theirs &middot; lifetime ${sportBadge}</th>
         <th>ROI diff</th>
       </tr><tr class="sub-head">
         <th></th>
@@ -312,27 +294,13 @@ function renderSportTable() {
 }
 
 function renderPropTables() {
-  // Same lifetime-only constraint as sport. Hide when window != lifetime.
-  if (!pickedWindowCoversPartnerLifetime()) {
-    const b = partnerLifetimeBounds();
-    const msg = `
-      <div class="empty hidden-breakdown">
-        Hidden — partner doesn't expose per-date prop-type breakdowns; lifetime only.
-        ${b ? `<button class="link-btn" id="use-lifetime-prop">Switch to partner lifetime (${escapeHtml(b.min)}…${escapeHtml(b.max)})</button>` : ""}
-      </div>`;
-    $("their-prop-wrap").innerHTML = msg;
-    $("our-prop-wrap").innerHTML = "";
-    const btn = document.getElementById("use-lifetime-prop");
-    if (btn) btn.addEventListener("click", () => useLifetimeWindow());
-    return;
-  }
-
-  const pregameOnly = $("pregame-only").checked;
-  const theirRows = pregameOnly
-    ? (state.theirs.pregame_by_prop_type || [])
-    : (state.theirs.by_prop_type || []);
-  const sortedTheirs = [...theirRows].sort((a, b) => b.n - a.n);
+  // Partner exposes pregame at prop-type granularity, so use it directly.
+  // No date-window gate either — this table is always lifetime pregame on
+  // their side vs the picked window on ours.
+  const sortedTheirs = [...(state.theirs.pregame_by_prop_type || [])]
+    .sort((a, b) => b.n - a.n);
   $("their-prop-wrap").innerHTML = `
+    <div class="prop-subhead">Partner &middot; lifetime <b>pregame-only</b></div>
     <table class="prop-table">
       <thead><tr><th>Type</th><th>Sport</th><th>n</th><th>WR</th><th>ROI</th><th>$/fill</th></tr></thead>
       <tbody>${sortedTheirs.map((r) => {
@@ -401,12 +369,14 @@ function renderDayTable() {
   const allDates = new Set([...theirByDate.keys(), ...ourByDate.keys()]);
   const dates = [...allDates].sort().reverse();   // newest first
 
+  const dayShare = partnerPregameShare(state.theirs);
+  const dayBadge = combinedBadge(dayShare);
   $("day-table-wrap").innerHTML = `
     <table class="compare-table">
       <thead><tr>
         <th>Date</th>
         <th colspan="3" class="ours-col">Ours</th>
-        <th colspan="3" class="theirs-col">Theirs</th>
+        <th colspan="3" class="theirs-col">Theirs ${dayBadge}</th>
       </tr><tr class="sub-head">
         <th></th>
         <th>n</th><th>P&amp;L</th><th>cum ROI</th>
@@ -484,10 +454,10 @@ function renderChart() {
   });
 
   wrap.style.display = "block";
-  wrap.innerHTML = compareChartSvg(points);
+  wrap.innerHTML = compareChartSvg(points, partnerPregameShare(state.theirs));
 }
 
-function compareChartSvg(points) {
+function compareChartSvg(points, share) {
   const W = 1000, H = 260;
   const padL = 52, padR = 110, padT = 18, padB = 36;
   const inW = W - padL - padR;
@@ -557,7 +527,9 @@ function compareChartSvg(points) {
     </svg>
     <div class="chart-caption">
       Cumulative ROI over the overlap window. Ours = settled-cost-weighted (from /api/recap).
-      Theirs = pnl/volume-weighted from their daily table. Their volume is ~10× ours so noise dampens faster on their side — divergence is the signal.
+      Theirs = pnl/volume-weighted from their daily table &mdash; <b>combined pregame+live</b>
+      (no per-day pregame split exposed; lifetime pregame is ~${share?.pnlPct != null ? Math.round(share.pnlPct) : "?"}% of their P&amp;L).
+      Their volume is ~10&times; ours so noise dampens faster on their side &mdash; divergence is the signal.
     </div>
   `;
 }
@@ -565,24 +537,8 @@ function compareChartSvg(points) {
 // ----------------------------------------------------------------------------
 // Init
 // ----------------------------------------------------------------------------
-/**
- * Snap the date inputs to partner's full by_day range and reload. Triggered
- * by the "Switch to partner lifetime" buttons shown when sport/prop tables
- * are hidden because the picked window doesn't match lifetime.
- */
-function useLifetimeWindow() {
-  const b = partnerLifetimeBounds();
-  if (!b) return;
-  $("start-date").value = b.min;
-  $("end-date").value = b.max;
-  fetchAll({ force: false });
-}
-
 $("load-btn").addEventListener("click", () => fetchAll({ force: false }));
 $("refresh-btn").addEventListener("click", () => fetchAll({ force: true }));
-$("pregame-only").addEventListener("change", () => {
-  if (state.ours && state.theirs) render();
-});
 
 // Default to the 5/16-5/23 test window we've been discussing — easy to change
 // to any range; reasonable starting view.
