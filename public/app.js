@@ -789,6 +789,17 @@ function effectivePick(parsed, buyerSide) {
   return parsed.pick === a ? b : a;
 }
 
+// The team WE are rooting for on a leg. We hold the parlay-NO side, so we
+// cheer for the team the buyer is NOT effectively rooting for — i.e., the
+// opposite of effectivePick. Used to bucket ML legs (an LAA-NO ML leg
+// means we cheer for LAA -> show under LAA, not under DET).
+function ourCheeredTeam(parsed, buyerSide) {
+  const eff = effectivePick(parsed, buyerSide);
+  const [a, b] = parsed.teams || [];
+  if (!a || !b) return eff;
+  return eff === a ? b : a;
+}
+
 // Extract [away,home] team abbrs from a Kalshi event chunk like "26MAY28OKCSAS"
 // or "26MAY281310LAADET". We don't currently differentiate which is home —
 // we assume the first abbr is the away team (Kalshi's convention).
@@ -1204,17 +1215,22 @@ function renderGameCards() {
       const groupName = legGameLevelGroup(r.ticker);
       if (groupName) {
         const parsed = parseGameLevelLeg(r.ticker);
-        if (parsed?.kind === "ml" || parsed?.kind === "spread") {
-          // Bucket under the team whose perspective the buyer is taking.
-          // Buyer-YES on (TEAM win | TEAM by N+) -> TEAM bucket (favorite).
-          // Buyer-NO is functionally a buyer-YES on the OPPOSING team:
-          //   NO on "OKC wins" === YES on "SAS wins"
-          //   NO on "DET by 2+" === YES on "LAA +2 cover"
-          // So we flip the bucket team and let the chip-label code render
-          // the right sign ("-" for favorite, "+" for underdog).
+        if (parsed?.kind === "ml") {
+          // ML chip = "we want this team to win". Bucket under the team WE
+          // cheer for (= opposite of buyer's effective pick, since we hold
+          // parlay-NO). So a buyer-YES on DET ML and a buyer-NO on LAA ML
+          // both land under LAA (we win either when LAA wins).
+          const ab = ourCheeredTeam(parsed, r.buyerSide);
+          if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
+          teamBuckets.get(ab).ml.push({ row: r, parsed });
+        } else if (parsed?.kind === "spread") {
+          // Spread chip = "the line itself" (e.g. SAS -3.5). Bucket under
+          // the favorite team. Buyer-YES is on the original Kalshi pick
+          // (favorite); buyer-NO flips to the opposing team and the chip
+          // renders as the underdog's +N.5 line. Color reflects our side.
           const ab = effectivePick(parsed, r.buyerSide);
           if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
-          teamBuckets.get(ab)[parsed.kind].push({ row: r, parsed });
+          teamBuckets.get(ab).spread.push({ row: r, parsed });
         } else if (parsed?.kind === "total") {
           sharedTotal.push({ row: r, parsed });
         } else {
