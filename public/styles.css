@@ -550,18 +550,18 @@ h2 {
 .game-card-body .ladder-chip .ladder-chip-sep {
   display: inline-block; opacity: .55;
 }
-.game-card-body .ladder-chip.pos {
-  background: var(--pos-bg); border-color: rgba(21,128,61,.4); color: var(--pos);
-}
+/* Sign class only sets text color — bg/border intensity comes from the
+   inline style on the chip (chipShadeStyle, scaled by |pUs - 50%|).
+   Strikethrough is reserved for permanently-lost legs (locked-loss). */
+.game-card-body .ladder-chip.pos { color: var(--pos); }
 .game-card-body .ladder-chip.pos .ladder-chip-meta { color: rgba(21,128,61,.85); }
-.game-card-body .ladder-chip.neg {
-  background: var(--neg-bg); border-color: rgba(190,18,60,.4); color: var(--neg);
+.game-card-body .ladder-chip.neg { color: var(--neg); }
+.game-card-body .ladder-chip.neg .ladder-chip-meta { color: rgba(190,18,60,.85); }
+.game-card-body .ladder-chip.pending { color: var(--muted-2); }
+.game-card-body .ladder-chip.locked-loss,
+.game-card-body .ladder-chip.locked-loss .ladder-chip-meta {
   text-decoration: line-through;
 }
-.game-card-body .ladder-chip.neg .ladder-chip-meta {
-  color: rgba(190,18,60,.85); text-decoration: line-through;
-}
-.game-card-body .ladder-chip.pending { color: var(--muted-2); }
 .game-card-body .scenarios {
   margin-top: 10px; padding-top: 8px;
   border-top: 1px solid var(--border);

@@ -934,6 +934,27 @@ function scenariosForSport(sport) {
   return [];
 }
 
+// ---- Chip color helpers shared by player and game-level ladders ----
+// Sign class: pUs drives green/red when known; falls back to a binary live
+// hint (true = currently winning, false = currently losing, null = pending).
+function chipSignClass(pUs, fallbackPos) {
+  if (pUs != null) return pUs >= 0.5 ? "pos" : "neg";
+  if (fallbackPos === true) return "pos";
+  if (fallbackPos === false) return "neg";
+  return "pending";
+}
+// Inline-style shading scaled by |pUs - 0.5|. Neutral at 50%; full
+// saturation at 0% or 100%. Empty string when pUs unknown — caller's
+// class (.pos/.neg/.pending) provides the default look.
+function chipShadeStyle(pUs) {
+  if (pUs == null) return "";
+  const dist = Math.min(1, Math.abs(pUs - 0.5) * 2);
+  const bgAlpha = (0.06 + dist * 0.32).toFixed(2);
+  const borderAlpha = (0.20 + dist * 0.50).toFixed(2);
+  const rgb = pUs >= 0.5 ? "21, 128, 61" : "190, 18, 60";
+  return `background: rgba(${rgb}, ${bgAlpha}); border-color: rgba(${rgb}, ${borderAlpha});`;
+}
+
 // Compute per-card scenario rows: for each scenario, walk every parlay
 // touching this game and assemble best/worst $P&L. Player-prop and unknown
 // legs are treated as an envelope (best = they all fail buyer; worst = they
@@ -1362,7 +1383,18 @@ function renderGameCards() {
     const gameChipHtml = ({ row, parsed }) => {
       const buyerSide = (row.buyerSide || "yes").toLowerCase();
       const res = liveSc ? evalGameLegInScenario(parsed, buyerSide, liveSc) : "unknown";
-      const cls = res === "buyer_hit" ? "neg" : res === "buyer_miss" ? "pos" : "pending";
+      // Locked-loss strikethrough only when the bad outcome is permanent:
+      //   - total / RFI: monotonic — once buyer_hit it can't unhit
+      //   - ML / spread: only locked when game state is post (final)
+      const lockedLoss = (res === "buyer_hit") && (
+        parsed.kind === "total" ||
+        parsed.kind === "rfi" ||
+        live?.state === "post"
+      );
+      const livePos = res === "buyer_miss" ? true : res === "buyer_hit" ? false : null;
+      const sign = chipSignClass(row.pUs, livePos);
+      const style = chipShadeStyle(row.pUs);
+      const cls = sign + (lockedLoss ? " locked-loss" : "");
       const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
       let chipLabel;
       if (parsed.kind === "ml") {
@@ -1398,7 +1430,7 @@ function renderGameCards() {
           : res === "buyer_miss" ? " · currently FOR us"
           : "");
       return `
-        <span class="ladder-chip ${cls}" title="${escapeHtml(tip)}">
+        <span class="ladder-chip ${cls}" style="${style}" title="${escapeHtml(tip)}">
           <span class="ladder-chip-thresh">${escapeHtml(chipLabel)}</span>
           <span class="ladder-chip-meta">
             +$${row.maxWin.toFixed(0)}<span class="ladder-chip-sep">·</span>${pUsPct}
@@ -1553,8 +1585,14 @@ function renderGameCards() {
             ? `<span class="stat-current">${current}</span>`
             : `<span class="stat-current pending">—</span>`;
           const chips = items.map(({ row, prop }) => {
+            // Monotonic stats: once current crosses threshold the leg is
+            // permanently lost for us. That's the only case where we
+            // strikethrough (vs just shading red).
             const dead = current != null && current >= prop.threshold;
-            const cls = dead ? "neg" : current != null ? "pos" : "pending";
+            const livePos = current == null ? null : !dead;
+            const sign = chipSignClass(row.pUs, livePos);
+            const style = chipShadeStyle(row.pUs);
+            const cls = sign + (dead ? " locked-loss" : "");
             const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
             const tip =
               `Buyer needs ${stat} ≥ ${prop.threshold} (we're under ${prop.threshold}).\n` +
@@ -1562,7 +1600,7 @@ function renderGameCards() {
               `In ${row.parlays} parlay${row.parlays === 1 ? "" : "s"} · at risk ${fmtMoney(row.exposure)} · ` +
               `+$${row.maxWin.toFixed(2)} if it breaks our way · win chance ${pUsPct}`;
             return `
-              <span class="ladder-chip ${cls}" title="${escapeHtml(tip)}">
+              <span class="ladder-chip ${cls}" style="${style}" title="${escapeHtml(tip)}">
                 <span class="ladder-chip-thresh">u${prop.threshold}</span>
                 <span class="ladder-chip-meta">
                   +$${row.maxWin.toFixed(0)}<span class="ladder-chip-sep">·</span>${pUsPct}
