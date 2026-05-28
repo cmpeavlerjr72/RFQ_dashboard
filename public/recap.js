@@ -255,6 +255,9 @@ function render(data) {
   // Cumulative ROI chart (range mode only)
   renderChart(data);
 
+  // Cumulative realized-$ chart, x = settle time (single-date or range).
+  renderPnlChart(data);
+
   // Parlay table
   if (!data.parlays.length) {
     $("parlays-table-wrap").innerHTML = `<div class="empty">No parlays found in range.</div>`;
@@ -588,6 +591,161 @@ function shortDate(ymd) {
   if (!ymd) return "";
   const [, m, d] = ymd.split("-");
   return `${parseInt(m, 10)}/${parseInt(d, 10)}`;
+}
+
+// ---------- cumulative realized-$ chart (x = settle time) ----------
+// Progression view: every settled parlay in the recap window contributes
+// a step at its `settled_time_iso` of +pnl. Voids land as flat dots
+// (pnl=0). Open parlays excluded. Settlements that land outside the
+// recap date window are still plotted — they're real P&L from bets first
+// taken inside the window, so they belong on the curve.
+function renderPnlChart(data) {
+  const wrap = $("pnl-chart-wrap");
+  const points = (data.parlays || [])
+    .filter((p) => p.settled_time_iso && p.pnl != null)
+    .map((p) => ({
+      tMs: Date.parse(p.settled_time_iso),
+      pnl: p.pnl,
+      cost: p.cost,
+      status: p.status,
+      tk: p.parlay_ticker,
+      sub: p.sub_title || "",
+    }))
+    .filter((p) => Number.isFinite(p.tMs))
+    .sort((a, b) => a.tMs - b.tMs);
+
+  if (points.length < 1) {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+    return;
+  }
+  // Single-point case still useful — show it, but skip the line.
+  let cum = 0;
+  const series = points.map((p) => {
+    cum += p.pnl;
+    return { ...p, cum };
+  });
+  wrap.style.display = "block";
+  wrap.innerHTML = pnlChartSvg(series, data.start_et, data.end_et);
+}
+
+function pnlChartSvg(series, startEt, endEt) {
+  const W = 1000, H = 220;
+  const padL = 56, padR = 16, padT = 16, padB = 32;
+  const inW = W - padL - padR;
+  const inH = H - padT - padB;
+
+  // X domain: full ET window from start_et 00:00 to end_et 24:00, so the
+  // chart contextualises gaps (no settlements yet today) instead of
+  // hugging the first/last point. Extend right edge to include any
+  // settlements that spilled past the window (rare but happens for
+  // late-night MLB settling next morning).
+  const startMs = etDayStartUtcMsClient(startEt);
+  const endMs = etDayEndUtcMsClient(endEt);
+  const xMin = Math.min(startMs, series[0].tMs);
+  const xMax = Math.max(endMs, series[series.length - 1].tMs);
+  const xSpan = Math.max(1, xMax - xMin);
+
+  // Y domain: include zero so the baseline is anchored visually.
+  const cums = series.map((s) => s.cum);
+  let yMin = Math.min(0, ...cums);
+  let yMax = Math.max(0, ...cums);
+  const ySpan = Math.max(1, yMax - yMin);
+  yMin -= ySpan * 0.08; yMax += ySpan * 0.08;
+
+  const xFor = (ms) => padL + ((ms - xMin) / xSpan) * inW;
+  const yFor = (v) => padT + inH - ((v - yMin) / (yMax - yMin)) * inH;
+  const yZero = yFor(0);
+
+  // Step path: horizontal at prior cum, vertical jump at each settle.
+  // Start the line at (xMin, 0) so the leading flat-at-zero portion
+  // (before the first settlement) is visible.
+  let d = `M${xFor(xMin).toFixed(1)},${yZero.toFixed(1)}`;
+  let prevCum = 0;
+  for (const s of series) {
+    const x = xFor(s.tMs);
+    d += ` L${x.toFixed(1)},${yFor(prevCum).toFixed(1)}`;
+    d += ` L${x.toFixed(1)},${yFor(s.cum).toFixed(1)}`;
+    prevCum = s.cum;
+  }
+  // Extend final flat to the right edge so the eye can see "this is
+  // where we sit now".
+  d += ` L${xFor(xMax).toFixed(1)},${yFor(prevCum).toFixed(1)}`;
+
+  const dots = series.map((s) => {
+    const cx = xFor(s.tMs), cy = yFor(s.cum);
+    const cls = s.status === "void" ? "dot pending"
+      : s.pnl > 0 ? "dot pos"
+      : s.pnl < 0 ? "dot neg"
+      : "dot pending";
+    const sign = s.pnl >= 0 ? "+" : "-";
+    const cumSign = s.cum >= 0 ? "+" : "-";
+    const tip = `${fmtSettleTime(s.tMs)} · ${s.status} · ${sign}$${Math.abs(s.pnl).toFixed(2)} (cum ${cumSign}$${Math.abs(s.cum).toFixed(2)})${s.sub ? `\n${s.sub}` : ""}`;
+    return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3"><title>${escapeHtml(tip)}</title></circle>`;
+  }).join("");
+
+  // Y ticks: 5 evenly spaced; format as signed dollars.
+  const yTicks = [];
+  for (let t = 0; t < 5; t++) {
+    const frac = t / 4;
+    const v = yMin + frac * (yMax - yMin);
+    const yy = yFor(v);
+    const label = (v >= 0 ? "+$" : "-$") + Math.abs(v).toFixed(0);
+    yTicks.push(
+      `<g class="tick"><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yy.toFixed(1)}"/><text x="${padL - 6}" y="${yy.toFixed(1)}" text-anchor="end" dominant-baseline="central">${label}</text></g>`
+    );
+  }
+
+  // X ticks: 7 evenly spaced across the time window.
+  const xLabels = [];
+  const N_TICKS = 7;
+  const multiDay = startEt !== endEt;
+  for (let i = 0; i <= N_TICKS; i++) {
+    const ms = xMin + (i / N_TICKS) * xSpan;
+    const cx = xFor(ms);
+    xLabels.push(`<text x="${cx.toFixed(1)}" y="${(H - 10).toFixed(1)}" text-anchor="middle">${escapeHtml(fmtXTime(ms, multiDay))}</text>`);
+  }
+
+  const finalCum = series[series.length - 1].cum;
+  const cumLabel = (finalCum >= 0 ? "+$" : "-$") + Math.abs(finalCum).toFixed(2);
+  return `
+    <svg class="roi-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <g class="axis-y">${yTicks.join("")}</g>
+      <line class="zero" x1="${padL}" y1="${yZero.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yZero.toFixed(1)}"/>
+      <path class="line" d="${d}"/>
+      <g class="dots">${dots}</g>
+      <g class="axis-x">${xLabels.join("")}</g>
+    </svg>
+    <div class="chart-caption">Cumulative realized P&amp;L by settle time (ET). ${series.length} settled parlay${series.length === 1 ? "" : "s"} · ending ${cumLabel}. Open positions excluded.</div>
+  `;
+}
+
+// ET-day boundaries computed client-side (mirrors server recap.ts; ET=UTC-4).
+function etDayStartUtcMsClient(ymd) {
+  return Date.parse(`${ymd}T04:00:00Z`);
+}
+function etDayEndUtcMsClient(ymd) {
+  return etDayStartUtcMsClient(ymd) + 24 * 3600 * 1000;
+}
+
+// "5/27 18:25" for multi-day windows, "18:25" for single-day.
+function fmtXTime(ms, multiDay) {
+  const e = new Date(ms - 4 * 3600 * 1000);
+  const hh = String(e.getUTCHours()).padStart(2, "0");
+  const mn = String(e.getUTCMinutes()).padStart(2, "0");
+  if (!multiDay) return `${hh}:${mn}`;
+  const mm = e.getUTCMonth() + 1;
+  const dd = e.getUTCDate();
+  return `${mm}/${dd} ${hh}:${mn}`;
+}
+
+function fmtSettleTime(ms) {
+  const e = new Date(ms - 4 * 3600 * 1000);
+  const mm = String(e.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(e.getUTCDate()).padStart(2, "0");
+  const hh = String(e.getUTCHours()).padStart(2, "0");
+  const mn = String(e.getUTCMinutes()).padStart(2, "0");
+  return `${mm}/${dd} ${hh}:${mn} ET`;
 }
 
 // ---------- init ----------
