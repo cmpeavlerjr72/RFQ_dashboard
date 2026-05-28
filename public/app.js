@@ -975,23 +975,34 @@ function scenariosForSport(sport) {
 }
 
 // ---- Chip color helpers shared by player and game-level ladders ----
-// Sign class: pUs drives green/red when known; falls back to a binary live
-// hint (true = currently winning, false = currently losing, null = pending).
-function chipSignClass(pUs, fallbackPos) {
+// Sign class: live state (livePos) takes priority over market view (pUs).
+//   livePos=true  -> we're CURRENTLY winning per live data -> green
+//   livePos=false -> we're CURRENTLY losing per live data  -> red
+//   pUs only used when live state is unknown (no boxscore/no eval yet).
+// This avoids the case where market over-prices a near-locked outcome
+// (illiquid late-game props) and pUs flips the chip red even though the
+// live stat hasn't crossed yet.
+function chipSignClass(pUs, livePos) {
+  if (livePos === true) return "pos";
+  if (livePos === false) return "neg";
   if (pUs != null) return pUs >= 0.5 ? "pos" : "neg";
-  if (fallbackPos === true) return "pos";
-  if (fallbackPos === false) return "neg";
   return "pending";
 }
-// Inline-style shading scaled by |pUs - 0.5|. Neutral at 50%; full
-// saturation at 0% or 100%. Empty string when pUs unknown — caller's
-// class (.pos/.neg/.pending) provides the default look.
-function chipShadeStyle(pUs) {
-  if (pUs == null) return "";
-  const dist = Math.min(1, Math.abs(pUs - 0.5) * 2);
+// Background / border shading. Color direction matches the sign class
+// (live state when known, else pUs). Intensity scales by |pUs - 0.5|
+// when pUs is available — strong shade when market is confident, faint
+// when market is at 50/50. When only live state is known (no pUs),
+// uses a moderate intensity floor.
+function chipShadeStyle(pUs, livePos) {
+  let isPos;
+  if (livePos === true) isPos = true;
+  else if (livePos === false) isPos = false;
+  else if (pUs != null) isPos = pUs >= 0.5;
+  else return "";  // truly unknown -> pending grey from CSS default
+  const dist = pUs != null ? Math.min(1, Math.abs(pUs - 0.5) * 2) : 0.5;
   const bgAlpha = (0.06 + dist * 0.32).toFixed(2);
   const borderAlpha = (0.20 + dist * 0.50).toFixed(2);
-  const rgb = pUs >= 0.5 ? "21, 128, 61" : "190, 18, 60";
+  const rgb = isPos ? "21, 128, 61" : "190, 18, 60";
   return `background: rgba(${rgb}, ${bgAlpha}); border-color: rgba(${rgb}, ${borderAlpha});`;
 }
 
@@ -1443,7 +1454,7 @@ function renderGameCards() {
       }
       const livePos = res === "buyer_miss" ? true : res === "buyer_hit" ? false : null;
       const sign = chipSignClass(row.pUs, livePos);
-      const style = chipShadeStyle(row.pUs);
+      const style = chipShadeStyle(row.pUs, livePos);
       const cls = sign + (lockedLoss ? " locked-loss" : "");
       const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
       let chipLabel;
@@ -1652,7 +1663,7 @@ function renderGameCards() {
               ? null
               : (buyerSide === "yes" ? !dead : dead);
             const sign = chipSignClass(row.pUs, livePos);
-            const style = chipShadeStyle(row.pUs);
+            const style = chipShadeStyle(row.pUs, livePos);
             const cls = sign + (lockedLoss ? " locked-loss" : "");
             const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
             const tip =
