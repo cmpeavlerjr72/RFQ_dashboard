@@ -17,6 +17,10 @@ const state = {
   lastRefreshAt: null,
   apiCallsThisSession: 0,
   fetching: false,
+  // --- Games On The Board section state ---
+  // Tracks the game keys (legGameGroupKey) that the user has COLLAPSED.
+  // Default empty -> every card starts expanded.
+  gameCollapsed: new Set(),
   // --- Open Parlays section state ---
   parlaySortCol: "cost",   // 'cost' | 'maxWin' | 'pWin' | 'evPnl' | 'roi'
   parlaySortDir: "desc",   // 'asc' | 'desc'
@@ -570,7 +574,9 @@ function aggregateGameCards() {
       if (!g) continue;
       if (seen.has(key)) continue;
       seen.add(key);
-      g.parlayTickers.add(p.parlay_ticker);
+      // state.positions uses .ticker (not .parlay_ticker) for the parlay id;
+      // adding undefined dedupes the Set to a single entry per card.
+      g.parlayTickers.add(p.ticker);
       g.exposure += p.cost;
       g.maxWin += p.max_profit;
     }
@@ -601,6 +607,8 @@ function renderGameCards() {
     const sport = (g.sport || "").toUpperCase();
     const title = (g.teams || []).join(" @ ");
     const dateHtml = g.dateLabel ? `<span class="game-date">${escapeHtml(g.dateLabel)}</span>` : "";
+    const collapsed = state.gameCollapsed.has(g.key);
+    const chevron = collapsed ? "▸" : "▾";
 
     const legRows = g.legs.map((r) => {
       const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
@@ -623,9 +631,10 @@ function renderGameCards() {
       : "";
 
     return `
-      <div class="game-card">
-        <div class="game-card-head">
+      <div class="game-card${collapsed ? " collapsed" : ""}" data-game-key="${escapeHtml(g.key)}">
+        <div class="game-card-head" role="button" tabindex="0">
           <div class="game-title">
+            <span class="card-chevron">${chevron}</span>
             <span class="sport-badge">${escapeHtml(sport)}</span>
             <span class="game-logos">${logos}</span>
             <span class="game-name">${escapeHtml(title)}</span>
@@ -637,16 +646,36 @@ function renderGameCards() {
             <span class="stat"><span class="label">to win</span><span class="value pos">+${g.maxWin.toFixed(2)}</span></span>
           </div>
         </div>
+        ${collapsed ? "" : `
         <div class="game-card-body">
           <div class="cheer-list-head">Cheering for:</div>
           ${legRows}
           ${resolvedNote}
-        </div>
+        </div>`}
       </div>
     `;
   }).join("");
 
   wrap.innerHTML = html;
+
+  // Toggle collapse when the header is clicked (or activated by keyboard).
+  wrap.querySelectorAll(".game-card-head").forEach((head) => {
+    const card = head.closest(".game-card");
+    const key = card?.getAttribute("data-game-key");
+    if (!key) return;
+    const toggle = () => {
+      if (state.gameCollapsed.has(key)) state.gameCollapsed.delete(key);
+      else state.gameCollapsed.add(key);
+      renderGameCards();
+    };
+    head.addEventListener("click", toggle);
+    head.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle();
+      }
+    });
+  });
 }
 
 /** Look up the current market value of each excluded position and sum.

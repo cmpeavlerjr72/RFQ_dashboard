@@ -343,6 +343,13 @@ h2 {
   background: var(--card-head);
   border-bottom: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 8px;
+  cursor: pointer; user-select: none;
+}
+.game-card.collapsed .game-card-head { border-bottom: 0; }
+.game-card-head:hover { background: var(--border); }
+.game-card .card-chevron {
+  display: inline-block; width: 12px; color: var(--muted);
+  font-size: 11px; line-height: 1;
 }
 .game-card-head .game-title {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
