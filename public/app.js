@@ -17,16 +17,11 @@ const state = {
   lastRefreshAt: null,
   apiCallsThisSession: 0,
   fetching: false,
-  // --- Top Cheering Targets table state ---
-  cheerSortCol: "maxWin",  // 'parlays' | 'exposure' | 'maxWin' | 'pUs'
-  cheerSortDir: "desc",    // 'asc' | 'desc'
-  cheerExpanded: false,    // top-5 by default; click "show more" to expand
   // --- Open Parlays section state ---
   parlaySortCol: "cost",   // 'cost' | 'maxWin' | 'pWin' | 'evPnl' | 'roi'
   parlaySortDir: "desc",   // 'asc' | 'desc'
   parlayExpanded: new Set(), // tickers currently expanded; default = none
 };
-const CHEER_COLLAPSED_LIMIT = 5;
 let autoTimer = null;
 
 // ----------------------------- helpers --------------------------------------
@@ -446,8 +441,22 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
 
 function render() {
   renderSummary();
-  renderLegExposure();
+  renderGameCards();
   renderParlays();
+}
+
+// Underlying-game group key for a leg ticker — "{sport}|{dateToken}|{teams}".
+// Different from labels.js#legGameKey() which adds a sport prefix and isn't
+// implemented for NBA; this version works for every sport whose tickers
+// follow the standard {DATE}{HHMM?}{TEAMS} chunk layout.
+function legGameGroupKey(ticker) {
+  const sport = legSport(ticker);
+  if (!sport) return null;
+  const parts = ticker.split("-");
+  if (parts.length < 2) return null;
+  const m = parts[1].match(/^(\d{2}[A-Z]{3}\d{2})(\d{4})?([A-Z]+)$/);
+  if (!m) return null;
+  return `${sport}|${m[1]}|${m[3]}`;
 }
 
 // --------------------------- leg exposure ----------------------------------
@@ -513,114 +522,131 @@ function aggregateLegExposure() {
   return out;
 }
 
-// Sortable columns and the value extractor each one uses.
-const CHEER_SORT_KEYS = {
-  parlays:  (r) => r.parlays,
-  exposure: (r) => r.exposure,
-  maxWin:   (r) => r.maxWin,
-  pUs:      (r) => r.pUs ?? -1,
-};
+/**
+ * Group every open parlay's cheer-for legs into per-game cards. Game-level
+ * cost/maxWin are attributed PER GAME: a cross-game parlay counts its full
+ * cost into each game it touches (so the cards don't sum cleanly to the
+ * portfolio total — they answer "if this game went our way, what could
+ * happen", which is the useful question per-card).
+ */
+function aggregateGameCards() {
+  const legRows = aggregateLegExposure();
+  const games = new Map();
+  for (const leg of legRows) {
+    const key = legGameGroupKey(leg.ticker);
+    if (!key) continue;
+    let g = games.get(key);
+    if (!g) {
+      const { sport: sportLogo, teams: logoTeams, league } = legTeams(leg.ticker, leg.buyerSide);
+      g = {
+        key,
+        sport: legSport(leg.ticker),
+        sportLogoKey: sportLogo,
+        league,
+        teams: logoTeams,
+        dateLabel: legDateLabel(leg.ticker),
+        legs: [],          // all pending legs in this game
+        anyResolvedLegs: [], // legs already alive/dead — quick context line
+        parlayTickers: new Set(),
+        exposure: 0,
+        maxWin: 0,
+      };
+      games.set(key, g);
+    }
+    if (leg.eff === "alive" || leg.eff === "dead") {
+      g.anyResolvedLegs.push(leg);
+    } else {
+      g.legs.push(leg);
+    }
+  }
+  // Game-level exposure/maxWin are the SUM of unique parlays touching the
+  // game (each parlay counted once per game), not the sum of leg rows.
+  for (const p of state.positions) {
+    const seen = new Set();
+    for (const leg of p.legs) {
+      const key = legGameGroupKey(leg.ticker);
+      if (!key) continue;
+      const g = games.get(key);
+      if (!g) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      g.parlayTickers.add(p.parlay_ticker);
+      g.exposure += p.cost;
+      g.maxWin += p.max_profit;
+    }
+  }
+  // Sort each card's pending legs by max-win desc (highest-impact first).
+  for (const g of games.values()) {
+    g.legs.sort((a, b) => b.maxWin - a.maxWin);
+  }
+  // Sort cards by total exposure desc (where the money is).
+  return Array.from(games.values()).sort((a, b) => b.exposure - a.exposure);
+}
 
-function renderLegExposure() {
-  const wrap = $("leg-exposure");
-  // Pending legs only — won/lost are excluded from the cheering view since
-  // they're already resolved.
-  const allPending = aggregateLegExposure().filter((r) => r.eff !== "alive" && r.eff !== "dead");
-  if (!allPending.length) {
-    wrap.innerHTML = `<div class="empty">no pending legs to cheer for</div>`;
+function renderGameCards() {
+  const wrap = $("game-cards");
+  const cards = aggregateGameCards();
+  // Only show cards that still have pending legs to cheer for; if every leg
+  // in a game has already resolved, it's no longer actionable.
+  const live = cards.filter((g) => g.legs.length > 0);
+  if (!live.length) {
+    wrap.innerHTML = `<div class="empty">no games with pending exposure</div>`;
     return;
   }
 
-  // Sort by current selection
-  const sortFn = CHEER_SORT_KEYS[state.cheerSortCol] || CHEER_SORT_KEYS.maxWin;
-  const dirMul = state.cheerSortDir === "asc" ? 1 : -1;
-  allPending.sort((a, b) => (sortFn(a) - sortFn(b)) * dirMul);
-
-  const totalCount = allPending.length;
-  const visible = state.cheerExpanded
-    ? allPending
-    : allPending.slice(0, CHEER_COLLAPSED_LIMIT);
-
-  const sortIndicator = (key) =>
-    state.cheerSortCol === key
-      ? (state.cheerSortDir === "asc" ? " ▲" : " ▼")
-      : "";
-  const th = (key, label, opts = {}) => {
-    const cls = opts.cls || "num";
-    const tip = opts.title ? ` title="${escapeHtml(opts.title)}"` : "";
-    return `<th class="${cls} sortable ${state.cheerSortCol === key ? "active" : ""}" data-sort="${key}"${tip}>`
-      + `${label}${sortIndicator(key)}</th>`;
-  };
-
-  const headerCells = [
-    `<th class="cheer">Cheer for</th>`,
-    th("parlays", "In", { title: "Number of open parlays this leg appears in" }),
-    th("exposure", "At Risk", { title: "Total $ we'd lose if every parlay containing this leg hits" }),
-    th("maxWin", "To Win", { title: "Total $ we'd collect if every parlay containing this leg fails" }),
-    th("pUs", "Win Chance", { title: "Estimated probability this leg breaks our way (live mid or fill-time fair)" }),
-  ].join("");
-
-  const bodyRows = visible.map((r) => {
-    const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
-    const { sport, teams: logoTeams, league } = legTeams(r.ticker, r.ourSide);
-    const logos = logoTeams.map((abbr) =>
-      `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+  const html = live.map((g) => {
+    const logos = (g.teams || []).map((abbr) =>
+      `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
     ).join("");
-    const dateLabel = legDateLabel(r.ticker);
-    const dateHtml = dateLabel ? `<span class="leg-date">${escapeHtml(dateLabel)}</span>` : "";
+    const sport = (g.sport || "").toUpperCase();
+    const title = (g.teams || []).join(" @ ");
+    const dateHtml = g.dateLabel ? `<span class="game-date">${escapeHtml(g.dateLabel)}</span>` : "";
 
-    const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
+    const legRows = g.legs.map((r) => {
+      const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
+      const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
+      return `
+        <div class="cheer-row">
+          <div class="cheer-desc">${escapeHtml(desc)}</div>
+          <div class="cheer-meta">
+            <span title="parlays this leg appears in">in ${r.parlays}</span>
+            <span title="$ we lose if this leg hits the buyer's way">at risk ${fmtMoney(r.exposure)}</span>
+            <span class="pos" title="$ we win if this leg breaks our way">+${r.maxWin.toFixed(2)}</span>
+            <span title="estimated chance this leg breaks our way">${pUsPct}</span>
+          </div>
+        </div>
+      `;
+    }).join("");
 
-    return `<tr>
-      <td class="cheer"><span class="logos">${logos}</span><span>${escapeHtml(desc)}</span>${dateHtml}</td>
-      <td class="num">${r.parlays}</td>
-      <td class="num">${fmtMoney(r.exposure)}</td>
-      <td class="num pos">+${r.maxWin.toFixed(2)}</td>
-      <td class="num">${pUsPct}</td>
-    </tr>`;
+    const resolvedNote = g.anyResolvedLegs.length
+      ? `<div class="cheer-resolved">${g.anyResolvedLegs.length} leg${g.anyResolvedLegs.length === 1 ? "" : "s"} already resolved</div>`
+      : "";
+
+    return `
+      <div class="game-card">
+        <div class="game-card-head">
+          <div class="game-title">
+            <span class="sport-badge">${escapeHtml(sport)}</span>
+            <span class="game-logos">${logos}</span>
+            <span class="game-name">${escapeHtml(title)}</span>
+            ${dateHtml}
+          </div>
+          <div class="game-stats">
+            <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
+            <span class="stat"><span class="label">at risk</span><span class="value">${fmtMoney(g.exposure)}</span></span>
+            <span class="stat"><span class="label">to win</span><span class="value pos">+${g.maxWin.toFixed(2)}</span></span>
+          </div>
+        </div>
+        <div class="game-card-body">
+          <div class="cheer-list-head">Cheering for:</div>
+          ${legRows}
+          ${resolvedNote}
+        </div>
+      </div>
+    `;
   }).join("");
 
-  // Expand/collapse footer row
-  const hidden = totalCount - visible.length;
-  let footer = "";
-  if (totalCount > CHEER_COLLAPSED_LIMIT) {
-    if (!state.cheerExpanded) {
-      footer = `<tr class="cheer-toggle-row"><td colspan="5">
-        <button class="cheer-toggle" id="cheer-expand">Show ${hidden} more pending leg${hidden === 1 ? "" : "s"}</button>
-      </td></tr>`;
-    } else {
-      footer = `<tr class="cheer-toggle-row"><td colspan="5">
-        <button class="cheer-toggle" id="cheer-collapse">Show top ${CHEER_COLLAPSED_LIMIT} only</button>
-      </td></tr>`;
-    }
-  }
-
-  wrap.innerHTML = `
-    <div class="leg-exposure-table-wrap">
-      <table class="leg-exposure-table">
-        <thead><tr>${headerCells}</tr></thead>
-        <tbody>${bodyRows}${footer}</tbody>
-      </table>
-    </div>
-  `;
-
-  // Wire up sort + expand/collapse
-  wrap.querySelectorAll("th.sortable").forEach((th) => {
-    th.addEventListener("click", () => {
-      const col = th.getAttribute("data-sort");
-      if (state.cheerSortCol === col) {
-        state.cheerSortDir = state.cheerSortDir === "asc" ? "desc" : "asc";
-      } else {
-        state.cheerSortCol = col;
-        state.cheerSortDir = "desc";
-      }
-      renderLegExposure();
-    });
-  });
-  const exp = $("cheer-expand");
-  if (exp) exp.addEventListener("click", () => { state.cheerExpanded = true; renderLegExposure(); });
-  const col = $("cheer-collapse");
-  if (col) col.addEventListener("click", () => { state.cheerExpanded = false; renderLegExposure(); });
+  wrap.innerHTML = html;
 }
 
 /** Look up the current market value of each excluded position and sum.
