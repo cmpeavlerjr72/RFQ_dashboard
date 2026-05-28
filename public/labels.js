@@ -707,35 +707,74 @@ export function teamLogoUrl(sport, abbr, opts = {}) {
  *       gameKey: "MLB 26APR281835HOUBAL", sport: "mlb" }
  */
 export function parsePlayerProp(ticker) {
-  const m = ticker.match(/^KXMLB([A-Z]+)-(\d{2}[A-Z]{3}\d{2}\d{4}[A-Z]+)-([A-Z]+\d+)-(\d+)$/);
-  if (!m) return null;
-  const [, stat, dt, playerBlob, thresholdStr] = m;
-  let teamAbbr = "";
-  let lastName = "";
-  let jersey = "";
-  for (let teamLen = 4; teamLen >= 2; teamLen--) {
-    const candidate = playerBlob.slice(0, teamLen);
-    if (MLB_TEAMS[candidate]) {
-      teamAbbr = candidate;
-      const tail = playerBlob.slice(teamLen);
-      const jerseyMatch = tail.match(/^([A-Z]+)(\d+)$/);
-      if (jerseyMatch) {
-        const initialAndLast = jerseyMatch[1];
-        lastName = initialAndLast.length > 1 ? initialAndLast.slice(1) : initialAndLast;
-        jersey = jerseyMatch[2];
+  // MLB: KXMLB<STAT>-<dateHHMMteams>-<TEAM><initial><LAST><jersey>-<thr>
+  const mlb = ticker.match(/^KXMLB([A-Z]+)-(\d{2}[A-Z]{3}\d{2}\d{4}[A-Z]+)-([A-Z]+\d+)-(\d+)$/);
+  if (mlb) {
+    const [, stat, dt, playerBlob, thresholdStr] = mlb;
+    let teamAbbr = "";
+    let lastName = "";
+    let jersey = "";
+    for (let teamLen = 4; teamLen >= 2; teamLen--) {
+      const candidate = playerBlob.slice(0, teamLen);
+      if (MLB_TEAMS[candidate]) {
+        teamAbbr = candidate;
+        const tail = playerBlob.slice(teamLen);
+        const jerseyMatch = tail.match(/^([A-Z]+)(\d+)$/);
+        if (jerseyMatch) {
+          const initialAndLast = jerseyMatch[1];
+          lastName = initialAndLast.length > 1 ? initialAndLast.slice(1) : initialAndLast;
+          jersey = jerseyMatch[2];
+        }
+        break;
       }
-      break;
     }
+    return {
+      stat,
+      team: teamAbbr,
+      lastName,
+      jersey,
+      threshold: parseInt(thresholdStr, 10),
+      gameKey: `MLB ${dt.slice(0, 13)}`,
+      sport: "mlb",
+    };
   }
-  return {
-    stat,
-    team: teamAbbr,
-    lastName,
-    jersey,
-    threshold: parseInt(thresholdStr, 10),
-    gameKey: `MLB ${dt.slice(0, 13)}`,
-    sport: "mlb",
-  };
+  // NBA: KXNBA<STAT>-<dateTeams>-<TEAM><initial><LAST><jersey>-<thr>
+  // STAT may start with a digit (e.g. "3PT"). Skip GAME/SPREAD/TOTAL — those
+  // are game-level, not player-level.
+  const nba = ticker.match(/^KXNBA([A-Z0-9]+)-(\d{2}[A-Z]{3}\d{2}[A-Z]+)-([A-Z]+\d+)-(\d+)$/);
+  if (nba && !["GAME", "SPREAD", "TOTAL"].includes(nba[1])) {
+    const [, stat, dt, playerBlob, thresholdStr] = nba;
+    let teamAbbr = "";
+    let lastName = "";
+    let jersey = "";
+    for (let teamLen = 4; teamLen >= 2; teamLen--) {
+      const candidate = playerBlob.slice(0, teamLen);
+      if (NBA_TEAMS[candidate]) {
+        teamAbbr = candidate;
+        const tail = playerBlob.slice(teamLen);
+        const jerseyMatch = tail.match(/^([A-Z]+)(\d+)$/);
+        if (jerseyMatch) {
+          const initialAndLast = jerseyMatch[1];
+          lastName = initialAndLast.length > 1 ? initialAndLast.slice(1) : initialAndLast;
+          jersey = jerseyMatch[2];
+        }
+        break;
+      }
+    }
+    return {
+      stat,
+      team: teamAbbr,
+      lastName,
+      jersey,
+      threshold: parseInt(thresholdStr, 10),
+      // findEspnEvent checks team-abbr inclusion in the gameKey string, so
+      // wrapping the date+teams chunk works for NBA without a date-token
+      // entry in legGameKey().
+      gameKey: `NBA ${dt}`,
+      sport: "nba",
+    };
+  }
+  return null;
 }
 
 /**

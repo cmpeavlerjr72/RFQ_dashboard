@@ -422,6 +422,34 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
     } else if (prop.stat === "IP") {
       current = statByKey("inningsPitched");
       label = `IP: ${current ?? "-"}`;
+    } else if (prop.stat === "PTS") {
+      current = statByKey("points") ?? statByKey("PTS");
+      label = `PTS: ${current ?? "-"}`;
+    } else if (prop.stat === "REB") {
+      current = statByKey("rebounds") ?? statByKey("REB");
+      label = `REB: ${current ?? "-"}`;
+    } else if (prop.stat === "AST") {
+      current = statByKey("assists") ?? statByKey("AST");
+      label = `AST: ${current ?? "-"}`;
+    } else if (prop.stat === "3PT") {
+      // ESPN NBA stores 3PT as "made-attempted" (string like "3-7") under
+      // either "threePointFieldGoalsMade-threePointFieldGoalsAttempted" or
+      // the short "3PT" key. Take the first integer.
+      const long = "threePointFieldGoalsMade-threePointFieldGoalsAttempted";
+      const idxLong = (keys || []).indexOf(long);
+      const idxShort = (keys || []).indexOf("3PT");
+      const raw = idxLong >= 0 ? stats[idxLong] : idxShort >= 0 ? stats[idxShort] : null;
+      if (raw != null) {
+        const made = parseInt(String(raw).split("-")[0], 10);
+        if (Number.isFinite(made)) current = made;
+      }
+      label = `3PT: ${current ?? "-"}`;
+    } else if (prop.stat === "STL") {
+      current = statByKey("steals") ?? statByKey("STL");
+      label = `STL: ${current ?? "-"}`;
+    } else if (prop.stat === "BLK") {
+      current = statByKey("blocks") ?? statByKey("BLK");
+      label = `BLK: ${current ?? "-"}`;
     }
     if (current != null) break;
   }
@@ -722,9 +750,27 @@ function renderGameCards() {
     const legRows = g.legs.map((r) => {
       const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
       const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
+      // Live per-leg state — for player props this is the player's current
+      // stat vs threshold; for team-level legs it's whatever string the
+      // existing legResolutionForUs surfaced (current score / period).
+      let liveStat = "";
+      const prop = parsePlayerProp(r.ticker);
+      if (prop) {
+        const pr = resolvePlayerProp(prop, state.scoreboards, state.boxscores);
+        if (pr && pr.current != null) {
+          const overThreshold = pr.current >= prop.threshold;
+          const liveCls = overThreshold ? "neg" : "pos";
+          liveStat = `<span class="cheer-live ${liveCls}" title="player's current value vs threshold">${pr.current} / ${prop.threshold}</span>`;
+        }
+      } else if (r.statText) {
+        liveStat = `<span class="cheer-live" title="current game state">${escapeHtml(r.statText)}</span>`;
+      }
       return `
         <div class="cheer-row">
-          <div class="cheer-desc">${escapeHtml(desc)}</div>
+          <div class="cheer-desc">
+            <span>${escapeHtml(desc)}</span>
+            ${liveStat}
+          </div>
           <div class="cheer-meta">
             <span title="parlays this leg appears in">in ${r.parlays}</span>
             <span title="$ we lose if this leg hits the buyer's way">at risk ${fmtMoney(r.exposure)}</span>
