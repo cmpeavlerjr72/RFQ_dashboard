@@ -830,11 +830,37 @@ export function legGameKey(ticker) {
  * Match a leg's gameKey against the loaded ESPN scoreboards. Returns the
  * matching ESPN event or null. We match by uppercase team-abbreviation
  * intersection (works for NHL/MLB/NBA) and by last-name prefix for tennis/UFC.
+ *
+ * Date sanity gate: when the gKey carries a parseable date token, reject
+ * any candidate ESPN event whose start is more than 12h BEFORE that date.
+ * Without this, a Game-5-for-tomorrow leg would silently match the same-
+ * matchup Game 4 that completed yesterday (both events live in different
+ * date scoreboards, both share team abbrs).
  */
 export function findEspnEvent(gKey, scoreboards) {
+  // Extract date token from gKey if present (e.g. "NHL 26MAY29MTLCAR"
+  // or "MLB 26MAY281610LAADET").
+  const dm = (gKey || "").match(/(\d{2})([A-Z]{3})(\d{2})/);
+  let tickerMs = null;
+  if (dm) {
+    const monthMap = { JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12 };
+    const mon = monthMap[dm[2]];
+    if (mon) {
+      const y = 2000 + parseInt(dm[1], 10);
+      const d = parseInt(dm[3], 10);
+      tickerMs = Date.UTC(y, mon - 1, d);
+    }
+  }
+  const dateOk = (ev) => {
+    if (tickerMs == null) return true;
+    const evMs = Date.parse(ev?.date || "");
+    if (!Number.isFinite(evMs)) return true;
+    return evMs >= tickerMs - 12 * 3600 * 1000;
+  };
   for (const sb of Object.values(scoreboards || {})) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
+      if (!dateOk(ev)) continue;
       const competitors = ev?.competitions?.[0]?.competitors || [];
       // Team sports
       const abbrs = competitors
