@@ -734,7 +734,11 @@ export function parsePlayerProp(ticker) {
       lastName,
       jersey,
       threshold: parseInt(thresholdStr, 10),
-      gameKey: `MLB ${dt.slice(0, 13)}`,
+      // Use the full date+HHMM+teams chunk so findEspnEvent's
+      // abbr-in-gameKey check sees the full 3-letter team abbreviations.
+      // (The old slice(0,13) truncated "26MAY281610ATLBOS" -> "26MAY281610AT"
+      // so "ATL" / "BOS" never matched and rosters/boxscores never resolved.)
+      gameKey: `MLB ${dt}`,
       sport: "mlb",
     };
   }
@@ -796,7 +800,9 @@ export function legDateLabel(ticker) {
 export function legGameKey(ticker) {
   if (ticker.startsWith("KXMLB")) {
     const m = ticker.match(/^KX[A-Z]+-(\d{2}[A-Z]{3}\d{2}\d{4}[A-Z]+)/);
-    if (m) return `MLB ${m[1].slice(0, 13)}`;
+    // Keep the full date+HHMM+teams chunk so findEspnEvent can match team
+    // abbreviations by substring (see parsePlayerProp comment for context).
+    if (m) return `MLB ${m[1]}`;
   }
   if (ticker.startsWith("KXNHL")) {
     const rest = ticker.split("-")[1];
