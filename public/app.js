@@ -776,6 +776,19 @@ function parseGameLevelLeg(ticker) {
   return null;
 }
 
+// For an ML/spread leg, return the team whose perspective the buyer is
+// effectively taking. Buyer-YES uses the Kalshi pick directly; buyer-NO
+// flips to the opposing team (because "NO on OKC wins" === "YES on SAS
+// wins", and "NO on DET by 2+" === "YES on LAA +2 cover"). Falls back to
+// parsed.pick if we can't identify the opposing team.
+function effectivePick(parsed, buyerSide) {
+  const isYes = (buyerSide || "yes").toLowerCase() === "yes";
+  if (isYes) return parsed.pick;
+  const [a, b] = parsed.teams || [];
+  if (!a || !b) return parsed.pick;
+  return parsed.pick === a ? b : a;
+}
+
 // Extract [away,home] team abbrs from a Kalshi event chunk like "26MAY28OKCSAS"
 // or "26MAY281310LAADET". We don't currently differentiate which is home —
 // we assume the first abbr is the away team (Kalshi's convention).
@@ -1192,7 +1205,14 @@ function renderGameCards() {
       if (groupName) {
         const parsed = parseGameLevelLeg(r.ticker);
         if (parsed?.kind === "ml" || parsed?.kind === "spread") {
-          const ab = parsed.pick;
+          // Bucket under the team whose perspective the buyer is taking.
+          // Buyer-YES on (TEAM win | TEAM by N+) -> TEAM bucket (favorite).
+          // Buyer-NO is functionally a buyer-YES on the OPPOSING team:
+          //   NO on "OKC wins" === YES on "SAS wins"
+          //   NO on "DET by 2+" === YES on "LAA +2 cover"
+          // So we flip the bucket team and let the chip-label code render
+          // the right sign ("-" for favorite, "+" for underdog).
+          const ab = effectivePick(parsed, r.buyerSide);
           if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
           teamBuckets.get(ab)[parsed.kind].push({ row: r, parsed });
         } else if (parsed?.kind === "total") {
@@ -1268,10 +1288,17 @@ function renderGameCards() {
       const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
       let chipLabel;
       if (parsed.kind === "ml") {
-        chipLabel = buyerSide === "yes" ? "win" : "no win";
+        // Chip is rendered under the effective-pick team (after buyer-side
+        // flip), so the chip itself is always "the displayed team wins" -—
+        // i.e., "win" regardless of original buyer side.
+        chipLabel = "win";
       } else if (parsed.kind === "spread") {
-        // SAS3 yes resolves "SAS wins by >3.5", so display the half-point line.
-        chipLabel = `+${(parsed.threshold + 0.5)}`;
+        // Standard betting sign: minus = favorite (giving points), plus =
+        // underdog (getting points). Buyer-YES on a Kalshi spread leg picks
+        // the favorite (TEAM wins by >N.5), so chip is "-N.5". Buyer-NO is
+        // bucketed under the underdog, so chip is "+N.5".
+        const sign = buyerSide === "yes" ? "-" : "+";
+        chipLabel = `${sign}${parsed.threshold + 0.5}`;
       } else if (parsed.kind === "total") {
         const line = parsed.threshold + 0.5;
         chipLabel = buyerSide === "yes" ? `o${line}` : `u${line}`;
