@@ -1429,9 +1429,12 @@ function renderGameCards() {
         (res === "buyer_hit" ? " · currently AGAINST us"
           : res === "buyer_miss" ? " · currently FOR us"
           : "");
+      // ML is a binary "team wins" — no threshold to label since the
+      // bucket team already tells you who. Render just the meta.
+      const showThresh = parsed.kind !== "ml";
       return `
-        <span class="ladder-chip ${cls}" style="${style}" title="${escapeHtml(tip)}">
-          <span class="ladder-chip-thresh">${escapeHtml(chipLabel)}</span>
+        <span class="ladder-chip ${cls}${showThresh ? "" : " no-thresh"}" style="${style}" title="${escapeHtml(tip)}">
+          ${showThresh ? `<span class="ladder-chip-thresh">${escapeHtml(chipLabel)}</span>` : ""}
           <span class="ladder-chip-meta">
             +$${row.maxWin.toFixed(0)}<span class="ladder-chip-sep">·</span>${pUsPct}
           </span>
@@ -1442,9 +1445,11 @@ function renderGameCards() {
       const chips = items.slice()
         .sort((a, b) => (a.parsed.threshold || 0) - (b.parsed.threshold || 0))
         .map(gameChipHtml).join("");
+      // Only render a "current" cell if we actually have a number to show.
+      // ML row (and any other lookless row) leaves it out instead of "—".
       const currentChip = currentText != null
         ? `<span class="stat-current">${escapeHtml(currentText)}</span>`
-        : `<span class="stat-current pending">—</span>`;
+        : "";
       return `
         <div class="stat-ladder">
           <div class="stat-ladder-head">

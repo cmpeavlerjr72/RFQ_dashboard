@@ -547,6 +547,14 @@ h2 {
   display: inline-flex; align-items: center; gap: 3px;
   white-space: nowrap;
 }
+/* Chips with no threshold (ML) are single-line — bump the meta font so
+   they read on par with the threshold-bearing ladder chips. */
+.game-card-body .ladder-chip.no-thresh {
+  padding: 4px 8px;
+}
+.game-card-body .ladder-chip.no-thresh .ladder-chip-meta {
+  font-size: 11px; margin-top: 0; font-weight: 600;
+}
 .game-card-body .ladder-chip .ladder-chip-sep {
   display: inline-block; opacity: .55;
 }
