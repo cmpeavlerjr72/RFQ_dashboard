@@ -474,20 +474,47 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
       current = statByKey("RBIs");
       label = `RBI: ${current ?? "-"}`;
     } else if (prop.stat === "TB") {
-      // ESPN's batting boxscore exposes hits and homeRuns but NOT
-      // doubles/triples per athlete, so we derive a lower bound:
-      //   TB = singles + 2*doubles + 3*triples + 4*homeRuns
-      //      = hits + doubles + 2*triples + 3*homeRuns
-      //   >= hits + 3*homeRuns   (treats remaining hits as singles)
-      // True TB can be higher (if the player had doubles/triples), but
-      // never lower. The locked-loss check uses current >= threshold,
-      // so a lower bound underflags (safer) — never falsely strikes
-      // through. The chip color via pUs is market-driven and stays right.
+      // ESPN's compact batting box doesn't carry doubles/triples in
+      // its keys, but the athlete's stats line includes an atBats[]
+      // array of play-IDs that resolve into box.plays[]. We sum TB
+      // exactly by classifying each at-bat's text:
+      //   singled / doubled / tripled / homered (or "home run")
+      // Walks, K's, outs contribute 0. Fall back to hits + 3*HR
+      // lower bound if box.plays isn't populated yet.
       const h = statByKey("hits");
       const hr = statByKey("homeRuns") ?? 0;
       if (h != null) {
-        current = h + 3 * hr;
-        label = `TB ≥ ${current}`;
+        const playIds = new Set(
+          (ath.atBats || [])
+            .map((ab) => ab?.playId || ab?.id)
+            .filter(Boolean),
+        );
+        const plays = box?.plays || [];
+        let exactTB = null;
+        if (playIds.size > 0 && plays.length > 0) {
+          let tb = 0;
+          let matched = 0;
+          for (const p of plays) {
+            if (!playIds.has(p.id) && !playIds.has(p.playId)) continue;
+            matched++;
+            const t = (p.text || "").toLowerCase();
+            if (t.includes("home run") || t.includes("homered")) tb += 4;
+            else if (t.includes("tripled")) tb += 3;
+            else if (t.includes("doubled")) tb += 2;
+            else if (t.includes("singled")) tb += 1;
+            // Walks, outs, K's, HBP -> 0 TB.
+          }
+          if (matched === playIds.size) exactTB = tb;
+        }
+        if (exactTB != null) {
+          current = exactTB;
+          label = `TB: ${current}`;
+        } else {
+          // Fall back to the safe lower bound when we can't resolve plays
+          // (early in-game before play log populates, or play-id miss).
+          current = h + 3 * hr;
+          label = `TB ≥ ${current}`;
+        }
       }
     } else if (prop.stat === "BB") {
       current = statByKey("walks");
