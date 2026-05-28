@@ -1665,8 +1665,10 @@ async function computeExcludedPortfolioValue(excludedPositions) {
 
 function renderSummary() {
   const cash = parseFloat(state.balance?.balance || 0) / 100;
+  // Kept around for the tooltip — Kalshi's liquidation-style value is still
+  // useful context, just not the primary KPI per user preference.
   const pvRaw = parseFloat(state.balance?.portfolio_value || 0) / 100;
-  const pv   = pvRaw - (state.excludedPortfolioValue || 0);
+  const pvKalshi = pvRaw - (state.excludedPortfolioValue || 0);
   const totalCost   = state.positions.reduce((s, p) => s + p.cost, 0);
   const maxProfit   = state.positions.reduce((s, p) => s + p.max_profit, 0);
 
@@ -1680,10 +1682,16 @@ function renderSummary() {
   }
   const evNote = evMissing > 0 ? ` <small>(${evMissing} missing odds)</small>` : "";
   const roiPct = totalCost > 0 ? (evTotal / totalCost * 100) : null;
+  // Portfolio value = what we expect to walk away with: cost paid plus the
+  // sum of expected P&L across all open parlays. Inherits the same
+  // "missing odds" caveat as the EV line. Kalshi's liquidation-style
+  // portfolio_value goes in the tooltip for cross-check.
+  const pv = totalCost + evTotal;
+  const pvTip = `cost paid (${fmtMoney(totalCost)}) + expected current outcome (${fmtMoney(evTotal)}). Kalshi's liquidation-value reading: ${fmtMoney(pvKalshi)}.`;
 
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
-    <div class="kpi"><div class="label">portfolio value</div><div class="value">${fmtMoney(pv)}</div></div>
+    <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value${evNote}</div><div class="value">${fmtMoney(pv)}</div></div>
     <div class="kpi"><div class="label">parlays open</div><div class="value">${state.positions.length}</div></div>
     <div class="kpi"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
     <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
