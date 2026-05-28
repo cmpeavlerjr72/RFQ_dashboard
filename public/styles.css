@@ -538,6 +538,11 @@ h2 {
 }
 .game-card-body .ladder-chip .ladder-chip-meta {
   font-size: 9px; color: var(--muted-2); margin-top: 1px;
+  display: inline-flex; align-items: center; gap: 3px;
+  white-space: nowrap;
+}
+.game-card-body .ladder-chip .ladder-chip-sep {
+  display: inline-block; opacity: .55;
 }
 .game-card-body .ladder-chip.pos {
   background: var(--pos-bg); border-color: rgba(21,128,61,.4); color: var(--pos);

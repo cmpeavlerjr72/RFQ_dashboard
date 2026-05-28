@@ -1326,7 +1326,9 @@ function renderGameCards() {
             return `
               <span class="ladder-chip ${cls}" title="${escapeHtml(tip)}">
                 <span class="ladder-chip-thresh">u${prop.threshold}</span>
-                <span class="ladder-chip-meta">+$${row.maxWin.toFixed(0)}</span>
+                <span class="ladder-chip-meta">
+                  +$${row.maxWin.toFixed(0)}<span class="ladder-chip-sep">·</span>${pUsPct}
+                </span>
               </span>`;
           }).join("");
           return `
