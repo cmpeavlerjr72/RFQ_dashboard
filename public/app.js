@@ -622,13 +622,20 @@ function lastNameFromDisplay(dn) {
 
 // Find the ESPN event for a game-card key, restricted to that game's sport
 // scoreboard so a 3-letter abbrev collision across sports can't mis-match.
+// Also rejects events whose start is meaningfully before the ticker date —
+// without that, an already-completed Game 4 satisfies a Game 5 ticker when
+// ESPN hasn't yet posted Game 5 on its scoreboard for tomorrow's date.
 function findEspnEventForGameKey(gameKey) {
   const [sport, dateToken, teams] = gameKey.split("|");
   if (!sport || !teams) return null;
   // legDateYMD wants a ticker but the date-token chunk is all it actually
   // parses, so we wrap it into a synthetic ticker prefix.
   const ymd = legDateYMD(`KX-${dateToken}`);
-  // Try the (sport,date) scoreboard first; fall back to any same-sport board.
+  const tickerMs = ymd
+    ? Date.parse(`${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T00:00:00Z`)
+    : null;
+  // Try the (sport,date) scoreboard first; fall back to any same-sport board
+  // (handles ESPN's day-boundary drift on late-night starts).
   const candidates = [];
   if (ymd) candidates.push(state.scoreboards[`${sport}:${ymd}`]);
   for (const [k, sb] of Object.entries(state.scoreboards)) {
@@ -637,6 +644,14 @@ function findEspnEventForGameKey(gameKey) {
   for (const sb of candidates) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
+      // Date sanity gate: reject events that start >12h before the ticker
+      // date. A Game 4 that ended last night must NOT satisfy a Game 5
+      // ticker for tomorrow; the 12h buffer lets us still match a late
+      // ET-evening game that crosses into the next UTC day on ESPN.
+      if (tickerMs) {
+        const evMs = Date.parse(ev?.date || "");
+        if (Number.isFinite(evMs) && evMs < tickerMs - 12 * 3600 * 1000) continue;
+      }
       const abbrs = (ev?.competitions?.[0]?.competitors || [])
         .map((c) => normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase(), sport))
         .filter(Boolean);
