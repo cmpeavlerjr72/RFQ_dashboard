@@ -386,6 +386,7 @@ h2 {
   font-size: 13px; font-weight: 600;
 }
 .game-card-head .game-stats .value.pos { color: var(--pos); }
+.game-card-head .game-stats .value.neg { color: var(--neg); }
 .game-card-body { padding: 8px 12px 10px; }
 .game-card-body .cheer-list-head {
   font-size: 10px; text-transform: uppercase; letter-spacing: .08em;

@@ -563,8 +563,11 @@ function aggregateGameCards() {
       g.legs.push(leg);
     }
   }
-  // Game-level exposure/maxWin are the SUM of unique parlays touching the
-  // game (each parlay counted once per game), not the sum of leg rows.
+  // Game-level exposure/maxWin/expectedPnl are the SUM of unique parlays
+  // touching the game (each parlay counted once per game), not the sum of
+  // leg rows. expectedPnl uses live legMid where available and falls back
+  // to the fill-time fair price; it's a "where are we headed if current
+  // odds hold" projection across this game's parlays.
   for (const p of state.positions) {
     const seen = new Set();
     for (const leg of p.legs) {
@@ -579,6 +582,34 @@ function aggregateGameCards() {
       g.parlayTickers.add(p.ticker);
       g.exposure += p.cost;
       g.maxWin += p.max_profit;
+      // Probability ALL legs hit the buyer's chosen side, taken across every
+      // leg of the parlay (incl. legs outside this game — cross-game parlays
+      // are saved by their other-game legs too). We win iff at least one leg
+      // fails the buyer, so pWeWin = 1 - prod(pBuyerHitsLeg).
+      let pAllHit = 1;
+      let havePrice = true;
+      for (const lg of p.legs) {
+        let pBuyerHits = null;
+        const lm = p.legMids?.[lg.ticker];
+        if (lm && lm.midC != null) {
+          // legMid is for OUR side; buyer's hit prob is complement.
+          pBuyerHits = 1 - (lm.midC / 100);
+        } else if (lg.p != null) {
+          // Fill-time fair was the buyer's prob.
+          pBuyerHits = Number(lg.p);
+        }
+        if (pBuyerHits == null || !Number.isFinite(pBuyerHits)) {
+          havePrice = false;
+          break;
+        }
+        pAllHit *= Math.min(1, Math.max(0, pBuyerHits));
+      }
+      if (havePrice) {
+        const pWeWin = 1 - pAllHit;
+        g.expectedPnl = (g.expectedPnl || 0) + (pWeWin * p.qty - p.cost);
+        g.expectedCovered = (g.expectedCovered || 0) + 1;
+      }
+      g.parlayCount = (g.parlayCount || 0) + 1;
     }
   }
   // Sort each card's pending legs by max-win desc (highest-impact first).
@@ -644,6 +675,11 @@ function renderGameCards() {
             <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
             <span class="stat"><span class="label">at risk</span><span class="value">${fmtMoney(g.exposure)}</span></span>
             <span class="stat"><span class="label">to win</span><span class="value pos">+${g.maxWin.toFixed(2)}</span></span>
+            ${g.expectedPnl != null && g.expectedCovered === g.parlayCount ? `
+              <span class="stat" title="Expected $ if current live odds hold across every parlay touching this game. Sum of (P(we win parlay) * qty - cost) using the latest legMid (else fill-time fair).">
+                <span class="label">expected</span>
+                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
+              </span>` : ""}
           </div>
         </div>
         ${collapsed ? "" : `
