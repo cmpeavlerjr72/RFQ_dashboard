@@ -793,6 +793,14 @@ function parseGameLevelLeg(ticker) {
     if (!teams) return null;
     return { kind: "total", sport, teams, threshold };
   }
+  // MLB Run-in-First-Inning. Binary market — yes = a run scored. The team
+  // suffix is optional (game-level "any team" is most common).
+  const mRfi = ticker.match(/^KX[A-Z]+RFI-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)(?:-[A-Z]+)?$/);
+  if (mRfi) {
+    const teams = parseTeamsFromChunk(mRfi[1]);
+    if (!teams) return null;
+    return { kind: "rfi", sport, teams };
+  }
   return null;
 }
 
@@ -874,6 +882,14 @@ function evalGameLegInScenario(parsed, buyerSide, scenario) {
   if (parsed.kind === "total") {
     if (scenario.total == null) return "unknown";
     const yesHits = scenario.total > parsed.threshold;
+    return resolveLeg(yesHits, buyerSide);
+  }
+  if (parsed.kind === "rfi") {
+    // YES resolves once a run scores in the 1st. Caller supplies
+    // firstInningRuns only when the 1st is complete (or game final), so
+    // mid-1st-with-0-runs returns "unknown" instead of misleadingly green.
+    if (scenario.firstInningRuns == null) return "unknown";
+    const yesHits = scenario.firstInningRuns > 0;
     return resolveLeg(yesHits, buyerSide);
   }
   return "unknown";
@@ -995,6 +1011,22 @@ function liveStateFor(ev, sport) {
     if (period != null && clock) periodLabel = `Q${period} ${clock}`;
     else periodLabel = detail || "In Progress";
   }
+  // MLB-only: extract 1st-inning runs from linescores once the inning is
+  // complete (period > 1, i.e., the game has moved on, or the game is
+  // final). Used by RFI chip eval; left null otherwise so RFI chips stay
+  // pending mid-1st instead of falsely going green at 0 runs.
+  let firstInningRuns = null;
+  if (sport === "mlb") {
+    const period = ev?.status?.period || 0;
+    const isFinal = state === "post";
+    if (isFinal || period > 1) {
+      const a0 = parseInt(away?.linescores?.[0]?.value ?? "", 10);
+      const h0 = parseInt(home?.linescores?.[0]?.value ?? "", 10);
+      if (Number.isFinite(a0) && Number.isFinite(h0)) {
+        firstInningRuns = a0 + h0;
+      }
+    }
+  }
   return {
     state, periodLabel,
     away: {
@@ -1009,6 +1041,7 @@ function liveStateFor(ev, sport) {
       score: homeScore,
       record: recordOf(home),
     },
+    firstInningRuns,
     raw: ev,
   };
 }
@@ -1228,6 +1261,7 @@ function renderGameCards() {
     //   playerGroups: as before.
     const teamBuckets = new Map();    // abbr -> {ml: [{row,parsed}], spread: [{row,parsed}]}
     const sharedTotal = [];           // [{row, parsed}]
+    const sharedRfi = [];             // [{row, parsed}] — MLB Run-in-First-Inning
     const sharedOther = new Map();    // groupName -> [row]
     const playerGroups = new Map();
     const otherLegs = [];
@@ -1255,6 +1289,8 @@ function renderGameCards() {
           teamBuckets.get(ab).spread.push({ row: r, parsed });
         } else if (parsed?.kind === "total") {
           sharedTotal.push({ row: r, parsed });
+        } else if (parsed?.kind === "rfi") {
+          sharedRfi.push({ row: r, parsed });
         } else {
           if (!sharedOther.has(groupName)) sharedOther.set(groupName, []);
           sharedOther.get(groupName).push(r);
@@ -1315,7 +1351,11 @@ function renderGameCards() {
     // Live scenario for chip color + "current" displays (from the score
     // panel). Pregame -> null -> chips render as pending grey.
     const liveSc = live && live.state !== "pre"
-      ? { margin: live.home.score - live.away.score, total: live.away.score + live.home.score }
+      ? {
+          margin: live.home.score - live.away.score,
+          total: live.away.score + live.home.score,
+          firstInningRuns: live.firstInningRuns,
+        }
       : null;
     // Chip-builder shared by ML/Spread/Total ladders. parsed.kind drives
     // the chip label so the same ladder renderer works for all three.
@@ -1344,6 +1384,10 @@ function renderGameCards() {
         // under, so chip = "u N.5". Buyer-NO -> we cheer for the over.
         const line = parsed.threshold + 0.5;
         chipLabel = buyerSide === "yes" ? `u${line}` : `o${line}`;
+      } else if (parsed.kind === "rfi") {
+        // RFI is binary "any run in 1st". Buyer-YES (a run scored) -> we
+        // cheer for under 1 (no run); buyer-NO -> we cheer for over 1.
+        chipLabel = buyerSide === "yes" ? "u1" : "o1";
       } else {
         chipLabel = "?";
       }
@@ -1434,6 +1478,12 @@ function renderGameCards() {
       const totalBlock = sharedTotal.length
         ? `<div class="player-block shared-block">${gameLadderHtml("Total", sharedTotal, totalCurrent)}</div>`
         : "";
+      // Shared RFI row — current = live first-inning-runs count once the
+      // 1st inning has resolved, else blank.
+      const rfiCurrent = liveSc?.firstInningRuns != null ? String(liveSc.firstInningRuns) : null;
+      const rfiBlock = sharedRfi.length
+        ? `<div class="player-block shared-block">${gameLadderHtml("Run in 1st", sharedRfi, rfiCurrent)}</div>`
+        : "";
 
       // Remaining game-level legs we don't parse (F5/RFI/BTTS/1H/etc.) — flat
       // group list until we add predicate evaluators for them.
@@ -1451,7 +1501,7 @@ function renderGameCards() {
       gameSection = `
         <div class="card-section">
           <div class="section-title">Game</div>
-          ${teamBlocks}${totalBlock}${otherBlocks}${otherTickers}
+          ${teamBlocks}${totalBlock}${rfiBlock}${otherBlocks}${otherTickers}
         </div>`;
     }
 

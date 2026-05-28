@@ -370,15 +370,22 @@ export function legLabel(ticker, side, athleteIdx) {
   }
 
   // ---------- MLB Run-in-First-Inning ----------
-  // Format: KXMLBRFI-{date+time+teams}-{TEAM}
+  // Format: KXMLBRFI-{date+time+teams}[-{TEAM}]
+  // The team suffix is optional — the most common Kalshi RFI market is a
+  // GAME-level "any team scores in 1st" without a team specifier. Render
+  // a team-prefixed label only when a valid team abbr is present (else
+  // we fall through to a generic YRFI/NRFI label and don't show the
+  // misleading "MLB: undefined score in 1st inning").
   if (ticker.startsWith("KXMLBRFI-")) {
     const rest = ticker.slice("KXMLBRFI-".length);
-    const [dt, teamAbbr] = rest.split("-");
-    const { teams } = parseDateTeams(dt);
-    const [a, b] = splitTeams(teams, MLB_TEAMS);
-    const teamName_ = teamName(MLB_TEAMS, teamAbbr);
-    if (side === "yes") return `MLB: ${teamName_} score in 1st inning`;
-    return `MLB: ${teamName_} scoreless 1st inning`;
+    const [, teamAbbr] = rest.split("-");
+    if (teamAbbr && MLB_TEAMS[teamAbbr]) {
+      const tn = teamName(MLB_TEAMS, teamAbbr);
+      if (side === "yes") return `MLB: ${tn} score in 1st inning`;
+      return `MLB: ${tn} scoreless 1st inning`;
+    }
+    if (side === "yes") return `MLB: run scored in 1st inning (YRFI)`;
+    return `MLB: no run in 1st inning (NRFI)`;
   }
 
   // ---------- NHL player props ----------
