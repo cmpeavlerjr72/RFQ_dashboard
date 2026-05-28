@@ -463,6 +463,63 @@ function legGameGroupKey(ticker) {
   return `${sport}|${m[1]}|${m[3]}`;
 }
 
+// Find the ESPN event for a game-card key, restricted to that game's sport
+// scoreboard so a 3-letter abbrev collision across sports can't mis-match.
+function findEspnEventForGameKey(gameKey) {
+  const [sport, dateToken, teams] = gameKey.split("|");
+  if (!sport || !teams) return null;
+  // legDateYMD wants a ticker but the date-token chunk is all it actually
+  // parses, so we wrap it into a synthetic ticker prefix.
+  const ymd = legDateYMD(`KX-${dateToken}`);
+  // Try the (sport,date) scoreboard first; fall back to any same-sport board.
+  const candidates = [];
+  if (ymd) candidates.push(state.scoreboards[`${sport}:${ymd}`]);
+  for (const [k, sb] of Object.entries(state.scoreboards)) {
+    if (k.startsWith(`${sport}:`) && !candidates.includes(sb)) candidates.push(sb);
+  }
+  for (const sb of candidates) {
+    if (!sb || !Array.isArray(sb.events)) continue;
+    for (const ev of sb.events) {
+      const abbrs = (ev?.competitions?.[0]?.competitors || [])
+        .map((c) => (c?.team?.abbreviation || "").toUpperCase())
+        .filter(Boolean);
+      if (abbrs.length >= 2 && abbrs.every((a) => teams.includes(a))) return ev;
+    }
+  }
+  return null;
+}
+
+// Compact live-state summary for an ESPN event: { state, score, periodLabel }.
+// score is "AWAY n - n HOME" with the away team first (ESPN convention).
+function liveStateFor(ev) {
+  if (!ev) return null;
+  const comp = ev?.competitions?.[0];
+  if (!comp) return null;
+  const state = ev?.status?.type?.state || "pre";   // "pre" | "in" | "post"
+  const detail = ev?.status?.type?.shortDetail || ev?.status?.type?.description || "";
+  const period = ev?.status?.period || null;
+  const clock = ev?.status?.displayClock || "";
+  const competitors = comp.competitors || [];
+  const away = competitors.find((c) => c.homeAway === "away") || competitors[0];
+  const home = competitors.find((c) => c.homeAway === "home") || competitors[1];
+  const awayAbbr = (away?.team?.abbreviation || "").toUpperCase();
+  const homeAbbr = (home?.team?.abbreviation || "").toUpperCase();
+  const awayScore = parseInt(away?.score ?? "0", 10);
+  const homeScore = parseInt(home?.score ?? "0", 10);
+  let periodLabel = "";
+  if (state === "pre") periodLabel = detail || "Pregame";
+  else if (state === "post") periodLabel = detail || "Final";
+  else if (state === "in") {
+    if (period != null && clock) periodLabel = `Q${period} ${clock}`;
+    else periodLabel = detail || "In Progress";
+  }
+  return {
+    state, periodLabel,
+    awayAbbr, homeAbbr, awayScore, homeScore,
+    raw: ev,
+  };
+}
+
 // --------------------------- leg exposure ----------------------------------
 
 /**
@@ -641,6 +698,27 @@ function renderGameCards() {
     const collapsed = state.gameCollapsed.has(g.key);
     const chevron = collapsed ? "▸" : "▾";
 
+    const live = liveStateFor(findEspnEventForGameKey(g.key));
+    let liveRow = "";
+    if (live) {
+      const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
+      const winningAway = live.state !== "pre" && live.awayScore > live.homeScore;
+      const winningHome = live.state !== "pre" && live.homeScore > live.awayScore;
+      liveRow = `
+        <div class="game-live">
+          <span class="${dotCls}"></span>
+          <span class="live-period">${escapeHtml(live.periodLabel)}</span>
+          <span class="live-score">
+            <span class="team-abbr">${escapeHtml(live.awayAbbr)}</span>
+            <span class="team-score ${winningAway ? "leading" : ""}">${live.awayScore}</span>
+            <span class="sep">-</span>
+            <span class="team-score ${winningHome ? "leading" : ""}">${live.homeScore}</span>
+            <span class="team-abbr">${escapeHtml(live.homeAbbr)}</span>
+          </span>
+        </div>
+      `;
+    }
+
     const legRows = g.legs.map((r) => {
       const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
       const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
@@ -671,6 +749,7 @@ function renderGameCards() {
             <span class="game-name">${escapeHtml(title)}</span>
             ${dateHtml}
           </div>
+          ${liveRow}
           <div class="game-stats">
             <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
             <span class="stat"><span class="label">at risk</span><span class="value">${fmtMoney(g.exposure)}</span></span>

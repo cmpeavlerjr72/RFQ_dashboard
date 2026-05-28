@@ -371,6 +371,31 @@ h2 {
   font-size: 11px; color: var(--muted); font-weight: 500;
   background: rgba(0,0,0,.04); padding: 1px 6px; border-radius: 4px;
 }
+.game-card-head .game-live {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px; color: var(--fg);
+}
+.game-card-head .game-live .live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block; flex-shrink: 0;
+}
+.game-card-head .game-live .live-dot.pre  { background: var(--muted-2); }
+.game-card-head .game-live .live-dot.live { background: var(--pos); box-shadow: 0 0 6px rgba(21,128,61,.5); animation: pulse 1.4s ease-in-out infinite; }
+.game-card-head .game-live .live-dot.post { background: var(--accent); }
+.game-card-head .game-live .live-period { color: var(--muted); font-weight: 500; }
+.game-card-head .game-live .live-score {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.game-card-head .game-live .live-score .team-abbr {
+  color: var(--muted); font-size: 11px; font-weight: 600;
+}
+.game-card-head .game-live .live-score .team-score {
+  font-size: 14px; font-weight: 700; color: var(--fg);
+  min-width: 18px; text-align: center;
+}
+.game-card-head .game-live .live-score .team-score.leading { color: var(--pos); }
+.game-card-head .game-live .live-score .sep { color: var(--muted-2); }
 .game-card-head .game-stats {
   display: flex; gap: 14px; flex-wrap: wrap;
 }
