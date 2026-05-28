@@ -426,6 +426,11 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
   const box = boxscores[`${prop.sport}:${eventId}`];
   const gameState = ev?.status?.type?.state || "pre";
   if (!box) return { current: null, status: gameState === "pre" ? "pending" : "loading" };
+  // Pregame: ESPN's /summary can populate season-to-date stats in the
+  // boxscore.players[] block before first pitch. Those would falsely
+  // resolve a u3 HRR leg as "lost" with 52H/29RBI. Return pending here
+  // so the chip stays grey until the game actually starts.
+  if (gameState === "pre") return { current: null, status: "pending" };
 
   const players = box?.boxscore?.players || [];
   const teamGroup = players.find(
@@ -1224,13 +1229,13 @@ function renderGameCards() {
           if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
           teamBuckets.get(ab).ml.push({ row: r, parsed });
         } else if (parsed?.kind === "spread") {
-          // A spread line "lives" with the favorite — Kalshi tickers like
-          // SAS3 mean "SAS wins by >3.5" which is "SAS -3.5" in standard
-          // betting notation. We display the chip as "-N.5" under the
-          // Kalshi-listed team regardless of buyer side; the chip's COLOR
-          // (via evalGameLegInScenario) tells us whether the favorite
-          // covering is good or bad for us this leg.
-          const ab = parsed.pick;
+          // Bucket under the team WE (long-NO) cheer for to cover the
+          // line. Same convention as ML — chip always describes what we
+          // want to have happen. Buyer-YES on TEAM means we cheer for the
+          // opposing dog; buyer-NO on TEAM means we cheer for TEAM as
+          // favorite. The chip-label code signs the spread accordingly
+          // (+ if our team is the dog, - if our team is the favorite).
+          const ab = ourCheeredTeam(parsed, r.buyerSide);
           if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
           teamBuckets.get(ab).spread.push({ row: r, parsed });
         } else if (parsed?.kind === "total") {
@@ -1311,13 +1316,19 @@ function renderGameCards() {
         // i.e., "win" regardless of original buyer side.
         chipLabel = "win";
       } else if (parsed.kind === "spread") {
-        // Chip is the favorite's line ("-N.5") under the favorite team.
-        // Buyer side determines color (whether the favorite covering helps
-        // us or the buyer), not the sign.
-        chipLabel = `-${parsed.threshold + 0.5}`;
+        // Chip displays our cheering perspective:
+        //   Buyer-YES on TEAM-N: we cheer for the OPPOSING dog at +N.5
+        //   Buyer-NO  on TEAM-N: we cheer for TEAM at -N.5 (favorite)
+        // The bucket is already the team WE cheer for; sign reflects
+        // whether that team is the favorite or the dog of THIS line.
+        const sign = buyerSide === "yes" ? "+" : "-";
+        chipLabel = `${sign}${parsed.threshold + 0.5}`;
       } else if (parsed.kind === "total") {
+        // Same rule for total: show OUR side, not buyer's. Buyer-YES on
+        // a total means buyer took the over; we (long-NO) cheer for the
+        // under, so chip = "u N.5". Buyer-NO -> we cheer for the over.
         const line = parsed.threshold + 0.5;
-        chipLabel = buyerSide === "yes" ? `o${line}` : `u${line}`;
+        chipLabel = buyerSide === "yes" ? `u${line}` : `o${line}`;
       } else {
         chipLabel = "?";
       }
