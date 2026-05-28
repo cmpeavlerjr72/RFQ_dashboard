@@ -1383,14 +1383,24 @@ function renderGameCards() {
     const gameChipHtml = ({ row, parsed }) => {
       const buyerSide = (row.buyerSide || "yes").toLowerCase();
       const res = liveSc ? evalGameLegInScenario(parsed, buyerSide, liveSc) : "unknown";
-      // Locked-loss strikethrough only when the bad outcome is permanent:
-      //   - total / RFI: monotonic — once buyer_hit it can't unhit
-      //   - ML / spread: only locked when game state is post (final)
-      const lockedLoss = (res === "buyer_hit") && (
-        parsed.kind === "total" ||
-        parsed.kind === "rfi" ||
-        live?.state === "post"
-      );
+      // Locked-loss strikethrough only when the bad-for-us outcome is
+      // permanent. Totals are monotonic so market-YES is permanent once
+      // it flips, but market-NO isn't (mid-game the total can still climb
+      // past the line) — so buyer-NO totals don't lock until game post.
+      // RFI is only emitted once the 1st inning is done, so either side
+      // is permanent at that point. ML / spread mid-game never lock since
+      // the score can still flip; only post-game locks them.
+      const stateIsPost = live?.state === "post";
+      let lockedLoss = false;
+      if (res === "buyer_hit") {
+        if (stateIsPost) {
+          lockedLoss = true;
+        } else if (parsed.kind === "rfi") {
+          lockedLoss = true;
+        } else if (parsed.kind === "total" && buyerSide === "yes") {
+          lockedLoss = true;
+        }
+      }
       const livePos = res === "buyer_miss" ? true : res === "buyer_hit" ? false : null;
       const sign = chipSignClass(row.pUs, livePos);
       const style = chipShadeStyle(row.pUs);
@@ -1590,14 +1600,20 @@ function renderGameCards() {
             ? `<span class="stat-current">${current}</span>`
             : `<span class="stat-current pending">—</span>`;
           const chips = items.map(({ row, prop }) => {
-            // Monotonic stats: once current crosses threshold the leg is
-            // permanently lost for us. That's the only case where we
-            // strikethrough (vs just shading red).
+            // Monotonic stats: once current crosses threshold the market
+            // YES is permanently true. That's locked-loss only if WE
+            // hold the buyer's opposite — i.e., buyer-yes leg with dead.
+            // Buyer-no leg with dead means buyer LOSES (we won) — no
+            // strikethrough on a win.
             const dead = current != null && current >= prop.threshold;
-            const livePos = current == null ? null : !dead;
+            const buyerSide = (row.buyerSide || "yes").toLowerCase();
+            const lockedLoss = dead && buyerSide === "yes";
+            const livePos = current == null
+              ? null
+              : (buyerSide === "yes" ? !dead : dead);
             const sign = chipSignClass(row.pUs, livePos);
             const style = chipShadeStyle(row.pUs);
-            const cls = sign + (dead ? " locked-loss" : "");
+            const cls = sign + (lockedLoss ? " locked-loss" : "");
             const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
             const tip =
               `Buyer needs ${stat} ≥ ${prop.threshold} (we're under ${prop.threshold}).\n` +
