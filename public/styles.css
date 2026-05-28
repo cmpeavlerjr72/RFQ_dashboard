@@ -502,6 +502,12 @@ h2 {
   font-size: 11px; color: var(--muted);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
+.game-card-body .player-block.shared-block {
+  padding: 6px 0; border-top: 1px solid var(--border);
+}
+.game-card-body .player-block.shared-block .stat-ladder {
+  padding-left: 4px;
+}
 /* Stat ladder — compact per-stat row inside a player block */
 .game-card-body .stat-ladder {
   display: flex; align-items: center; gap: 10px;

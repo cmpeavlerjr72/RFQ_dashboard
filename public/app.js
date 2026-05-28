@@ -1175,15 +1175,32 @@ function renderGameCards() {
         </div>`;
     }
 
-    // ---- Bucket pending legs into game-level groups + per-player groups ----
-    const gameGroups = new Map();   // group name -> legs[]
-    const playerGroups = new Map(); // "team|LAST" -> {team, lastName, prop, meta, legs[]}
+    // ---- Bucket pending legs ----
+    //   teamBuckets : per-team ML and SPREAD legs, grouped under the team
+    //                they're on (long-NO on SAS3 lives in SAS's bucket).
+    //   sharedTotal : TOTAL legs render under both teams as a "Total" ladder.
+    //   sharedOther : remaining game-level legs (F5, RFI, BTTS, 1H, etc.) we
+    //                don't yet parse into a predicate — flat list for now.
+    //   playerGroups: as before.
+    const teamBuckets = new Map();    // abbr -> {ml: [{row,parsed}], spread: [{row,parsed}]}
+    const sharedTotal = [];           // [{row, parsed}]
+    const sharedOther = new Map();    // groupName -> [row]
+    const playerGroups = new Map();
     const otherLegs = [];
     for (const r of g.legs) {
       const groupName = legGameLevelGroup(r.ticker);
       if (groupName) {
-        if (!gameGroups.has(groupName)) gameGroups.set(groupName, []);
-        gameGroups.get(groupName).push(r);
+        const parsed = parseGameLevelLeg(r.ticker);
+        if (parsed?.kind === "ml" || parsed?.kind === "spread") {
+          const ab = parsed.pick;
+          if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
+          teamBuckets.get(ab)[parsed.kind].push({ row: r, parsed });
+        } else if (parsed?.kind === "total") {
+          sharedTotal.push({ row: r, parsed });
+        } else {
+          if (!sharedOther.has(groupName)) sharedOther.set(groupName, []);
+          sharedOther.get(groupName).push(r);
+        }
         continue;
       }
       const prop = parsePlayerProp(r.ticker);
@@ -1237,33 +1254,135 @@ function renderGameCards() {
     };
 
     // ---- Game-level section ----
+    // Live scenario for chip color + "current" displays (from the score
+    // panel). Pregame -> null -> chips render as pending grey.
+    const liveSc = live && live.state !== "pre"
+      ? { margin: live.home.score - live.away.score, total: live.away.score + live.home.score }
+      : null;
+    // Chip-builder shared by ML/Spread/Total ladders. parsed.kind drives
+    // the chip label so the same ladder renderer works for all three.
+    const gameChipHtml = ({ row, parsed }) => {
+      const buyerSide = (row.buyerSide || "yes").toLowerCase();
+      const res = liveSc ? evalGameLegInScenario(parsed, buyerSide, liveSc) : "unknown";
+      const cls = res === "buyer_hit" ? "neg" : res === "buyer_miss" ? "pos" : "pending";
+      const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
+      let chipLabel;
+      if (parsed.kind === "ml") {
+        chipLabel = buyerSide === "yes" ? "win" : "no win";
+      } else if (parsed.kind === "spread") {
+        // SAS3 yes resolves "SAS wins by >3.5", so display the half-point line.
+        chipLabel = `+${(parsed.threshold + 0.5)}`;
+      } else if (parsed.kind === "total") {
+        const line = parsed.threshold + 0.5;
+        chipLabel = buyerSide === "yes" ? `o${line}` : `u${line}`;
+      } else {
+        chipLabel = "?";
+      }
+      const tip =
+        `In ${row.parlays} parlay${row.parlays === 1 ? "" : "s"} · at risk ${fmtMoney(row.exposure)} · ` +
+        `+$${row.maxWin.toFixed(2)} if it breaks our way · win chance ${pUsPct}` +
+        (res === "buyer_hit" ? " · currently AGAINST us"
+          : res === "buyer_miss" ? " · currently FOR us"
+          : "");
+      return `
+        <span class="ladder-chip ${cls}" title="${escapeHtml(tip)}">
+          <span class="ladder-chip-thresh">${escapeHtml(chipLabel)}</span>
+          <span class="ladder-chip-meta">
+            +$${row.maxWin.toFixed(0)}<span class="ladder-chip-sep">·</span>${pUsPct}
+          </span>
+        </span>`;
+    };
+    const gameLadderHtml = (label, items, currentText) => {
+      if (!items.length) return "";
+      const chips = items.slice()
+        .sort((a, b) => (a.parsed.threshold || 0) - (b.parsed.threshold || 0))
+        .map(gameChipHtml).join("");
+      const currentChip = currentText != null
+        ? `<span class="stat-current">${escapeHtml(currentText)}</span>`
+        : `<span class="stat-current pending">—</span>`;
+      return `
+        <div class="stat-ladder">
+          <div class="stat-ladder-head">
+            <span class="stat-label">${escapeHtml(label)}</span>
+            ${currentChip}
+          </div>
+          <div class="stat-ladder-chips">${chips}</div>
+        </div>`;
+    };
+
     let gameSection = "";
-    if (gameGroups.size > 0 || otherLegs.length > 0) {
-      const ordered = [...gameGroups.keys()].sort((a, b) => {
-        const ai = GAME_LEVEL_GROUP_ORDER.indexOf(a);
-        const bi = GAME_LEVEL_GROUP_ORDER.indexOf(b);
-        const ax = ai < 0 ? 999 : ai;
-        const bx = bi < 0 ? 999 : bi;
-        if (ax !== bx) return ax - bx;
-        return a.localeCompare(b);
-      });
-      const groupBlocks = ordered.map((name) => {
-        const items = gameGroups.get(name).slice().sort((a, b) => b.maxWin - a.maxWin);
+    if (teamBuckets.size > 0 || sharedTotal.length > 0 || sharedOther.size > 0 || otherLegs.length > 0) {
+      // Team display order: away then home (matches the score panel). Falls
+      // back to insertion order when there's no ESPN match.
+      const orderedTeams = live
+        ? [live.away.abbr, live.home.abbr].filter((ab) => teamBuckets.has(ab))
+        : [...teamBuckets.keys()];
+      // Any team-bucket entries that didn't match the score panel get appended
+      // (e.g. a stale ticker or a sport where we couldn't find an event).
+      for (const ab of teamBuckets.keys()) {
+        if (!orderedTeams.includes(ab)) orderedTeams.push(ab);
+      }
+      const teamBlocks = orderedTeams.map((ab) => {
+        const b = teamBuckets.get(ab);
+        const isHome = live && live.home.abbr === ab;
+        const teamScore = liveSc
+          ? (isHome ? live.home.score : (live.away.abbr === ab ? live.away.score : null))
+          : null;
+        const oppScore = liveSc
+          ? (isHome ? live.away.score : (live.away.abbr === ab ? live.home.score : null))
+          : null;
+        const teamMargin = (teamScore != null && oppScore != null) ? teamScore - oppScore : null;
+        const logoUrl = teamLogoUrl(g.sportLogoKey, ab, { league: g.league });
+        const logo = logoUrl
+          ? `<img class="player-head" src="${logoUrl}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'">`
+          : `<div class="player-head fallback">${escapeHtml(ab.slice(0, 1))}</div>`;
+        const headLine = teamScore != null
+          ? `score ${teamScore}${teamMargin != null ? ` · ${teamMargin > 0 ? "leading by " + teamMargin : teamMargin < 0 ? "trailing by " + (-teamMargin) : "tied"}` : ""}`
+          : (live?.periodLabel || "");
+        const teamHead = `
+          <div class="player-head-row">
+            ${logo}
+            <div class="player-meta">
+              <div class="player-name">${escapeHtml(ab)}</div>
+              <div class="player-pos">${escapeHtml(headLine)}</div>
+            </div>
+          </div>`;
+        // ML doesn't take a "current" — the team head already shows the score
+        // and lead state. Spread row shows the team-perspective margin.
+        const spreadCurrent = teamMargin != null
+          ? `${teamMargin > 0 ? "+" : ""}${teamMargin}`
+          : null;
         return `
-          <div class="leg-group">
-            <div class="leg-group-head">${escapeHtml(name)}</div>
-            ${items.map((r) => legRowHtml(r, null)).join("")}
+          <div class="player-block">
+            ${teamHead}
+            ${gameLadderHtml("ML", b.ml, null)}
+            ${gameLadderHtml("Spread", b.spread, spreadCurrent)}
           </div>`;
       }).join("");
-      const otherBlock = otherLegs.length ? `
+
+      // Shared TOTAL row under both teams (with live total points).
+      const totalCurrent = liveSc ? String(liveSc.total) : null;
+      const totalBlock = sharedTotal.length
+        ? `<div class="player-block shared-block">${gameLadderHtml("Total", sharedTotal, totalCurrent)}</div>`
+        : "";
+
+      // Remaining game-level legs we don't parse (F5/RFI/BTTS/1H/etc.) — flat
+      // group list until we add predicate evaluators for them.
+      const otherBlocks = [...sharedOther.entries()].map(([name, items]) => `
+        <div class="leg-group">
+          <div class="leg-group-head">${escapeHtml(name)}</div>
+          ${items.map((row) => legRowHtml(row, null)).join("")}
+        </div>`).join("");
+      const otherTickers = otherLegs.length ? `
         <div class="leg-group">
           <div class="leg-group-head">Other</div>
-          ${otherLegs.map((r) => legRowHtml(r, parsePlayerProp(r.ticker))).join("")}
+          ${otherLegs.map((row) => legRowHtml(row, parsePlayerProp(row.ticker))).join("")}
         </div>` : "";
+
       gameSection = `
         <div class="card-section">
           <div class="section-title">Game</div>
-          ${groupBlocks}${otherBlock}
+          ${teamBlocks}${totalBlock}${otherBlocks}${otherTickers}
         </div>`;
     }
 
