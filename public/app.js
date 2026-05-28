@@ -18,9 +18,9 @@ const state = {
   apiCallsThisSession: 0,
   fetching: false,
   // --- Games On The Board section state ---
-  // Tracks the game keys (legGameGroupKey) that the user has COLLAPSED.
-  // Default empty -> every card starts expanded.
-  gameCollapsed: new Set(),
+  // Tracks the game keys (legGameGroupKey) that the user has EXPANDED.
+  // Default empty -> every card starts collapsed; click a head to drill in.
+  gameExpanded: new Set(),
   // --- Open Parlays section state ---
   parlaySortCol: "cost",   // 'cost' | 'maxWin' | 'pWin' | 'evPnl' | 'roi'
   parlaySortDir: "desc",   // 'asc' | 'desc'
@@ -517,6 +517,198 @@ function findEspnEventForGameKey(gameKey) {
   return null;
 }
 
+// ---------- Game-level scenario tracker ------------------------------------
+// Parses a leg into a structured game-level predicate, or returns null if it's
+// a player prop / not a recognized game-level market. The scenario evaluator
+// only needs to evaluate game-level legs deterministically; player legs are
+// handled as a best/worst envelope by the caller (we can't predict points).
+//
+// Returns shapes:
+//   {kind:"ml",    sport, teams:[away,home], pick:"SAS"}
+//   {kind:"spread", sport, teams, pick:"SAS", threshold:3}   // SAS by >N.5
+//   {kind:"total",  sport, teams, threshold:218}             // total >N.5
+function parseGameLevelLeg(ticker) {
+  const sport = legSport(ticker);
+  if (!sport) return null;
+  // Generic prefixes that map to spread/ML/total across team sports.
+  // Returns sport-specific game-level metadata; player props (ones with a
+  // player-blob segment between matchup and threshold) return null below.
+  const mGame = ticker.match(/^KX[A-Z]+GAME-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+)$/);
+  if (mGame) {
+    const dt = mGame[1];
+    const pick = mGame[2];
+    const teams = parseTeamsFromChunk(dt);
+    if (!teams) return null;
+    return { kind: "ml", sport, teams, pick };
+  }
+  const mSpread = ticker.match(/^KX[A-Z]+SPREAD-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+)(\d+)$/);
+  if (mSpread) {
+    const dt = mSpread[1];
+    const pick = mSpread[2];
+    const threshold = parseInt(mSpread[3], 10);
+    const teams = parseTeamsFromChunk(dt);
+    if (!teams) return null;
+    return { kind: "spread", sport, teams, pick, threshold };
+  }
+  const mTotal = ticker.match(/^KX[A-Z]+TOTAL-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-(\d+)$/);
+  if (mTotal) {
+    const dt = mTotal[1];
+    const threshold = parseInt(mTotal[2], 10);
+    const teams = parseTeamsFromChunk(dt);
+    if (!teams) return null;
+    return { kind: "total", sport, teams, threshold };
+  }
+  return null;
+}
+
+// Extract [away,home] team abbrs from a Kalshi event chunk like "26MAY28OKCSAS"
+// or "26MAY281310LAADET". We don't currently differentiate which is home —
+// we assume the first abbr is the away team (Kalshi's convention).
+function parseTeamsFromChunk(chunk) {
+  const m = chunk.match(/^\d{2}[A-Z]{3}\d{2}(?:\d{4})?([A-Z]+)$/);
+  if (!m) return null;
+  const teams = m[1];
+  if (teams.length < 4 || teams.length > 8) return null;
+  // Try a 3-3 split first (most common: NBA/NHL/MLB 3-letter abbrs).
+  for (const len of [3, 2, 4]) {
+    if (teams.length - len < 2 || teams.length - len > 4) continue;
+    return [teams.slice(0, len), teams.slice(len)];
+  }
+  return null;
+}
+
+// Evaluate a game-level leg in a scenario. Returns:
+//   "buyer_hit"  — the leg's yes-side resolves to the buyer's chosen side
+//   "buyer_miss" — the leg breaks against the buyer (saves us on this leg)
+//   "unknown"    — scenario doesn't pin the relevant variable (e.g. total
+//                  leg in a margin-only scenario)
+//
+// Scenario fields used:
+//   margin: home_score - away_score  (positive => home wins)
+//   total:  optional, total points scored
+function evalGameLegInScenario(parsed, buyerSide, scenario) {
+  if (!parsed) return "unknown";
+  const margin = scenario.margin;
+  if (parsed.kind === "ml") {
+    if (margin == null) return "unknown";
+    // ML for the pick hits iff the pick is the winner.
+    const [away, home] = parsed.teams;
+    let pickWins;
+    if (parsed.pick === home) pickWins = margin > 0;
+    else if (parsed.pick === away) pickWins = margin < 0;
+    else return "unknown";
+    if (margin === 0) return "unknown";  // can't happen in NBA but soccer can
+    const yesHits = pickWins;
+    return resolveLeg(yesHits, buyerSide);
+  }
+  if (parsed.kind === "spread") {
+    if (margin == null) return "unknown";
+    // SAS{N} yes  = SAS wins by more than N.5 = margin > N (when SAS is home)
+    // For away pick, mirror: pick wins by > N means -margin > N.
+    const [away, home] = parsed.teams;
+    let yesHits;
+    if (parsed.pick === home) yesHits = margin > parsed.threshold;
+    else if (parsed.pick === away) yesHits = -margin > parsed.threshold;
+    else return "unknown";
+    return resolveLeg(yesHits, buyerSide);
+  }
+  if (parsed.kind === "total") {
+    if (scenario.total == null) return "unknown";
+    const yesHits = scenario.total > parsed.threshold;
+    return resolveLeg(yesHits, buyerSide);
+  }
+  return "unknown";
+}
+
+function resolveLeg(yesHits, buyerSide) {
+  const buyerYes = (buyerSide || "yes").toLowerCase() === "yes";
+  const buyerHits = (buyerYes && yesHits) || (!buyerYes && !yesHits);
+  return buyerHits ? "buyer_hit" : "buyer_miss";
+}
+
+// Per-sport scenario palette. Each entry = {label, scenario}. Other sports
+// fall back to no scenarios (the section just won't render) until we add
+// per-sport coverage. Margin convention = home - away. We pick representative
+// integer margins that straddle each plausible spread threshold so spread legs
+// resolve cleanly.
+function scenariosForSport(sport) {
+  if (sport === "nba" || sport === "wnba") {
+    return [
+      { label: "Home blowout (10+)",    scenario: { margin:  12 } },
+      { label: "Home comfortable (4-9)", scenario: { margin:   6 } },
+      { label: "Home narrow (1-3)",      scenario: { margin:   2 } },
+      { label: "Away narrow (1-3)",      scenario: { margin:  -2 } },
+      { label: "Away comfortable (4-9)", scenario: { margin:  -6 } },
+      { label: "Away blowout (10+)",     scenario: { margin: -12 } },
+    ];
+  }
+  if (sport === "mlb" || sport === "nhl") {
+    return [
+      { label: "Home wins by 3+",     scenario: { margin:  3 } },
+      { label: "Home wins by 1-2",    scenario: { margin:  1 } },
+      { label: "Away wins by 1-2",    scenario: { margin: -1 } },
+      { label: "Away wins by 3+",     scenario: { margin: -3 } },
+    ];
+  }
+  if (sport === "atp" || sport === "wta") {
+    return [
+      { label: "Home/listed first wins", scenario: { margin:  1 } },
+      { label: "Away/listed second wins", scenario: { margin: -1 } },
+    ];
+  }
+  return [];
+}
+
+// Compute per-card scenario rows: for each scenario, walk every parlay
+// touching this game and assemble best/worst $P&L. Player-prop and unknown
+// legs are treated as an envelope (best = they all fail buyer; worst = they
+// all hit buyer). If even the game-level legs alone determine the parlay,
+// best == worst.
+function computeGameScenarios(g, parlays) {
+  const scenarios = scenariosForSport(g.sport);
+  if (!scenarios.length) return [];
+  const ourParlays = parlays.filter((p) =>
+    p.legs.some((l) => legGameGroupKey(l.ticker) === g.key)
+  );
+  if (!ourParlays.length) return [];
+  return scenarios.map(({ label, scenario }) => {
+    let best = 0;
+    let worst = 0;
+    for (const p of ourParlays) {
+      // Walk every leg of the parlay; only this-game legs use the scenario.
+      // Other-game legs are treated as "unknown" (envelope), so a cross-game
+      // parlay's other-game legs only widen the swing, never lock it.
+      let anyBuyerMiss = false;       // already guarantees we win
+      let anyUnknown = false;          // creates envelope
+      let allHit = true;
+      for (const l of p.legs) {
+        const inThisGame = legGameGroupKey(l.ticker) === g.key;
+        const parsed = inThisGame ? parseGameLevelLeg(l.ticker) : null;
+        const res = parsed ? evalGameLegInScenario(parsed, l.side, scenario) : "unknown";
+        if (res === "buyer_miss") { anyBuyerMiss = true; break; }
+        if (res === "unknown")    { anyUnknown = true; allHit = false; }
+        // "buyer_hit" leaves allHit true; everything else flips it
+      }
+      if (anyBuyerMiss) {
+        // Locked: we win this parlay.
+        const winPnl = p.qty - p.cost;
+        best  += winPnl;
+        worst += winPnl;
+      } else if (anyUnknown) {
+        // Envelope: best case we still win (one unknown fails buyer),
+        // worst case we lose (every unknown hits buyer).
+        best  += p.qty - p.cost;
+        worst += -p.cost;
+      } else if (allHit) {
+        // Locked: every leg hit, we lose.
+        best  += -p.cost;
+        worst += -p.cost;
+      }
+    }
+    return { label, best, worst };
+  });
+}
+
 // Compact live-state summary for an ESPN event: { state, score, periodLabel }.
 // score is "AWAY n - n HOME" with the away team first (ESPN convention).
 function liveStateFor(ev) {
@@ -723,7 +915,7 @@ function renderGameCards() {
     const sport = (g.sport || "").toUpperCase();
     const title = (g.teams || []).join(" @ ");
     const dateHtml = g.dateLabel ? `<span class="game-date">${escapeHtml(g.dateLabel)}</span>` : "";
-    const collapsed = state.gameCollapsed.has(g.key);
+    const collapsed = !state.gameExpanded.has(g.key);
     const chevron = collapsed ? "▸" : "▾";
 
     const live = liveStateFor(findEspnEventForGameKey(g.key));
@@ -785,6 +977,38 @@ function renderGameCards() {
       ? `<div class="cheer-resolved">${g.anyResolvedLegs.length} leg${g.anyResolvedLegs.length === 1 ? "" : "s"} already resolved</div>`
       : "";
 
+    // Scenario rows — game-level legs evaluated deterministically; player
+    // and total legs handled as a best/worst envelope.
+    const scenarioRows = computeGameScenarios(g, state.positions);
+    let scenarioHtml = "";
+    if (scenarioRows.length) {
+      // Rank by best desc so the "thing we most want" floats to the top.
+      const rows = scenarioRows.slice().sort((a, b) => b.best - a.best);
+      const cells = rows.map((s) => {
+        const bestCls = s.best >= 0 ? "pos" : "neg";
+        const worstCls = s.worst >= 0 ? "pos" : "neg";
+        const swingNote = (s.best - s.worst > 0.01)
+          ? `<span class="scenario-envelope" title="best assumes every player prop fails the buyer; worst assumes every player prop hits the buyer">±envelope</span>`
+          : "";
+        return `
+          <div class="scenario-row">
+            <span class="scenario-label">${escapeHtml(s.label)}</span>
+            <span class="scenario-vals">
+              <span class="${bestCls}">best ${s.best >= 0 ? "+" : ""}${s.best.toFixed(2)}</span>
+              <span class="${worstCls}">worst ${s.worst >= 0 ? "+" : ""}${s.worst.toFixed(2)}</span>
+              ${swingNote}
+            </span>
+          </div>
+        `;
+      }).join("");
+      scenarioHtml = `
+        <div class="scenarios">
+          <div class="cheer-list-head">If the game goes...</div>
+          ${cells}
+        </div>
+      `;
+    }
+
     return `
       <div class="game-card${collapsed ? " collapsed" : ""}" data-game-key="${escapeHtml(g.key)}">
         <div class="game-card-head" role="button" tabindex="0">
@@ -812,6 +1036,7 @@ function renderGameCards() {
           <div class="cheer-list-head">Cheering for:</div>
           ${legRows}
           ${resolvedNote}
+          ${scenarioHtml}
         </div>`}
       </div>
     `;
@@ -825,8 +1050,8 @@ function renderGameCards() {
     const key = card?.getAttribute("data-game-key");
     if (!key) return;
     const toggle = () => {
-      if (state.gameCollapsed.has(key)) state.gameCollapsed.delete(key);
-      else state.gameCollapsed.add(key);
+      if (state.gameExpanded.has(key)) state.gameExpanded.delete(key);
+      else state.gameExpanded.add(key);
       renderGameCards();
     };
     head.addEventListener("click", toggle);

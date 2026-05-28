@@ -443,6 +443,24 @@ h2 {
   margin-top: 8px; font-size: 11px; color: var(--muted-2);
   font-style: italic;
 }
+.game-card-body .scenarios {
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.game-card-body .scenarios .scenario-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 4px 0; font-size: 12px;
+}
+.game-card-body .scenarios .scenario-label { color: var(--fg); }
+.game-card-body .scenarios .scenario-vals {
+  display: inline-flex; gap: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+}
+.game-card-body .scenarios .scenario-vals .pos { color: var(--pos); font-weight: 600; }
+.game-card-body .scenarios .scenario-vals .neg { color: var(--neg); font-weight: 600; }
+.game-card-body .scenarios .scenario-envelope {
+  color: var(--muted-2); font-size: 10px; font-style: italic;
+}
 
 footer {
   border-top: 1px solid var(--border); background: var(--card);
