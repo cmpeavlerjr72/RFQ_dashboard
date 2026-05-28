@@ -491,6 +491,19 @@ function legGameGroupKey(ticker) {
   return `${sport}|${m[1]}|${m[3]}`;
 }
 
+// ESPN team-abbr -> Kalshi team-abbr where the two providers diverge.
+// Canonical source: sandbox/build_start_times.py#MLB_CODE.
+const ESPN_TO_KALSHI_ABBR = {
+  // MLB
+  CHW: "CWS",   // White Sox
+  ARI: "AZ",    // Diamondbacks
+  OAK: "ATH",   // Athletics (Kalshi kept ATH after the Sacramento move)
+  WAS: "WSH",   // Nationals
+};
+function normAbbrForKalshi(espnAbbr) {
+  return ESPN_TO_KALSHI_ABBR[espnAbbr] || espnAbbr;
+}
+
 // Find the ESPN event for a game-card key, restricted to that game's sport
 // scoreboard so a 3-letter abbrev collision across sports can't mis-match.
 function findEspnEventForGameKey(gameKey) {
@@ -509,7 +522,7 @@ function findEspnEventForGameKey(gameKey) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
       const abbrs = (ev?.competitions?.[0]?.competitors || [])
-        .map((c) => (c?.team?.abbreviation || "").toUpperCase())
+        .map((c) => normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase()))
         .filter(Boolean);
       if (abbrs.length >= 2 && abbrs.every((a) => teams.includes(a))) return ev;
     }
@@ -722,8 +735,8 @@ function liveStateFor(ev) {
   const competitors = comp.competitors || [];
   const away = competitors.find((c) => c.homeAway === "away") || competitors[0];
   const home = competitors.find((c) => c.homeAway === "home") || competitors[1];
-  const awayAbbr = (away?.team?.abbreviation || "").toUpperCase();
-  const homeAbbr = (home?.team?.abbreviation || "").toUpperCase();
+  const awayAbbr = normAbbrForKalshi((away?.team?.abbreviation || "").toUpperCase());
+  const homeAbbr = normAbbrForKalshi((home?.team?.abbreviation || "").toUpperCase());
   const awayScore = parseInt(away?.score ?? "0", 10);
   const homeScore = parseInt(home?.score ?? "0", 10);
   let periodLabel = "";
