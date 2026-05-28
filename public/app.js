@@ -1224,11 +1224,13 @@ function renderGameCards() {
           if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
           teamBuckets.get(ab).ml.push({ row: r, parsed });
         } else if (parsed?.kind === "spread") {
-          // Spread chip = "the line itself" (e.g. SAS -3.5). Bucket under
-          // the favorite team. Buyer-YES is on the original Kalshi pick
-          // (favorite); buyer-NO flips to the opposing team and the chip
-          // renders as the underdog's +N.5 line. Color reflects our side.
-          const ab = effectivePick(parsed, r.buyerSide);
+          // A spread line "lives" with the favorite — Kalshi tickers like
+          // SAS3 mean "SAS wins by >3.5" which is "SAS -3.5" in standard
+          // betting notation. We display the chip as "-N.5" under the
+          // Kalshi-listed team regardless of buyer side; the chip's COLOR
+          // (via evalGameLegInScenario) tells us whether the favorite
+          // covering is good or bad for us this leg.
+          const ab = parsed.pick;
           if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
           teamBuckets.get(ab).spread.push({ row: r, parsed });
         } else if (parsed?.kind === "total") {
@@ -1309,12 +1311,10 @@ function renderGameCards() {
         // i.e., "win" regardless of original buyer side.
         chipLabel = "win";
       } else if (parsed.kind === "spread") {
-        // Standard betting sign: minus = favorite (giving points), plus =
-        // underdog (getting points). Buyer-YES on a Kalshi spread leg picks
-        // the favorite (TEAM wins by >N.5), so chip is "-N.5". Buyer-NO is
-        // bucketed under the underdog, so chip is "+N.5".
-        const sign = buyerSide === "yes" ? "-" : "+";
-        chipLabel = `${sign}${parsed.threshold + 0.5}`;
+        // Chip is the favorite's line ("-N.5") under the favorite team.
+        // Buyer side determines color (whether the favorite covering helps
+        // us or the buyer), not the sign.
+        chipLabel = `-${parsed.threshold + 0.5}`;
       } else if (parsed.kind === "total") {
         const line = parsed.threshold + 0.5;
         chipLabel = buyerSide === "yes" ? `o${line}` : `u${line}`;
