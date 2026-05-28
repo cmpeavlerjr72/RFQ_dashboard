@@ -474,8 +474,21 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
       current = statByKey("RBIs");
       label = `RBI: ${current ?? "-"}`;
     } else if (prop.stat === "TB") {
-      current = statByKey("totalBases");
-      label = `TB: ${current ?? "-"}`;
+      // ESPN's batting boxscore exposes hits and homeRuns but NOT
+      // doubles/triples per athlete, so we derive a lower bound:
+      //   TB = singles + 2*doubles + 3*triples + 4*homeRuns
+      //      = hits + doubles + 2*triples + 3*homeRuns
+      //   >= hits + 3*homeRuns   (treats remaining hits as singles)
+      // True TB can be higher (if the player had doubles/triples), but
+      // never lower. The locked-loss check uses current >= threshold,
+      // so a lower bound underflags (safer) — never falsely strikes
+      // through. The chip color via pUs is market-driven and stays right.
+      const h = statByKey("hits");
+      const hr = statByKey("homeRuns") ?? 0;
+      if (h != null) {
+        current = h + 3 * hr;
+        label = `TB ≥ ${current}`;
+      }
     } else if (prop.stat === "BB") {
       current = statByKey("walks");
       label = `BB: ${current ?? "-"}`;
