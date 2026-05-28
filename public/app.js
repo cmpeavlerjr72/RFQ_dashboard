@@ -203,13 +203,23 @@ async function refresh() {
           const ourSide = flipSide(leg.side);
           const bidC = ourSide === "yes" ? lYesBid : lNoBid;
           const askC = ourSide === "yes" ? lYesAsk : lNoAsk;
-          // Two-sided quote is "real" only when both endpoints are off the walls.
-          // (bidC=0 + askC=100 = empty book, tells us nothing about value.)
+          // Mid preference order:
+          //   1. Tight two-sided quote (both off walls): exact bid/ask midpoint
+          //   2. WIDE two-sided quote (bid > 0, ask at wall e.g. 100): still
+          //      use midpoint — beats falling back to a stale "bid only"
+          //      reading on illiquid late-game prop markets where bid=1c
+          //      lingers from morning and last_price is just as stale.
+          //   3. last_price (flipped for our side) as a recency signal
+          //   4. one-sided book heuristics
           const haveTrueQuote =
             bidC != null && askC != null && bidC > 0 && askC > 0 && askC < 100;
+          const haveWideQuote =
+            bidC != null && askC != null && bidC > 0 && askC > 0;
           let midC = null;
           if (haveTrueQuote) {
             midC = (bidC + askC) / 2;
+          } else if (haveWideQuote) {
+            midC = (bidC + askC) / 2;   // wall-ask case: still beats bidC alone
           } else if (lLast != null && lLast >= 0 && lLast <= 100) {
             // last_price is the YES side's last trade — flip for NO side
             midC = ourSide === "yes" ? lLast : (100 - lLast);
