@@ -22,10 +22,12 @@ import {
 import {
   getScoreboard,
   getBoxscore,
+  getRoster,
   Sport,
   currentETDate,
   cacheStats as espnCacheStats,
   boxscoreCacheStats,
+  rosterCacheStats,
 } from "./espn.js";
 import { getRecap } from "./recap.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
@@ -57,6 +59,7 @@ app.get("/api/health", (_req, res) => {
     kalshi: kalshiCacheStats(),
     espn: espnCacheStats(),
     boxscore: boxscoreCacheStats(),
+    roster: rosterCacheStats(),
     lastError,
   });
 });
@@ -148,6 +151,21 @@ app.get("/api/boxscore", async (req, res, next) => {
     upstreamCallCount++;
     const payload = await getBoxscore(sport, eventId, force);
     res.json({ sport, eventId, payload, cached_at: new Date().toISOString() });
+  } catch (e) { next(e); }
+});
+
+app.get("/api/roster", async (req, res, next) => {
+  try {
+    const sport = String(req.query.sport || "").toLowerCase() as Sport;
+    if (!VALID_SPORTS.includes(sport)) {
+      return res.status(400).json({ error: `bad sport: ${sport}` });
+    }
+    const teamId = String(req.query.teamId || "");
+    if (!teamId) return res.status(400).json({ error: "teamId required" });
+    const force = String(req.query.fresh || "") === "1";
+    upstreamCallCount++;
+    const payload = await getRoster(sport, teamId, force);
+    res.json({ sport, teamId, payload, cached_at: new Date().toISOString() });
   } catch (e) { next(e); }
 });
 

@@ -107,6 +107,48 @@ export function boxscoreCacheStats() {
   return { size: boxscoreCache.size() };
 }
 
+// ----------------------------------------------------------------------------
+// Per-team roster (headshots + jersey + position, available pregame)
+//
+// Box scores only populate athletes once the game starts, so pregame cards
+// can't get headshots from /summary. The /teams/{id}/roster endpoint works
+// any time and rosters change infrequently (trades, injuries), so we cache
+// these for an hour — plenty fresh for jersey/position/headshot use.
+// ----------------------------------------------------------------------------
+
+const rosterCache = new TTLCache<any>();
+
+function rosterUrl(sport: Sport, teamId: string): string {
+  const segByLeague: Record<Sport, string> = {
+    mlb: "baseball/mlb",
+    nhl: "hockey/nhl",
+    nba: "basketball/nba",
+    ufc: "mma/ufc",
+    atp: "tennis/atp",
+    wta: "tennis/wta",
+  };
+  const seg = segByLeague[sport];
+  return `https://site.api.espn.com/apis/site/v2/sports/${seg}/teams/${encodeURIComponent(teamId)}/roster`;
+}
+
+export async function getRoster(
+  sport: Sport,
+  teamId: string,
+  force = false,
+): Promise<any> {
+  const key = `roster:${sport}:${teamId}`;
+  if (force) rosterCache.set(key, {}, 0);
+  return rosterCache.getOrFetch(
+    key,
+    () => fetchJsonWithTimeout(rosterUrl(sport, teamId)),
+    3_600_000,   // 1 hour TTL
+  );
+}
+
+export function rosterCacheStats() {
+  return { size: rosterCache.size() };
+}
+
 /**
  * ESPN date in America/New_York as YYYYMMDD — same helper as Monte-Site uses.
  */

@@ -13,6 +13,11 @@ const state = {
   fillsByParlay: {},
   scoreboards: {},        // sport:date -> ESPN scoreboard payload
   boxscores: {},          // sport:eventId -> ESPN summary payload
+  rosters: {},            // sport:teamId -> ESPN /teams/{id}/roster payload
+  // Flat index keyed by "{sport}:{kalshi-abbr}:{LASTNAME}" -> {displayName,
+  // headshot, jersey, position}. Populated from rosters so we can render
+  // headshots PREGAME (boxscore.players is empty before tipoff/first pitch).
+  athletesByKey: {},
   athleteIdx: {},
   lastRefreshAt: null,
   apiCallsThisSession: 0,
@@ -238,8 +243,10 @@ async function refresh() {
     state.athleteIdx = buildAthleteIndex(state.scoreboards);
     setLogoContext({ playerFlagIdx: buildAthleteFlagIndex(state.scoreboards) });
 
-    // For player props, pull the boxscore for each game we have a prop on.
-    await fetchNeededBoxscores();
+    // For player props, pull the boxscore for each game we have a prop on,
+    // plus the team roster (boxscore is empty pregame; roster gives us
+    // headshots/jerseys/positions so the player cards render before tipoff).
+    await Promise.all([fetchNeededBoxscores(), fetchNeededRosters()]);
 
     state.lastRefreshAt = new Date();
     setStatus(`updated ${state.lastRefreshAt.toLocaleTimeString()}`, "live");
@@ -319,6 +326,68 @@ async function fetchNeededBoxscores() {
       state.boxscores[`${sport}:${eventId}`] = r.payload;
     } catch (e) { console.warn("boxscore fetch failed", sport, eventId, e); }
   }));
+}
+
+/** Resolve a Kalshi (sport, team-abbr) to its ESPN numeric team id by
+ *  matching against the scoreboard event's competitors. Returns null if no
+ *  match — typically because the scoreboard hasn't loaded yet for this sport. */
+function findEspnTeamId(prop) {
+  const ev = findEspnEvent(prop.gameKey, state.scoreboards);
+  const comps = ev?.competitions?.[0]?.competitors || [];
+  for (const c of comps) {
+    const abbr = normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase());
+    if (abbr === (prop.team || "").toUpperCase()) {
+      return c?.team?.id || null;
+    }
+  }
+  return null;
+}
+
+async function fetchNeededRosters() {
+  // For every player-prop leg we hold, identify the (sport, ESPN teamId)
+  // pair and pull the team's roster. Server-side TTL is an hour so refresh
+  // cost is near-zero after the first fetch.
+  const need = new Map();   // "sport:teamId" -> {sport, teamId, abbr}
+  for (const p of state.positions) {
+    for (const leg of p.legs) {
+      const prop = parsePlayerProp(leg.ticker);
+      if (!prop) continue;
+      const teamId = findEspnTeamId(prop);
+      if (!teamId) continue;
+      const k = `${prop.sport}:${teamId}`;
+      if (!need.has(k)) need.set(k, { sport: prop.sport, teamId, abbr: prop.team });
+    }
+  }
+  await Promise.all([...need.values()].map(async ({ sport, teamId }) => {
+    try {
+      const r = await api(`/api/roster?sport=${sport}&teamId=${encodeURIComponent(teamId)}`);
+      state.rosters[`${sport}:${teamId}`] = r.payload;
+    } catch (e) { console.warn("roster fetch failed", sport, teamId, e); }
+  }));
+  // Build the athlete index. ESPN's NBA/MLB/NHL roster response is
+  // {athletes: [...]} where elements are either flat athlete records or
+  // position-grouped {items: [...]} containers — flatten both.
+  state.athletesByKey = {};
+  for (const [key, payload] of Object.entries(state.rosters)) {
+    const [sport] = key.split(":");
+    const teamAbbr = normAbbrForKalshi(
+      (payload?.team?.abbreviation || "").toUpperCase()
+    );
+    if (!teamAbbr) continue;
+    const top = payload?.athletes || [];
+    const flat = top.flatMap((x) => (Array.isArray(x.items) ? x.items : [x]));
+    for (const a of flat) {
+      const dn = (a?.displayName || a?.fullName || `${a?.firstName || ""} ${a?.lastName || ""}`.trim());
+      const last = (a?.lastName || dn.split(/\s+/).pop() || "").toUpperCase();
+      if (!last) continue;
+      state.athletesByKey[`${sport}:${teamAbbr}:${last}`] = {
+        displayName: dn || last,
+        headshot: a?.headshot?.href || null,
+        jersey: a?.jersey || null,
+        position: a?.position?.abbreviation || a?.position?.name || null,
+      };
+    }
+  }
 }
 
 function updateFooter() {
@@ -577,30 +646,35 @@ function legGameLevelGroup(ticker) {
 // yet (game pregame) or the athlete can't be found by last-name match.
 function findAthleteMeta(prop, boxscores) {
   if (!prop) return null;
+  // Prefer the boxscore — it's the source of truth once the game starts and
+  // matches the stat resolver. Falls back to the per-team roster index
+  // (populated by fetchNeededRosters), which works pregame too.
   const ev = findEspnEvent(prop.gameKey, state.scoreboards);
   const eventId = String(ev?.id || "");
-  if (!eventId) return null;
-  const box = boxscores[`${prop.sport}:${eventId}`];
+  const box = eventId ? boxscores[`${prop.sport}:${eventId}`] : null;
   const players = box?.boxscore?.players || [];
   const teamGroup = players.find(
     (g) => (g?.team?.abbreviation || "").toUpperCase() === prop.team.toUpperCase(),
   );
-  if (!teamGroup) return null;
-  for (const sg of teamGroup.statistics || []) {
-    for (const a of sg.athletes || []) {
-      const nm = (a?.athlete?.displayName || "").trim();
-      const last = nm.split(/\s+/).pop().toUpperCase();
-      if (last === prop.lastName.toUpperCase()) {
-        return {
-          displayName: nm,
-          headshot: a.athlete?.headshot?.href || null,
-          jersey: a.athlete?.jersey || null,
-          position: a.athlete?.position?.abbreviation || null,
-        };
+  if (teamGroup) {
+    for (const sg of teamGroup.statistics || []) {
+      for (const a of sg.athletes || []) {
+        const nm = (a?.athlete?.displayName || "").trim();
+        const last = nm.split(/\s+/).pop().toUpperCase();
+        if (last === prop.lastName.toUpperCase()) {
+          return {
+            displayName: nm,
+            headshot: a.athlete?.headshot?.href || null,
+            jersey: a.athlete?.jersey || null,
+            position: a.athlete?.position?.abbreviation || null,
+          };
+        }
       }
     }
   }
-  return null;
+  // Roster-index fallback — keyed by (sport, kalshi-abbr, LASTNAME).
+  const k = `${prop.sport}:${(prop.team || "").toUpperCase()}:${(prop.lastName || "").toUpperCase()}`;
+  return state.athletesByKey?.[k] || null;
 }
 
 // ---------- Game-level scenario tracker ------------------------------------
