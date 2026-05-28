@@ -335,7 +335,7 @@ function findEspnTeamId(prop) {
   const ev = findEspnEvent(prop.gameKey, state.scoreboards);
   const comps = ev?.competitions?.[0]?.competitors || [];
   for (const c of comps) {
-    const abbr = normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase());
+    const abbr = normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase(), prop.sport);
     if (abbr === (prop.team || "").toUpperCase()) {
       return c?.team?.id || null;
     }
@@ -371,14 +371,15 @@ async function fetchNeededRosters() {
   for (const [key, payload] of Object.entries(state.rosters)) {
     const [sport] = key.split(":");
     const teamAbbr = normAbbrForKalshi(
-      (payload?.team?.abbreviation || "").toUpperCase()
+      (payload?.team?.abbreviation || "").toUpperCase(),
+      sport,
     );
     if (!teamAbbr) continue;
     const top = payload?.athletes || [];
     const flat = top.flatMap((x) => (Array.isArray(x.items) ? x.items : [x]));
     for (const a of flat) {
       const dn = (a?.displayName || a?.fullName || `${a?.firstName || ""} ${a?.lastName || ""}`.trim());
-      const last = (a?.lastName || dn.split(/\s+/).pop() || "").toUpperCase();
+      const last = normLast(a?.lastName || dn.split(/\s+/).pop() || "");
       if (!last) continue;
       state.athletesByKey[`${sport}:${teamAbbr}:${last}`] = {
         displayName: dn || last,
@@ -428,19 +429,20 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
 
   const players = box?.boxscore?.players || [];
   const teamGroup = players.find(
-    (g) => (g?.team?.abbreviation || "").toUpperCase() === prop.team.toUpperCase(),
+    (g) => normAbbrForKalshi((g?.team?.abbreviation || "").toUpperCase(), prop.sport)
+      === prop.team.toUpperCase(),
   );
   if (!teamGroup) return { current: null, status: "loading" };
 
   // Find the player in any stat group whose last name matches.
   let current = null;
   let label = "";
+  const propLast = normLast(prop.lastName);
   for (const sg of teamGroup.statistics || []) {
     const keys = sg.keys || [];
     const ath = (sg.athletes || []).find((a) => {
       const nm = (a?.athlete?.displayName || "").trim();
-      const last = nm.split(/\s+/).pop().toUpperCase();
-      return last === prop.lastName.toUpperCase();
+      return normLast(nm.split(/\s+/).pop()) === propLast;
     });
     if (!ath) continue;
     const stats = ath.stats || [];
@@ -561,16 +563,34 @@ function legGameGroupKey(ticker) {
 }
 
 // ESPN team-abbr -> Kalshi team-abbr where the two providers diverge.
-// Canonical source: sandbox/build_start_times.py#MLB_CODE.
+// Sport-scoped because NBA and MLB Nationals/Wizards both use "WAS"/"WSH"
+// in their respective leagues with opposite mapping. MLB source of truth:
+// sandbox/build_start_times.py#MLB_CODE. NBA was derived empirically from
+// labels.js#TEAM_LOGO_SLUG (Kalshi->ESPN slug) inverted.
 const ESPN_TO_KALSHI_ABBR = {
-  // MLB
-  CHW: "CWS",   // White Sox
-  ARI: "AZ",    // Diamondbacks
-  OAK: "ATH",   // Athletics (Kalshi kept ATH after the Sacramento move)
-  WAS: "WSH",   // Nationals
+  mlb: {
+    CHW: "CWS",   // White Sox
+    ARI: "AZ",    // Diamondbacks
+    OAK: "ATH",   // Athletics (Kalshi kept ATH after the Sacramento move)
+    WAS: "WSH",   // Nationals
+  },
+  nba: {
+    GS: "GSW",    // Warriors
+    NO: "NOP",    // Pelicans
+    NY: "NYK",    // Knicks
+    SA: "SAS",    // Spurs
+    UTAH: "UTA",  // Jazz
+    WSH: "WAS",   // Wizards (note: inverse of MLB Nationals!)
+  },
 };
-function normAbbrForKalshi(espnAbbr) {
-  return ESPN_TO_KALSHI_ABBR[espnAbbr] || espnAbbr;
+function normAbbrForKalshi(espnAbbr, sport) {
+  if (!espnAbbr) return espnAbbr;
+  return ESPN_TO_KALSHI_ABBR[sport]?.[espnAbbr] || espnAbbr;
+}
+// Strip non-alpha so hyphens, apostrophes, periods, and spaces don't keep
+// "Gilgeous-Alexander" from matching Kalshi's "GILGEOUSALEXANDER".
+function normLast(s) {
+  return (s || "").toUpperCase().replace(/[^A-Z]/g, "");
 }
 
 // Find the ESPN event for a game-card key, restricted to that game's sport
@@ -591,7 +611,7 @@ function findEspnEventForGameKey(gameKey) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
       const abbrs = (ev?.competitions?.[0]?.competitors || [])
-        .map((c) => normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase()))
+        .map((c) => normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase(), sport))
         .filter(Boolean);
       if (abbrs.length >= 2 && abbrs.every((a) => teams.includes(a))) return ev;
     }
@@ -653,28 +673,41 @@ function findAthleteMeta(prop, boxscores) {
   const eventId = String(ev?.id || "");
   const box = eventId ? boxscores[`${prop.sport}:${eventId}`] : null;
   const players = box?.boxscore?.players || [];
+  // Boxscore.players[].team.abbreviation comes from ESPN — alias it before
+  // matching the prop's Kalshi abbr.
   const teamGroup = players.find(
-    (g) => (g?.team?.abbreviation || "").toUpperCase() === prop.team.toUpperCase(),
+    (g) => normAbbrForKalshi((g?.team?.abbreviation || "").toUpperCase(), prop.sport)
+      === prop.team.toUpperCase(),
   );
+  const propLast = normLast(prop.lastName);
+  let boxMeta = null;
   if (teamGroup) {
     for (const sg of teamGroup.statistics || []) {
       for (const a of sg.athletes || []) {
         const nm = (a?.athlete?.displayName || "").trim();
-        const last = nm.split(/\s+/).pop().toUpperCase();
-        if (last === prop.lastName.toUpperCase()) {
-          return {
+        const last = normLast(nm.split(/\s+/).pop());
+        if (last === propLast) {
+          boxMeta = {
             displayName: nm,
             headshot: a.athlete?.headshot?.href || null,
             jersey: a.athlete?.jersey || null,
             position: a.athlete?.position?.abbreviation || null,
           };
+          break;
         }
       }
+      if (boxMeta) break;
     }
   }
-  // Roster-index fallback — keyed by (sport, kalshi-abbr, LASTNAME).
-  const k = `${prop.sport}:${(prop.team || "").toUpperCase()}:${(prop.lastName || "").toUpperCase()}`;
-  return state.athletesByKey?.[k] || null;
+  // Roster-index fallback — keyed by (sport, kalshi-abbr, LASTNAME-stripped).
+  const k = `${prop.sport}:${(prop.team || "").toUpperCase()}:${propLast}`;
+  const rosterMeta = state.athletesByKey?.[k] || null;
+  // If boxscore found the player but with no headshot (happens for some
+  // bench guys mid-season), borrow the headshot from the roster index.
+  if (boxMeta && !boxMeta.headshot && rosterMeta?.headshot) {
+    boxMeta.headshot = rosterMeta.headshot;
+  }
+  return boxMeta || rosterMeta;
 }
 
 // ---------- Game-level scenario tracker ------------------------------------
@@ -871,7 +904,9 @@ function computeGameScenarios(g, parlays) {
 
 // Compact live-state summary for an ESPN event: { state, score, periodLabel }.
 // score is "AWAY n - n HOME" with the away team first (ESPN convention).
-function liveStateFor(ev) {
+// `sport` is required so team-abbr aliasing (e.g. ESPN "SA" -> Kalshi "SAS")
+// resolves to the convention the rest of the card uses.
+function liveStateFor(ev, sport) {
   if (!ev) return null;
   const comp = ev?.competitions?.[0];
   if (!comp) return null;
@@ -882,8 +917,8 @@ function liveStateFor(ev) {
   const competitors = comp.competitors || [];
   const away = competitors.find((c) => c.homeAway === "away") || competitors[0];
   const home = competitors.find((c) => c.homeAway === "home") || competitors[1];
-  const awayAbbr = normAbbrForKalshi((away?.team?.abbreviation || "").toUpperCase());
-  const homeAbbr = normAbbrForKalshi((home?.team?.abbreviation || "").toUpperCase());
+  const awayAbbr = normAbbrForKalshi((away?.team?.abbreviation || "").toUpperCase(), sport);
+  const homeAbbr = normAbbrForKalshi((home?.team?.abbreviation || "").toUpperCase(), sport);
   const awayScore = parseInt(away?.score ?? "0", 10);
   const homeScore = parseInt(home?.score ?? "0", 10);
   const recordOf = (c) => (c?.records?.[0]?.summary || c?.records?.[0]?.displayValue || "");
@@ -1090,7 +1125,7 @@ function renderGameCards() {
     const collapsed = !state.gameExpanded.has(g.key);
     const chevron = collapsed ? "▸" : "▾";
 
-    const live = liveStateFor(findEspnEventForGameKey(g.key));
+    const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
     let scorePanel = "";
     if (live) {
       const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
