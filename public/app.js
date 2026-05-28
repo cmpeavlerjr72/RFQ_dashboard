@@ -1283,10 +1283,61 @@ function renderGameCards() {
           : `<div class="player-head fallback">${escapeHtml(p.lastName.slice(0, 1))}</div>`;
         const jersey = meta.jersey || p.jersey;
         const posCell = [p.team, meta.position, jersey ? `#${jersey}` : ""].filter(Boolean).join(" · ");
-        const legs = p.legs
-          .slice()
-          .sort((a, b) => b.row.maxWin - a.row.maxWin)
-          .map(({ row, prop }) => legRowHtml(row, prop)).join("");
+
+        // Group this player's legs by stat code (PTS / REB / 3PT / HIT / KS
+        // / ...). For each stat we resolve the player's current value once
+        // and render a compact ladder of thresholds as chips. A "u25" chip
+        // is green when current < 25 (still alive for us), red when
+        // current >= 25 (buyer locked it), grey when no current is known.
+        const byStat = new Map();
+        for (const it of p.legs) {
+          const s = it.prop.stat;
+          if (!byStat.has(s)) byStat.set(s, []);
+          byStat.get(s).push(it);
+        }
+        // Stat-display ordering: high-volume / headline stats first.
+        const STAT_ORDER = [
+          "PTS", "REB", "AST", "3PT", "STL", "BLK",
+          "HIT", "HR", "HRR", "TB", "RBI", "R", "BB",
+          "KS", "IP",
+        ];
+        const orderedStats = [...byStat.keys()].sort((a, b) => {
+          const ai = STAT_ORDER.indexOf(a);
+          const bi = STAT_ORDER.indexOf(b);
+          return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
+        });
+        const ladders = orderedStats.map((stat) => {
+          const items = byStat.get(stat).slice().sort((a, b) => a.prop.threshold - b.prop.threshold);
+          const sampleProp = items[0].prop;
+          const pr = resolvePlayerProp(sampleProp, state.scoreboards, state.boxscores);
+          const current = pr?.current;
+          const currentChip = current != null
+            ? `<span class="stat-current">${current}</span>`
+            : `<span class="stat-current pending">—</span>`;
+          const chips = items.map(({ row, prop }) => {
+            const dead = current != null && current >= prop.threshold;
+            const cls = dead ? "neg" : current != null ? "pos" : "pending";
+            const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
+            const tip =
+              `Buyer needs ${stat} ≥ ${prop.threshold} (we're under ${prop.threshold}).\n` +
+              `${current != null ? `Current ${stat}: ${current} — ${dead ? "buyer hit it (locked)" : "still alive"}\n` : ""}` +
+              `In ${row.parlays} parlay${row.parlays === 1 ? "" : "s"} · at risk ${fmtMoney(row.exposure)} · ` +
+              `+$${row.maxWin.toFixed(2)} if it breaks our way · win chance ${pUsPct}`;
+            return `
+              <span class="ladder-chip ${cls}" title="${escapeHtml(tip)}">
+                <span class="ladder-chip-thresh">u${prop.threshold}</span>
+                <span class="ladder-chip-meta">+$${row.maxWin.toFixed(0)}</span>
+              </span>`;
+          }).join("");
+          return `
+            <div class="stat-ladder">
+              <div class="stat-ladder-head">
+                <span class="stat-label">${escapeHtml(stat)}</span>
+                ${currentChip}
+              </div>
+              <div class="stat-ladder-chips">${chips}</div>
+            </div>`;
+        }).join("");
         return `
           <div class="player-block">
             <div class="player-head-row">
@@ -1296,7 +1347,7 @@ function renderGameCards() {
                 <div class="player-pos">${escapeHtml(posCell)}</div>
               </div>
             </div>
-            ${legs}
+            ${ladders}
           </div>`;
       }).join("");
       playerSection = `

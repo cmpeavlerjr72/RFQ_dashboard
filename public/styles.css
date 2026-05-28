@@ -502,6 +502,55 @@ h2 {
   font-size: 11px; color: var(--muted);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
+/* Stat ladder — compact per-stat row inside a player block */
+.game-card-body .stat-ladder {
+  display: flex; align-items: center; gap: 10px;
+  padding: 3px 0;
+}
+.game-card-body .stat-ladder-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-width: 86px; flex-shrink: 0;
+}
+.game-card-body .stat-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  color: var(--muted); text-transform: uppercase;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.game-card-body .stat-current {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px; font-weight: 700; color: var(--fg);
+  background: rgba(0,0,0,.05); padding: 1px 6px; border-radius: 3px;
+  min-width: 24px; text-align: center;
+}
+.game-card-body .stat-current.pending { color: var(--muted-2); font-weight: 500; }
+.game-card-body .stat-ladder-chips {
+  display: flex; gap: 5px; flex-wrap: wrap;
+}
+.game-card-body .ladder-chip {
+  display: inline-flex; flex-direction: column; align-items: center;
+  padding: 2px 7px 3px; border-radius: 5px; cursor: help;
+  background: var(--card-head); border: 1px solid var(--border);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  line-height: 1.1;
+}
+.game-card-body .ladder-chip .ladder-chip-thresh {
+  font-size: 11px; font-weight: 700;
+}
+.game-card-body .ladder-chip .ladder-chip-meta {
+  font-size: 9px; color: var(--muted-2); margin-top: 1px;
+}
+.game-card-body .ladder-chip.pos {
+  background: var(--pos-bg); border-color: rgba(21,128,61,.4); color: var(--pos);
+}
+.game-card-body .ladder-chip.pos .ladder-chip-meta { color: rgba(21,128,61,.85); }
+.game-card-body .ladder-chip.neg {
+  background: var(--neg-bg); border-color: rgba(190,18,60,.4); color: var(--neg);
+  text-decoration: line-through;
+}
+.game-card-body .ladder-chip.neg .ladder-chip-meta {
+  color: rgba(190,18,60,.85); text-decoration: line-through;
+}
+.game-card-body .ladder-chip.pending { color: var(--muted-2); }
 .game-card-body .scenarios {
   margin-top: 10px; padding-top: 8px;
   border-top: 1px solid var(--border);
