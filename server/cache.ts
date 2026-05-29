@@ -20,7 +20,12 @@ export class TTLCache<V> {
   get(key: string): V | undefined {
     const e = this.store.get(key);
     if (!e) return undefined;
-    if (Date.now() - e.fetchedAt > e.ttlMs) return undefined;
+    // >= so a ttl of 0 means "always expired" — this is how the force/fresh
+    // path invalidates (`set(key, {}, 0)`). With strict `>`, elapsed 0 was not
+    // > 0, so a forced refresh returned the empty placeholder instead of
+    // refetching (broke fresh=1 — e.g. the merged soccer scoreboard came back
+    // empty right after a manual refresh).
+    if (Date.now() - e.fetchedAt >= e.ttlMs) return undefined;
     return e.value;
   }
 

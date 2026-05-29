@@ -123,7 +123,8 @@ app.get("/api/kalshi/recover/:ticker", async (req, res, next) => {
 // ESPN endpoint
 // ----------------------------------------------------------------------------
 
-const VALID_SPORTS: Sport[] = ["mlb", "nhl", "nba", "ufc", "atp", "wta"];
+const VALID_SPORTS: Sport[] = ["mlb", "nhl", "nba", "ufc", "atp", "wta",
+  "epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"];
 
 app.get("/api/scoreboard", async (req, res, next) => {
   try {
