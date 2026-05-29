@@ -122,6 +122,11 @@ export const SOCCER_LEAGUES = {
   KXLIGUE1TOTAL:    "Ligue 1 total",
   KXLIGUE1BTTS:     "Ligue 1 BTTS",
   KXLIGUE11H:       "Ligue 1 1H",
+  // UEFA Champions League
+  KXUCLGAME:        "Champions League",
+  KXUCLSPREAD:      "Champions League spread",
+  KXUCLTOTAL:       "Champions League total",
+  KXUCLBTTS:        "Champions League BTTS",
 };
 
 export const NBA_TEAMS = {
@@ -446,8 +451,17 @@ const SOCCER_LOGOS = {
 
 /** Soccer team logo URL by league + Kalshi abbrev. Empty when unmapped. */
 export function soccerLogoUrl(league, abbr) {
-  if (!league || !abbr) return "";
-  return SOCCER_LOGOS[league]?.[abbr] || "";
+  if (!abbr) return "";
+  const direct = league && SOCCER_LOGOS[league]?.[abbr];
+  if (direct) return direct;
+  // Cross-league fallback: UCL/Europa pull clubs from many domestic leagues
+  // (and have no logo table of their own), so search every league for the
+  // abbr. Only runs when the league-specific lookup misses, so known-league
+  // disambiguation (LEV, BRE) is unaffected.
+  for (const tbl of Object.values(SOCCER_LOGOS)) {
+    if (tbl[abbr]) return tbl[abbr];
+  }
+  return "";
 }
 
 /**

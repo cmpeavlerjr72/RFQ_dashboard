@@ -24,6 +24,7 @@ const SOCCER_LEAGUE_FROM_PREFIX = {
   KXBUNDESLIGA1H: "BUNDESLIGA",
   KXLIGUE1GAME: "LIGUE1", KXLIGUE1SPREAD: "LIGUE1", KXLIGUE1TOTAL: "LIGUE1",
   KXLIGUE1BTTS: "LIGUE1", KXLIGUE11H: "LIGUE1",
+  KXUCLGAME: "UCL", KXUCLSPREAD: "UCL", KXUCLTOTAL: "UCL", KXUCLBTTS: "UCL",
 };
 
 function soccerLeagueOf(ticker) {
@@ -858,6 +859,12 @@ export function legGameKey(ticker) {
     const rest = ticker.split("-")[1];
     return `UFC ${rest}`;
   }
+  // Soccer — needed so legResolutionForUs can find the ESPN event and color
+  // the leg live (without this, soccer legs never resolved → all grey chips).
+  if (/^KX(EPL|LALIGA|SERIEA|BUNDESLIGA|LIGUE1|UCL)/.test(ticker)) {
+    const rest = ticker.split("-")[1];
+    return rest ? `soccer ${rest}` : "";
+  }
   return "";
 }
 
@@ -872,6 +879,21 @@ export function legGameKey(ticker) {
  * matchup Game 4 that completed yesterday (both events live in different
  * date scoreboards, both share team abbrs).
  */
+// ESPN team-abbr -> Kalshi team-abbr where the two providers diverge. Mirrors
+// app.js ESPN_TO_KALSHI_ABBR. Needed because findEspnEvent matches ESPN abbrs
+// by substring against the Kalshi gameKey: e.g. ESPN "ARI" must normalize to
+// "AZ" or "AZSEA".includes("ARI") is false and the D-backs event never
+// resolves (no roster/headshots/live tracking). gKey's leading token gives
+// the sport (mlb/nba/nhl) for the sport-scoped lookup.
+const ESPN_TO_KALSHI = {
+  mlb: { CHW: "CWS", ARI: "AZ", OAK: "ATH", WAS: "WSH" },
+  nba: { GS: "GSW", NO: "NOP", NY: "NYK", SA: "SAS", UTAH: "UTA", WSH: "WAS" },
+};
+function normEspnAbbr(abbr, gKey) {
+  const sport = (gKey || "").split(" ")[0].toLowerCase();
+  return ESPN_TO_KALSHI[sport]?.[abbr] || abbr;
+}
+
 export function findEspnEvent(gKey, scoreboards) {
   // Extract date token from gKey if present (e.g. "NHL 26MAY29MTLCAR"
   // or "MLB 26MAY281610LAADET").
@@ -899,7 +921,7 @@ export function findEspnEvent(gKey, scoreboards) {
       const competitors = ev?.competitions?.[0]?.competitors || [];
       // Team sports
       const abbrs = competitors
-        .map((c) => (c?.team?.abbreviation || "").toUpperCase())
+        .map((c) => normEspnAbbr((c?.team?.abbreviation || "").toUpperCase(), gKey))
         .filter(Boolean);
       if (abbrs.length >= 2 && abbrs.every((a) => gKey.includes(a))) {
         return ev;
