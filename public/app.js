@@ -1140,9 +1140,27 @@ function liveStateFor(ev, sport) {
   else if (state === "post") periodLabel = detail || "Final";
   else if (state === "in") {
     const isSoccer = ["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"].includes(sport);
-    if (isSoccer) periodLabel = clock || detail || "In Progress";   // ESPN soccer clock is e.g. "67'"
-    else if (period != null && clock) periodLabel = `Q${period} ${clock}`;
-    else periodLabel = detail || "In Progress";
+    if (sport === "mlb") {
+      // Baseball: top/bottom of an inning, not quarters. ESPN shortDetail is
+      // "Top 8th" / "Bot 8th" / "Mid 8th" / "End 8th". Render ▲8 / ▼8 with
+      // Mid/End spelled out; fall back to the raw detail if it's unexpected.
+      const inn = period || (detail.match(/(\d+)/) || [])[1] || "";
+      const d = (detail || "").toLowerCase();
+      if (d.startsWith("top")) periodLabel = `▲${inn}`;
+      else if (d.startsWith("bot")) periodLabel = `▼${inn}`;
+      else if (d.startsWith("mid")) periodLabel = `Mid ${inn}`;
+      else if (d.startsWith("end")) periodLabel = `End ${inn}`;
+      else periodLabel = detail || `Inn ${inn}`;
+    } else if (sport === "nhl") {
+      // Hockey: periods, not quarters (P4 = OT).
+      periodLabel = period != null ? `P${period}${clock ? " " + clock : ""}` : (detail || "In Progress");
+    } else if (isSoccer) {
+      periodLabel = clock || detail || "In Progress";   // ESPN soccer clock is e.g. "67'"
+    } else if (period != null && clock) {
+      periodLabel = `Q${period} ${clock}`;
+    } else {
+      periodLabel = detail || "In Progress";
+    }
   }
   // MLB-only: extract 1st-inning runs from linescores once the inning is
   // complete (period > 1, i.e., the game has moved on, or the game is
