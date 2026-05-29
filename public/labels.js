@@ -785,6 +785,41 @@ export function parsePlayerProp(ticker) {
       sport: "nba",
     };
   }
+  // NHL: KXNHL<STAT>-<dateTeams>-<TEAM><initial><LAST><jersey>-<thr>
+  // Player stats are GOAL / AST / PTS / FIRSTGOAL; GAME/SPREAD/TOTAL are
+  // game-level (handled elsewhere). Same blob shape as NBA (no HHMM in the
+  // date chunk). Added 2026-05-29 — without this branch NHL player props
+  // were never parsed, so they got no headshot/counter/chip.
+  const nhl = ticker.match(/^KXNHL([A-Z]+)-(\d{2}[A-Z]{3}\d{2}[A-Z]+)-([A-Z]+\d+)-(\d+)$/);
+  if (nhl && !["GAME", "SPREAD", "TOTAL"].includes(nhl[1])) {
+    const [, stat, dt, playerBlob, thresholdStr] = nhl;
+    let teamAbbr = "";
+    let lastName = "";
+    let jersey = "";
+    for (let teamLen = 4; teamLen >= 2; teamLen--) {
+      const candidate = playerBlob.slice(0, teamLen);
+      if (NHL_TEAMS[candidate]) {
+        teamAbbr = candidate;
+        const tail = playerBlob.slice(teamLen);
+        const jerseyMatch = tail.match(/^([A-Z]+)(\d+)$/);
+        if (jerseyMatch) {
+          const initialAndLast = jerseyMatch[1];
+          lastName = initialAndLast.length > 1 ? initialAndLast.slice(1) : initialAndLast;
+          jersey = jerseyMatch[2];
+        }
+        break;
+      }
+    }
+    return {
+      stat,
+      team: teamAbbr,
+      lastName,
+      jersey,
+      threshold: parseInt(thresholdStr, 10),
+      gameKey: `NHL ${dt}`,
+      sport: "nhl",
+    };
+  }
   return null;
 }
 

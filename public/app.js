@@ -3,7 +3,8 @@
 // the buyer took, with NO-side odds. Manual-refresh by default.
 
 import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp, setLogoContext } from "/labels.js";
-import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker } from "/teams.js";
+import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker,
+         NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -87,6 +88,11 @@ function dollarsToC(s) {
 const SPORT_PREFIXES = {
   KXMLB: "mlb", KXNHL: "nhl", KXNBA: "nba",
   KXATPMATCH: "atp", KXWTAMATCH: "wta", KXUFCFIGHT: "ufc",
+  // Soccer — per-league sport codes (each maps to its own ESPN slug
+  // server-side). Enables game cards + live score/clock tracking. Game-level
+  // only (ML/spread/total/BTTS); soccer has no player props in our universe.
+  KXEPL: "epl", KXLALIGA: "laliga", KXSERIEA: "seriea",
+  KXBUNDESLIGA: "bundesliga", KXLIGUE1: "ligue1", KXUCL: "ucl",
 };
 const MONTHS = { JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12 };
 
@@ -471,7 +477,24 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
       return isFinite(f) ? f : null;
     }
 
-    if (prop.stat === "HR") {
+    if (prop.sport === "nhl") {
+      // NHL skater box keys: goals, assists (no "points" key — compute it).
+      // FIRSTGOAL needs scoring-play parsing — left null (stays pending).
+      if (prop.stat === "GOAL") {
+        current = statByKey("goals");
+        label = `G: ${current ?? "-"}`;
+      } else if (prop.stat === "AST") {
+        current = statByKey("assists");
+        label = `A: ${current ?? "-"}`;
+      } else if (prop.stat === "PTS") {
+        const g = statByKey("goals");
+        const a = statByKey("assists");
+        if (g != null || a != null) {
+          current = (g ?? 0) + (a ?? 0);
+          label = `${g ?? 0}G ${a ?? 0}A = ${current}`;
+        }
+      }
+    } else if (prop.stat === "HR") {
       current = statByKey("homeRuns");
       label = `HR: ${current ?? "-"}`;
     } else if (prop.stat === "HIT" || prop.stat === "HITS") {
@@ -822,7 +845,7 @@ function parseGameLevelLeg(ticker) {
   if (mGame) {
     const dt = mGame[1];
     const pick = mGame[2];
-    const teams = parseTeamsFromChunk(dt);
+    const teams = parseTeamsFromChunk(dt, sport);
     if (!teams) return null;
     return { kind: "ml", sport, teams, pick };
   }
@@ -831,7 +854,7 @@ function parseGameLevelLeg(ticker) {
     const dt = mSpread[1];
     const pick = mSpread[2];
     const threshold = parseInt(mSpread[3], 10);
-    const teams = parseTeamsFromChunk(dt);
+    const teams = parseTeamsFromChunk(dt, sport);
     if (!teams) return null;
     return { kind: "spread", sport, teams, pick, threshold };
   }
@@ -839,7 +862,7 @@ function parseGameLevelLeg(ticker) {
   if (mTotal) {
     const dt = mTotal[1];
     const threshold = parseInt(mTotal[2], 10);
-    const teams = parseTeamsFromChunk(dt);
+    const teams = parseTeamsFromChunk(dt, sport);
     if (!teams) return null;
     return { kind: "total", sport, teams, threshold };
   }
@@ -847,7 +870,7 @@ function parseGameLevelLeg(ticker) {
   // suffix is optional (game-level "any team" is most common).
   const mRfi = ticker.match(/^KX[A-Z]+RFI-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)(?:-[A-Z]+)?$/);
   if (mRfi) {
-    const teams = parseTeamsFromChunk(mRfi[1]);
+    const teams = parseTeamsFromChunk(mRfi[1], sport);
     if (!teams) return null;
     return { kind: "rfi", sport, teams };
   }
@@ -881,12 +904,38 @@ function ourCheeredTeam(parsed, buyerSide) {
 // Extract [away,home] team abbrs from a Kalshi event chunk like "26MAY28OKCSAS"
 // or "26MAY281310LAADET". We don't currently differentiate which is home —
 // we assume the first abbr is the away team (Kalshi's convention).
-function parseTeamsFromChunk(chunk) {
+// Known-abbreviation sets per sport, used to disambiguate the team split.
+// Keyed by the sport codes legSport() returns. Soccer leagues all share the
+// combined SOCCER_TEAMS table.
+const KNOWN_ABBRS = {
+  mlb: new Set(Object.keys(MLB_TEAMS)),
+  nhl: new Set(Object.keys(NHL_TEAMS)),
+  nba: new Set(Object.keys(NBA_TEAMS)),
+  epl: new Set(Object.keys(SOCCER_TEAMS)),
+  laliga: new Set(Object.keys(SOCCER_TEAMS)),
+  seriea: new Set(Object.keys(SOCCER_TEAMS)),
+  bundesliga: new Set(Object.keys(SOCCER_TEAMS)),
+  ligue1: new Set(Object.keys(SOCCER_TEAMS)),
+  ucl: new Set(Object.keys(SOCCER_TEAMS)),
+};
+function parseTeamsFromChunk(chunk, sport) {
   const m = chunk.match(/^\d{2}[A-Z]{3}\d{2}(?:\d{4})?([A-Z]+)$/);
   if (!m) return null;
   const teams = m[1];
   if (teams.length < 4 || teams.length > 8) return null;
-  // Try a 3-3 split first (most common: NBA/NHL/MLB 3-letter abbrs).
+  // Prefer a split where BOTH halves are real abbreviations for this sport.
+  // This is what correctly handles variable-length codes like MLB "AZ"
+  // (AZSEA -> AZ|SEA, not the length-heuristic's wrong AZS|EA) and soccer's
+  // mix of 3- and 4-char codes. Shortest away-prefix that yields two known
+  // abbrs wins, matching Kalshi's away-first convention.
+  const known = KNOWN_ABBRS[sport];
+  if (known) {
+    for (let i = 2; i <= teams.length - 2; i++) {
+      const a = teams.slice(0, i), b = teams.slice(i);
+      if (known.has(a) && known.has(b)) return [a, b];
+    }
+  }
+  // Fallback when we have no abbr table (or no clean match): old 3/2/4 heuristic.
   for (const len of [3, 2, 4]) {
     if (teams.length - len < 2 || teams.length - len > 4) continue;
     return [teams.slice(0, len), teams.slice(len)];
@@ -1090,7 +1139,9 @@ function liveStateFor(ev, sport) {
   if (state === "pre") periodLabel = detail || "Pregame";
   else if (state === "post") periodLabel = detail || "Final";
   else if (state === "in") {
-    if (period != null && clock) periodLabel = `Q${period} ${clock}`;
+    const isSoccer = ["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"].includes(sport);
+    if (isSoccer) periodLabel = clock || detail || "In Progress";   // ESPN soccer clock is e.g. "67'"
+    else if (period != null && clock) periodLabel = `Q${period} ${clock}`;
     else periodLabel = detail || "In Progress";
   }
   // MLB-only: extract 1st-inning runs from linescores once the inning is
@@ -1966,6 +2017,13 @@ function renderParlays() {
  *   pending        - game not started
  *   loading        - game live but boxscore not loaded yet / stat unknown
  */
+// Ticker-shape matchers spanning every team sport incl. soccer leagues, so the
+// live resolver below isn't a brittle per-sport startsWith chain.
+const SOCCER_LEAGUE_CODES = "EPL|LALIGA|SERIEA|BUNDESLIGA|LIGUE1|UCL";
+const GAME_TICKER_RE = new RegExp(`^KX(MLB|NHL|NBA|${SOCCER_LEAGUE_CODES})GAME-`);
+const TOTAL_TICKER_RE = new RegExp(`^KX(MLB|NHL|NBA|${SOCCER_LEAGUE_CODES})TOTAL-`);
+const BTTS_TICKER_RE = new RegExp(`^KX(${SOCCER_LEAGUE_CODES})BTTS-`);
+
 function legResolutionForUs(leg, scoreboards, boxscores) {
   const t = leg.ticker;
   const ev = findEspnEvent(legGameKey(t), scoreboards);
@@ -2000,10 +2058,19 @@ function legResolutionForUs(leg, scoreboards, boxscores) {
     const winner = competitors.find((c) => c?.winner === true);
     const winnerAbbr = (winner?.team?.abbreviation || "").toUpperCase();
     const winnerLast = (winner?.athlete?.displayName || "").trim().split(/\s+/).pop().slice(0, 3).toUpperCase();
-    if (t.startsWith("KXMLBGAME-") || t.startsWith("KXNHLGAME-") || t.startsWith("KXNBAGAME-")) {
+    if (GAME_TICKER_RE.test(t)) {
+      // Soccer ML settles on regulation: a draw means no winner → the picked
+      // team's YES did not hit, which the winnerAbbr="" comparison handles.
       const pickAbbr = t.split("-").pop().toUpperCase();
       const yesHits = pickAbbr === winnerAbbr;
       const buyerWins = (buyerSide === "yes") ? yesHits : !yesHits;
+      return { status: buyerWins ? "dead" : "alive", live: liveLabel,
+               stat: scoreLine(competitors) };
+    }
+    if (BTTS_TICKER_RE.test(t)) {
+      const bothScored = competitors.length >= 2 &&
+        competitors.every((c) => parseInt(c?.score || "0", 10) > 0);
+      const buyerWins = (buyerSide === "yes") ? bothScored : !bothScored;
       return { status: buyerWins ? "dead" : "alive", live: liveLabel,
                stat: scoreLine(competitors) };
     }
@@ -2014,7 +2081,7 @@ function legResolutionForUs(leg, scoreboards, boxscores) {
       return { status: buyerWins ? "dead" : "alive", live: liveLabel,
                stat: scoreLine(competitors) };
     }
-    if (t.startsWith("KXMLBTOTAL-") || t.startsWith("KXNHLTOTAL-") || t.startsWith("KXNBATOTAL-")) {
+    if (TOTAL_TICKER_RE.test(t)) {
       const totalScore = competitors.reduce((s, c) => s + parseInt(c?.score || "0", 10), 0);
       const m = t.match(/-(\d+)$/);
       if (m) {
@@ -2029,7 +2096,18 @@ function legResolutionForUs(leg, scoreboards, boxscores) {
 
   // In-progress game / total
   if (status.state === "in") {
-    if (t.startsWith("KXMLBTOTAL-") || t.startsWith("KXNHLTOTAL-") || t.startsWith("KXNBATOTAL-")) {
+    if (BTTS_TICKER_RE.test(t)) {
+      // BTTS-YES irreversibly locks the moment both teams have scored (goals
+      // don't decrease); BTTS-NO only settles at full time. Mirror over-total.
+      const bothScored = competitors.length >= 2 &&
+        competitors.every((c) => parseInt(c?.score || "0", 10) > 0);
+      if (bothScored) {
+        return { status: buyerSide === "yes" ? "dead" : "alive",
+                 live: liveLabel, stat: `both scored — ${scoreLine(competitors)}` };
+      }
+      return { status: "alive_pending", live: liveLabel, stat: scoreLine(competitors) };
+    }
+    if (TOTAL_TICKER_RE.test(t)) {
       const totalScore = competitors.reduce((s, c) => s + parseInt(c?.score || "0", 10), 0);
       const m = t.match(/-(\d+)$/);
       if (m) {

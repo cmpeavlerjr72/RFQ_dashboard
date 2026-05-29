@@ -6,7 +6,18 @@
 
 import { TTLCache, fetchJsonWithTimeout } from "./cache.js";
 
-export type Sport = "mlb" | "nhl" | "nba" | "ufc" | "atp" | "wta";
+export type Sport =
+  | "mlb" | "nhl" | "nba" | "ufc" | "atp" | "wta"
+  // Soccer leagues — each maps to its own ESPN slug. Game cards + live
+  // score/clock tracking; no player props (no boxscore/roster use, but the
+  // slug maps below carry entries so the Record<Sport,string> stays total).
+  | "epl" | "laliga" | "seriea" | "bundesliga" | "ligue1" | "ucl";
+
+// ESPN soccer league slugs, shared by scoreboard/boxscore/roster URL builders.
+const SOCCER_SLUG: Record<string, string> = {
+  epl: "eng.1", laliga: "esp.1", seriea: "ita.1",
+  bundesliga: "ger.1", ligue1: "fra.1", ucl: "uefa.champions",
+};
 
 interface ScoreboardPayload {
   [k: string]: any;
@@ -29,6 +40,9 @@ function espnUrl(sport: Sport, dateYYYYMMDD: string): string {
       return `https://site.api.espn.com/apis/site/v2/sports/tennis/atp/scoreboard?dates=${d}&limit=300`;
     case "wta":
       return `https://site.api.espn.com/apis/site/v2/sports/tennis/wta/scoreboard?dates=${d}&limit=300`;
+    default:
+      // Soccer leagues
+      return `https://site.api.espn.com/apis/site/v2/sports/soccer/${SOCCER_SLUG[sport]}/scoreboard?dates=${d}&limit=300`;
   }
 }
 
@@ -77,6 +91,13 @@ function boxscoreUrl(sport: Sport, eventId: string): string {
     ufc: "mma/ufc",
     atp: "tennis/atp",
     wta: "tennis/wta",
+    // Soccer (no player props; present only to keep the Record total).
+    epl: "soccer/eng.1",
+    laliga: "soccer/esp.1",
+    seriea: "soccer/ita.1",
+    bundesliga: "soccer/ger.1",
+    ligue1: "soccer/fra.1",
+    ucl: "soccer/uefa.champions",
   };
   const seg = segByLeague[sport];
   return `https://site.api.espn.com/apis/site/v2/sports/${seg}/summary?event=${encodeURIComponent(eventId)}`;
@@ -126,6 +147,13 @@ function rosterUrl(sport: Sport, teamId: string): string {
     ufc: "mma/ufc",
     atp: "tennis/atp",
     wta: "tennis/wta",
+    // Soccer (no player props; present only to keep the Record total).
+    epl: "soccer/eng.1",
+    laliga: "soccer/esp.1",
+    seriea: "soccer/ita.1",
+    bundesliga: "soccer/ger.1",
+    ligue1: "soccer/fra.1",
+    ucl: "soccer/uefa.champions",
   };
   const seg = segByLeague[sport];
   return `https://site.api.espn.com/apis/site/v2/sports/${seg}/teams/${encodeURIComponent(teamId)}/roster`;
