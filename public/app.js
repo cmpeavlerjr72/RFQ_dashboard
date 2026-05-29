@@ -844,7 +844,7 @@ function parseGameLevelLeg(ticker) {
   // Generic prefixes that map to spread/ML/total across team sports.
   // Returns sport-specific game-level metadata; player props (ones with a
   // player-blob segment between matchup and threshold) return null below.
-  const mGame = ticker.match(/^KX[A-Z]+GAME-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+)$/);
+  const mGame = ticker.match(/^KX[A-Z0-9]+GAME-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+)$/);
   if (mGame) {
     const dt = mGame[1];
     const pick = mGame[2];
@@ -852,7 +852,7 @@ function parseGameLevelLeg(ticker) {
     if (!teams) return null;
     return { kind: "ml", sport, teams, pick };
   }
-  const mSpread = ticker.match(/^KX[A-Z]+SPREAD-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+)(\d+)$/);
+  const mSpread = ticker.match(/^KX[A-Z0-9]+SPREAD-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+)(\d+)$/);
   if (mSpread) {
     const dt = mSpread[1];
     const pick = mSpread[2];
@@ -861,7 +861,7 @@ function parseGameLevelLeg(ticker) {
     if (!teams) return null;
     return { kind: "spread", sport, teams, pick, threshold };
   }
-  const mTotal = ticker.match(/^KX[A-Z]+TOTAL-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-(\d+)$/);
+  const mTotal = ticker.match(/^KX[A-Z0-9]+TOTAL-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-(\d+)$/);
   if (mTotal) {
     const dt = mTotal[1];
     const threshold = parseInt(mTotal[2], 10);
@@ -871,11 +871,18 @@ function parseGameLevelLeg(ticker) {
   }
   // MLB Run-in-First-Inning. Binary market — yes = a run scored. The team
   // suffix is optional (game-level "any team" is most common).
-  const mRfi = ticker.match(/^KX[A-Z]+RFI-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)(?:-[A-Z]+)?$/);
+  const mRfi = ticker.match(/^KX[A-Z0-9]+RFI-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)(?:-[A-Z]+)?$/);
   if (mRfi) {
     const teams = parseTeamsFromChunk(mRfi[1], sport);
     if (!teams) return null;
     return { kind: "rfi", sport, teams };
+  }
+  // Soccer Both-Teams-To-Score. Binary; ticker is KX<LEAGUE>BTTS-<game>-BTTS.
+  const mBtts = ticker.match(/^KX[A-Z0-9]+BTTS-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-[A-Z]+$/);
+  if (mBtts) {
+    const teams = parseTeamsFromChunk(mBtts[1], sport);
+    if (!teams) return null;
+    return { kind: "btts", sport, teams };
   }
   return null;
 }
@@ -984,6 +991,12 @@ function evalGameLegInScenario(parsed, buyerSide, scenario) {
   if (parsed.kind === "total") {
     if (scenario.total == null) return "unknown";
     const yesHits = scenario.total > parsed.threshold;
+    return resolveLeg(yesHits, buyerSide);
+  }
+  if (parsed.kind === "btts") {
+    // YES = both teams have scored. Needs per-team scores.
+    if (scenario.awayScore == null || scenario.homeScore == null) return "unknown";
+    const yesHits = scenario.awayScore > 0 && scenario.homeScore > 0;
     return resolveLeg(yesHits, buyerSide);
   }
   if (parsed.kind === "rfi") {
@@ -1416,6 +1429,7 @@ function renderGameCards() {
     const teamBuckets = new Map();    // abbr -> {ml: [{row,parsed}], spread: [{row,parsed}]}
     const sharedTotal = [];           // [{row, parsed}]
     const sharedRfi = [];             // [{row, parsed}] — MLB Run-in-First-Inning
+    const sharedBtts = [];            // [{row, parsed}] — soccer Both-Teams-To-Score
     const sharedOther = new Map();    // groupName -> [row]
     const playerGroups = new Map();
     const otherLegs = [];
@@ -1443,6 +1457,8 @@ function renderGameCards() {
           teamBuckets.get(ab).spread.push({ row: r, parsed });
         } else if (parsed?.kind === "total") {
           sharedTotal.push({ row: r, parsed });
+        } else if (parsed?.kind === "btts") {
+          sharedBtts.push({ row: r, parsed });
         } else if (parsed?.kind === "rfi") {
           sharedRfi.push({ row: r, parsed });
         } else {
@@ -1508,6 +1524,8 @@ function renderGameCards() {
       ? {
           margin: live.home.score - live.away.score,
           total: live.away.score + live.home.score,
+          awayScore: live.away.score,
+          homeScore: live.home.score,
           firstInningRuns: live.firstInningRuns,
         }
       : null;
@@ -1530,7 +1548,9 @@ function renderGameCards() {
           lockedLoss = true;
         } else if (parsed.kind === "rfi") {
           lockedLoss = true;
-        } else if (parsed.kind === "total" && buyerSide === "yes") {
+        } else if ((parsed.kind === "total" || parsed.kind === "btts") && buyerSide === "yes") {
+          // Over-total and BTTS-yes are monotonic: once crossed they can't
+          // un-cross, so a buyer hit is permanently against us.
           lockedLoss = true;
         }
       }
@@ -1563,6 +1583,10 @@ function renderGameCards() {
         // RFI is binary "any run in 1st". Buyer-YES (a run scored) -> we
         // cheer for under 1 (no run); buyer-NO -> we cheer for over 1.
         chipLabel = buyerSide === "yes" ? "u1" : "o1";
+      } else if (parsed.kind === "btts") {
+        // Both-Teams-To-Score. Our long-NO side: buyer-YES -> we cheer for
+        // NOT both scoring ("NG"); buyer-NO -> we cheer for both ("GG").
+        chipLabel = buyerSide === "yes" ? "NG" : "GG";
       } else {
         chipLabel = "?";
       }
@@ -1604,7 +1628,7 @@ function renderGameCards() {
     };
 
     let gameSection = "";
-    if (teamBuckets.size > 0 || sharedTotal.length > 0 || sharedOther.size > 0 || otherLegs.length > 0) {
+    if (teamBuckets.size > 0 || sharedTotal.length > 0 || sharedBtts.length > 0 || sharedRfi.length > 0 || sharedOther.size > 0 || otherLegs.length > 0) {
       // Team display order: away then home (matches the score panel). Falls
       // back to insertion order when there's no ESPN match.
       const orderedTeams = live
@@ -1664,6 +1688,12 @@ function renderGameCards() {
       const rfiBlock = sharedRfi.length
         ? `<div class="player-block shared-block">${gameLadderHtml("Run in 1st", sharedRfi, rfiCurrent)}</div>`
         : "";
+      // Shared BTTS row — counter shows the live score so you can see how
+      // close both teams are to scoring (e.g. "1-0" = home needs one more).
+      const bttsCurrent = liveSc ? `${liveSc.awayScore}-${liveSc.homeScore}` : null;
+      const bttsBlock = sharedBtts.length
+        ? `<div class="player-block shared-block">${gameLadderHtml("Both teams score", sharedBtts, bttsCurrent)}</div>`
+        : "";
 
       // Remaining game-level legs we don't parse (F5/RFI/BTTS/1H/etc.) — flat
       // group list until we add predicate evaluators for them.
@@ -1681,7 +1711,7 @@ function renderGameCards() {
       gameSection = `
         <div class="card-section">
           <div class="section-title">Game</div>
-          ${teamBlocks}${totalBlock}${rfiBlock}${otherBlocks}${otherTickers}
+          ${teamBlocks}${totalBlock}${bttsBlock}${rfiBlock}${otherBlocks}${otherTickers}
         </div>`;
     }
 
