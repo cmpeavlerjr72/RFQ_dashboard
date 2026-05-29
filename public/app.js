@@ -660,6 +660,9 @@ const ESPN_TO_KALSHI_ABBR = {
     UTAH: "UTA",  // Jazz
     WSH: "WAS",   // Wizards (note: inverse of MLB Nationals!)
   },
+  // Soccer: ESPN club codes diverge from Kalshi's. Keyed by the per-league
+  // sport code (legSport). Add entries as encountered.
+  ligue1: { NICE: "NIC", ASSE: "STE" },  // Ligue 1 barrage 2026-05-29
 };
 function normAbbrForKalshi(espnAbbr, sport) {
   if (!espnAbbr) return espnAbbr;

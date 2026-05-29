@@ -888,6 +888,9 @@ export function legGameKey(ticker) {
 const ESPN_TO_KALSHI = {
   mlb: { CHW: "CWS", ARI: "AZ", OAK: "ATH", WAS: "WSH" },
   nba: { GS: "GSW", NO: "NOP", NY: "NYK", SA: "SAS", UTAH: "UTA", WSH: "WAS" },
+  // Soccer (gKey token is "soccer"). ESPN club codes diverge from Kalshi's;
+  // add entries as we hit them. NICE/ASSE = Ligue 1 barrage 2026-05-29.
+  soccer: { NICE: "NIC", ASSE: "STE" },
 };
 function normEspnAbbr(abbr, gKey) {
   const sport = (gKey || "").split(" ")[0].toLowerCase();

@@ -19,6 +19,37 @@ const SOCCER_SLUG: Record<string, string> = {
   bundesliga: "ger.1", ligue1: "fra.1", ucl: "uefa.champions",
 };
 
+// Extra ESPN soccer slugs whose events get MERGED into a league's scoreboard.
+// ESPN files promotion/relegation play-off ("barrage") matches under a
+// separate competition slug, not the regular-season league — so without this
+// the Ligue 1 barrage (Nice vs St-Étienne) is invisible to fra.1. Empty/absent
+// off-season; the extra fetch just returns 0 events then.
+const SOCCER_EXTRA_SLUGS: Record<string, string[]> = {
+  ligue1: ["fra.1.promotion.relegation"],
+};
+
+function soccerScoreboardUrl(slug: string, dateYYYYMMDD: string): string {
+  const d = String(dateYYYYMMDD).replace(/-/g, "");
+  return `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${d}&limit=300`;
+}
+
+// Fetch the league scoreboard and fold in any extra-slug events (barrages).
+async function fetchScoreboardMerged(sport: Sport, dateYYYYMMDD: string): Promise<ScoreboardPayload> {
+  const base = await fetchJsonWithTimeout(espnUrl(sport, dateYYYYMMDD));
+  const extras = SOCCER_EXTRA_SLUGS[sport];
+  if (extras) {
+    for (const slug of extras) {
+      try {
+        const ex = await fetchJsonWithTimeout(soccerScoreboardUrl(slug, dateYYYYMMDD));
+        if (Array.isArray(ex?.events) && ex.events.length) {
+          base.events = [...(base?.events || []), ...ex.events];
+        }
+      } catch { /* extra slug is best-effort */ }
+    }
+  }
+  return base;
+}
+
 interface ScoreboardPayload {
   [k: string]: any;
 }
@@ -68,7 +99,7 @@ export async function getScoreboard(
   if (force) cache.set(key, {}, 0);
   return cache.getOrFetch(
     key,
-    () => fetchJsonWithTimeout(espnUrl(sport, dateYYYYMMDD)),
+    () => fetchScoreboardMerged(sport, dateYYYYMMDD),
     ttlFor,
   );
 }

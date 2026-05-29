@@ -81,7 +81,7 @@ export const SOCCER_TEAMS = {
   // Ligue 1 (FCN=Nantes, ASM=Monaco, OM=Marseille, OL=Lyon)
   ANG: "Angers", AUX: "Auxerre", STB: "Stade Brest", HAC: "Le Havre",
   LIL: "Lille", FCL: "Lorient", OL: "Lyon", FCM: "Metz",
-  ASM: "AS Monaco", FCN: "Nantes", NIC: "Nice", OM: "Marseille",
+  ASM: "AS Monaco", FCN: "Nantes", NIC: "Nice", OM: "Marseille", STE: "Saint-Etienne",
   RCL: "Lens", REN: "Rennes", RCS: "Strasbourg", TFC: "Toulouse",
   // PAR is also Ligue 1 Paris FC but conflicts with SerieA Parma; mainly
   // labelled via PSG (PSG = Paris Saint-Germain, distinct).
@@ -435,6 +435,7 @@ const SOCCER_LOGOS = {
     FCN: "https://a.espncdn.com/i/teamlogos/soccer/500/165.png",  // Nantes
     NTS: "https://a.espncdn.com/i/teamlogos/soccer/500/165.png",  // Nantes (alt)
     NIC: "https://a.espncdn.com/i/teamlogos/soccer/500/2502.png", // Nice
+    STE: "https://a.espncdn.com/i/teamlogos/soccer/500/178.png",  // Saint-Etienne
     OM:  "https://a.espncdn.com/i/teamlogos/soccer/500/176.png",  // Marseille
     MAR: "https://a.espncdn.com/i/teamlogos/soccer/500/176.png",  // Marseille (alt)
     PAR: "https://a.espncdn.com/i/teamlogos/soccer/500/6851.png", // Paris FC
