@@ -1852,12 +1852,13 @@ function renderSummary() {
   }
   const evNote = evMissing > 0 ? ` <small>(${evMissing} missing odds)</small>` : "";
   const roiPct = totalCost > 0 ? (evTotal / totalCost * 100) : null;
-  // Portfolio value = what we expect to walk away with: cost paid plus the
-  // sum of expected P&L across all open parlays. Inherits the same
-  // "missing odds" caveat as the EV line. Kalshi's liquidation-style
-  // portfolio_value goes in the tooltip for cross-check.
-  const pv = totalCost + evTotal;
-  const pvTip = `cost paid (${fmtMoney(totalCost)}) + expected current outcome (${fmtMoney(evTotal)}). Kalshi's liquidation-value reading: ${fmtMoney(pvKalshi)}.`;
+  // Portfolio value = total account value we expect to walk away with: free
+  // cash PLUS the open parlays' cost paid plus their summed expected P&L.
+  // Inherits the same "missing odds" caveat as the EV line. Kalshi's
+  // liquidation-style portfolio_value (positions only) + cash goes in the
+  // tooltip for cross-check.
+  const pv = cash + totalCost + evTotal;
+  const pvTip = `free cash (${fmtMoney(cash)}) + cost paid (${fmtMoney(totalCost)}) + expected current outcome (${fmtMoney(evTotal)}). Kalshi's liquidation-value reading (incl. cash): ${fmtMoney(pvKalshi + cash)}.`;
 
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
