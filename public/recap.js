@@ -225,6 +225,15 @@ function render(data) {
     ? `Win ${fmtPct(a.win_rate_pct, false)} of your fills; need to win > ${fmtPct(a.breakeven_wr_pct, false)} on average to be profitable. Edge per parlay: ${fmtPct(gapPt, true)}.`
     : "";
   const beTip = `The win rate you need to clear to make money. Computed as the average fill price across decided parlays — at any fill priced p, EV is zero when you win with prob exactly p, so on average you need WR > mean(p). Realized ROI can deviate (size of bet matters in dollars) but this is the right single threshold to compare your WR against.`;
+
+  // ---- Payoff profile (avg win vs avg loss, $ per settled parlay) ----
+  const sizeRatio = (a.avg_win != null && a.avg_loss)
+    ? a.avg_win / Math.abs(a.avg_loss)
+    : null;
+  const payoffSub = sizeRatio != null
+    ? `<div class="kpi-sub muted" title="Avg winning parlay pays +${fmtMoney(a.avg_win, false)}; avg loser costs ${fmtMoney(a.avg_loss, false)}. Long-NO collects small premiums against big tails, so this is < 1× and you need a high win rate to clear it.">${sizeRatio.toFixed(2)}× win:loss size</div>`
+    : "";
+
   $("summary").innerHTML = [
     kpi("Money risked", fmtMoney(a.cash_deployed)),
     kpi("Net P&amp;L <small>(settled only)</small>", fmtMoney(a.realized_pnl, true), pnlClass(a.realized_pnl)),
@@ -247,10 +256,15 @@ function render(data) {
       "",
       `<div class="kpi-sub muted" title="${escapeHtml(beTip)}">win rate needed to break even on average</div>`,
     ),
+    kpi("Avg win <small>(per parlay)</small>", a.avg_win != null ? fmtMoney(a.avg_win, true) : "-", a.avg_win != null ? "pos" : "", payoffSub),
+    kpi("Avg loss <small>(per parlay)</small>", a.avg_loss != null ? fmtMoney(a.avg_loss, true) : "-", a.avg_loss != null ? "neg" : ""),
   ].join("");
 
   // Sport breakdown
   renderBreakdown(data);
+
+  // Leg-count breakdown (how does parlay size affect outcomes?)
+  renderLegCount(data);
 
   // Cumulative ROI chart (range mode only)
   renderChart(data);
@@ -447,6 +461,55 @@ function renderBreakdown(data) {
       <thead>
         <tr>
           <th>Sport</th>
+          <th class="t-num"># Parlays</th>
+          <th class="t-num">Risked</th>
+          <th class="t-num">Net P&amp;L</th>
+          <th class="t-num">ROI</th>
+          <th>Trust</th>
+          <th class="t-num">W-L-V</th>
+        </tr>
+      </thead>
+      <tbody>${tableRows}</tbody>
+    </table>
+  `;
+}
+
+// ---------- leg-count breakdown ----------
+function renderLegCount(data) {
+  const wrap = $("legcount-wrap");
+  const rows = data.leg_count_breakdown || [];
+  // Only worth showing when there's more than one bucket to compare.
+  if (rows.length < 2) {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.style.display = "block";
+  const tableRows = rows.map((row) => {
+    const a = row.agg;
+    const label = row.n_legs === 0 ? "Unknown" : `${row.n_legs}-leg`;
+    return `
+      <tr class="breakdown-sport">
+        <td class="bk-sport"><span class="bk-sport-name">${label}</span></td>
+        <td class="t-num">${a.n_parlays}</td>
+        <td class="t-num">${fmtMoney(a.cash_deployed)}</td>
+        <td class="t-num ${pnlClass(a.realized_pnl)}">${fmtMoney(a.realized_pnl, true)}</td>
+        <td class="t-num ${pnlClass(a.roi_pct)}">${fmtPct(a.roi_pct)}</td>
+        <td class="bk-trust">${confidenceChip(a.confidence, a.roi_pct)}</td>
+        <td class="t-num">${wlvLabel(a)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  wrap.innerHTML = `
+    <div class="row section-head">
+      <h2>By Leg Count</h2>
+      <span class="hint">does parlay size change the edge? more legs = more correlation premium, but harder to win</span>
+    </div>
+    <table class="recap-table breakdown-table">
+      <thead>
+        <tr>
+          <th>Legs</th>
           <th class="t-num"># Parlays</th>
           <th class="t-num">Risked</th>
           <th class="t-num">Net P&amp;L</th>

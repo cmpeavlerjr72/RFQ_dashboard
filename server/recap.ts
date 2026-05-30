@@ -102,7 +102,19 @@ export interface RecapAgg {
   // the dollar PnL — but on a representative sample, beating this number
   // tracks net profitability.
   breakeven_wr_pct: number | null;
+  // Payoff profile across decided parlays: mean realized $ pnl of winners
+  // (>0) and of losers (<0). null when that bucket is empty. The win:loss
+  // size ratio (avg_win / |avg_loss|) read against win_rate is the clean
+  // asymmetry check for a long-NO premium book.
+  avg_win: number | null;
+  avg_loss: number | null;
   confidence: ConfidenceInfo;
+}
+
+export interface LegCountRow {
+  n_legs: number;               // number of legs in the parlay; 0 = unknown (leg enrichment missed)
+  parlay_tickers: string[];
+  agg: RecapAgg;
 }
 
 export interface BreakdownStatRow {
@@ -133,6 +145,7 @@ export interface RecapResult {
   parlays: ParlayRow[];         // sorted by first_fill desc
   daily: DailyRow[];            // one row per ET day in range, asc; with cumulative cols
   sport_breakdown: SportBreakdownRow[];  // sorted by # parlays desc
+  leg_count_breakdown: LegCountRow[];    // grouped by # legs, asc (unknown last)
   fetched_at: string;
   pages_fills: number;
   pages_settlements: number;
@@ -452,6 +465,28 @@ function buildSportBreakdown(rows: ParlayRow[]): SportBreakdownRow[] {
   return out;
 }
 
+/** Group parlays by leg count. Rows with no enriched legs bucket as n_legs=0
+ *  ("unknown") and sort to the bottom. Reuses aggregateAll so each row carries
+ *  the same ROI / WR / break-even / confidence as the sport breakdown. */
+function buildLegCountBreakdown(rows: ParlayRow[]): LegCountRow[] {
+  const byN = new Map<number, ParlayRow[]>();
+  for (const r of rows) {
+    const n = r.legs.length;
+    if (!byN.has(n)) byN.set(n, []);
+    byN.get(n)!.push(r);
+  }
+  const out: LegCountRow[] = [];
+  for (const [n, rs] of byN) {
+    out.push({ n_legs: n, parlay_tickers: rs.map((r) => r.parlay_ticker), agg: aggregateAll(rs) });
+  }
+  out.sort((a, b) => {
+    // Unknown (0 legs) always last; otherwise ascending leg count.
+    if ((a.n_legs === 0) !== (b.n_legs === 0)) return a.n_legs === 0 ? 1 : -1;
+    return a.n_legs - b.n_legs;
+  });
+  return out;
+}
+
 /** Pull /markets/{tk}.mve_selected_legs for each parlay and stuff legs+sub_title onto the row. */
 async function enrichLegs(rows: ParlayRow[]): Promise<void> {
   if (rows.length === 0) return;
@@ -533,6 +568,8 @@ function aggregateAll(rows: ParlayRow[]): RecapAgg {
   const pnl = settled.reduce((a, r) => a + (r.pnl || 0), 0);
   const settledCost = settled.reduce((a, r) => a + r.cost, 0);
   const payouts = wins.reduce((a, r) => a + r.qty, 0);
+  const avgWin = wins.length ? wins.reduce((a, r) => a + (r.pnl || 0), 0) / wins.length : null;
+  const avgLoss = losses.length ? losses.reduce((a, r) => a + (r.pnl || 0), 0) / losses.length : null;
   const roiPct = settledCost > 0 ? (100 * pnl) / settledCost : null;
   const decided = [...wins, ...losses];
   const wlDenom = decided.length;
@@ -557,6 +594,8 @@ function aggregateAll(rows: ParlayRow[]): RecapAgg {
     roi_pct: roiPct,
     win_rate_pct: winRatePct,
     breakeven_wr_pct: breakevenWrPct,
+    avg_win: avgWin,
+    avg_loss: avgLoss,
     confidence: classifyConfidence(roiPct, settled.length),
   };
 }
@@ -653,6 +692,7 @@ export async function getRecap(startEt: string, endEt: string, force = false): P
         parlays: rows,
         daily: buildDaily(rows, startEt, endEt),
         sport_breakdown: buildSportBreakdown(rows),
+        leg_count_breakdown: buildLegCountBreakdown(rows),
         fetched_at: new Date().toISOString(),
         pages_fills: pagesFills,
         pages_settlements: pagesSettle,
