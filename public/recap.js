@@ -43,22 +43,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   loading: false,
   data: null,
-  balance: null,   // current available cash in dollars (from /api/kalshi/balance)
 };
-
-// Fetch current Kalshi available cash (cents → dollars). Best-effort — failures
-// leave balance null and the bankroll-dependent KPIs degrade to "—".
-async function loadBalance() {
-  try {
-    const r = await fetch("/api/kalshi/balance");
-    if (!r.ok) return null;
-    const body = await r.json();
-    const cents = body?.balance ?? body?.balance_dollars * 100;
-    return typeof cents === "number" ? cents / 100 : null;
-  } catch (_e) {
-    return null;
-  }
-}
 
 function setStatus(text, cls = "") {
   $("status-text").textContent = text;
@@ -181,12 +166,10 @@ async function loadRecap({ force = false } = {}) {
     // Kick off tennis-flag prefetch in parallel with the recap fetch — it
     // populates the module-level logo context used during render.
     const flagsP = loadTennisFlagsForRange(start, end);
-    const balanceP = loadBalance();
     const url = `/api/recap?start=${start}&end=${end}${force ? "&fresh=1" : ""}`;
     const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     state.data = await r.json();
-    state.balance = await balanceP;
     await flagsP;
     render(state.data);
     setStatus("loaded", "live");
@@ -242,19 +225,6 @@ function render(data) {
     ? `Win ${fmtPct(a.win_rate_pct, false)} of your fills; need to win > ${fmtPct(a.breakeven_wr_pct, false)} on average to be profitable. Edge per parlay: ${fmtPct(gapPt, true)}.`
     : "";
   const beTip = `The win rate you need to clear to make money. Computed as the average fill price across decided parlays — at any fill priced p, EV is zero when you win with prob exactly p, so on average you need WR > mean(p). Realized ROI can deviate (size of bet matters in dollars) but this is the right single threshold to compare your WR against.`;
-
-  // ---- Risk/capital KPIs (open exposure, concentration, bankroll) ----
-  const bal = state.balance;
-  const openPctBank = (bal != null && bal > 0) ? (100 * a.open_cost) / bal : null;
-  const openSub = a.open_count
-    ? `<div class="kpi-sub muted" title="Cost of parlays not yet settled — risk still on the table, not in net P&amp;L.">${a.open_count} open${openPctBank != null ? ` · ${fmtPct(openPctBank, false)} of bankroll` : ""}</div>`
-    : `<div class="kpi-sub muted">nothing open</div>`;
-  const concPct = a.top_ticker_share != null ? a.top_ticker_share * 100 : null;
-  const concSub = a.top_ticker_cost != null
-    ? `<div class="kpi-sub muted" title="Largest single parlay-ticker cost as a share of money risked. One counterparty can hammer the same SGP — this is the per-ticker tail-risk read.">biggest single parlay ${fmtMoney(a.top_ticker_cost)}</div>`
-    : "";
-  const bankSub = `<div class="kpi-sub muted" title="Current available cash on Kalshi (live), the anchor for the exposure % and the independent cross-check on cumulative P&amp;L.">available cash, live</div>`;
-
   $("summary").innerHTML = [
     kpi("Money risked", fmtMoney(a.cash_deployed)),
     kpi("Net P&amp;L <small>(settled only)</small>", fmtMoney(a.realized_pnl, true), pnlClass(a.realized_pnl)),
@@ -277,9 +247,6 @@ function render(data) {
       "",
       `<div class="kpi-sub muted" title="${escapeHtml(beTip)}">win rate needed to break even on average</div>`,
     ),
-    kpi("Open exposure <small>(unsettled)</small>", fmtMoney(a.open_cost), "", openSub),
-    kpi("Concentration <small>(top ticker)</small>", concPct != null ? fmtPct(concPct, false) : "-", "", concSub),
-    kpi("Bankroll <small>(now)</small>", bal != null ? fmtMoney(bal) : "-", "", bankSub),
   ].join("");
 
   // Sport breakdown
@@ -290,10 +257,6 @@ function render(data) {
 
   // Cumulative realized-$ chart, x = settle time (single-date or range).
   renderPnlChart(data);
-
-  // Bankroll equity curve — same settle-time steps, anchored to end at the
-  // live available-cash balance (cross-check on cumulative P&L).
-  renderBankrollChart(data);
 
   // Parlay table
   if (!data.parlays.length) {
@@ -754,108 +717,6 @@ function pnlChartSvg(series, startEt, endEt) {
       <g class="axis-x">${xLabels.join("")}</g>
     </svg>
     <div class="chart-caption">Cumulative realized P&amp;L by settle time (ET). ${series.length} settled parlay${series.length === 1 ? "" : "s"} · ending ${cumLabel}. Open positions excluded.</div>
-  `;
-}
-
-// ---------- bankroll equity curve (x = settle time) ----------
-// Reuses the settle-time series from the P&L chart but offsets it so the
-// final point sits at the live available-cash balance. The shape is identical
-// to the P&L curve (it IS the P&L curve); the value is the y-axis reading in
-// real bankroll dollars and the visual reconciliation against current cash.
-// Approximate: ignores deposits/withdrawals and settlements outside the
-// window, so the implied window-start equity is a reconstruction, not a
-// stored snapshot.
-function renderBankrollChart(data) {
-  const wrap = $("bankroll-chart-wrap");
-  const bal = state.balance;
-  const points = (data.parlays || [])
-    .filter((p) => p.settled_time_iso && p.pnl != null)
-    .map((p) => ({ tMs: Date.parse(p.settled_time_iso), pnl: p.pnl, status: p.status }))
-    .filter((p) => Number.isFinite(p.tMs))
-    .sort((a, b) => a.tMs - b.tMs);
-
-  if (bal == null || points.length < 1) {
-    wrap.style.display = "none";
-    wrap.innerHTML = "";
-    return;
-  }
-  let cum = 0;
-  const cumSeries = points.map((p) => { cum += p.pnl; return { ...p, cum }; });
-  const finalCum = cumSeries[cumSeries.length - 1].cum;
-  const offset = bal - finalCum;   // so the last equity point == current cash
-  const series = cumSeries.map((p) => ({ ...p, equity: p.cum + offset }));
-  wrap.style.display = "block";
-  wrap.innerHTML = bankrollChartSvg(series, data.start_et, data.end_et, bal, offset);
-}
-
-function bankrollChartSvg(series, startEt, endEt, bal, offset) {
-  const W = 1000, H = 220;
-  const padL = 64, padR = 16, padT = 16, padB = 32;
-  const inW = W - padL - padR;
-  const inH = H - padT - padB;
-
-  const startMs = etDayStartUtcMsClient(startEt);
-  const endMs = etDayEndUtcMsClient(endEt);
-  const xMin = Math.min(startMs, series[0].tMs);
-  const xMax = Math.max(endMs, series[series.length - 1].tMs);
-  const xSpan = Math.max(1, xMax - xMin);
-
-  // Window-start equity is the flat baseline before the first settlement.
-  const startEquity = offset;
-  const eqs = series.map((s) => s.equity).concat([startEquity]);
-  let yMin = Math.min(...eqs);
-  let yMax = Math.max(...eqs);
-  const ySpan = Math.max(1, yMax - yMin);
-  yMin -= ySpan * 0.08; yMax += ySpan * 0.08;
-
-  const xFor = (ms) => padL + ((ms - xMin) / xSpan) * inW;
-  const yFor = (v) => padT + inH - ((v - yMin) / (yMax - yMin)) * inH;
-
-  // Step path starting at window-start equity.
-  let d = `M${xFor(xMin).toFixed(1)},${yFor(startEquity).toFixed(1)}`;
-  let prev = startEquity;
-  for (const s of series) {
-    const x = xFor(s.tMs);
-    d += ` L${x.toFixed(1)},${yFor(prev).toFixed(1)}`;
-    d += ` L${x.toFixed(1)},${yFor(s.equity).toFixed(1)}`;
-    prev = s.equity;
-  }
-  d += ` L${xFor(xMax).toFixed(1)},${yFor(prev).toFixed(1)}`;
-
-  const dots = series.map((s) => {
-    const cx = xFor(s.tMs), cy = yFor(s.equity);
-    const cls = s.status === "void" ? "dot pending" : s.pnl > 0 ? "dot pos" : s.pnl < 0 ? "dot neg" : "dot pending";
-    const sign = s.pnl >= 0 ? "+" : "-";
-    const tip = `${fmtSettleTime(s.tMs)} · ${sign}$${Math.abs(s.pnl).toFixed(2)} → bankroll $${s.equity.toFixed(2)}`;
-    return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3"><title>${escapeHtml(tip)}</title></circle>`;
-  }).join("");
-
-  const yTicks = [];
-  for (let t = 0; t < 5; t++) {
-    const v = yMin + (t / 4) * (yMax - yMin);
-    const yy = yFor(v);
-    yTicks.push(
-      `<g class="tick"><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yy.toFixed(1)}"/><text x="${padL - 6}" y="${yy.toFixed(1)}" text-anchor="end" dominant-baseline="central">$${v.toFixed(0)}</text></g>`
-    );
-  }
-
-  const xLabels = [];
-  const N_TICKS = 7;
-  const multiDay = startEt !== endEt;
-  for (let i = 0; i <= N_TICKS; i++) {
-    const ms = xMin + (i / N_TICKS) * xSpan;
-    const cx = xFor(ms);
-    xLabels.push(`<text x="${cx.toFixed(1)}" y="${(H - 10).toFixed(1)}" text-anchor="middle">${escapeHtml(fmtXTime(ms, multiDay))}</text>`);
-  }
-
-  return `
-    <svg class="roi-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-      <g class="axis-y">${yTicks.join("")}</g>
-      <path class="line" d="${d}"/>
-      <g class="dots">${dots}</g>
-      <g class="axis-x">${xLabels.join("")}</g>
-    </svg>
-    <div class="chart-caption">Bankroll equity by settle time (ET), anchored to current available cash $${bal.toFixed(2)}. Approximate reconstruction — ignores deposits and settlements outside the window. Open-position collateral not added back.</div>
   `;
 }
 
