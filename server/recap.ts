@@ -86,6 +86,14 @@ export interface RecapAgg {
   voids: number;
   realized_pnl: number;         // sum pnl of settled parlays
   payouts: number;              // gross "money won": for winners, qty*1.0
+  // Open (unsettled) risk still on the table: sum cost of parlays with pnl===null.
+  // Not reflected in realized_pnl/roi — this is exposure, not result.
+  open_cost: number;
+  // Concentration: the single largest parlay-ticker cost in this bucket, and
+  // its share of cash_deployed. One counterparty can hammer the same SGP, so
+  // this is the per-ticker tail-risk read (see feedback_per_ticker_concentration).
+  top_ticker_cost: number | null;
+  top_ticker_share: number | null;   // 0..1 fraction of cash_deployed
   roi_pct: number | null;       // 100 * realized_pnl / cost_of_settled
   // Win rate over decided settlements: 100 * wins / (wins + losses). Voids
   // excluded from both numerator and denominator.
@@ -533,6 +541,11 @@ function aggregateAll(rows: ParlayRow[]): RecapAgg {
   const pnl = settled.reduce((a, r) => a + (r.pnl || 0), 0);
   const settledCost = settled.reduce((a, r) => a + r.cost, 0);
   const payouts = wins.reduce((a, r) => a + r.qty, 0);
+  // Open exposure: cost of parlays not yet settled.
+  const openCost = rows.filter((r) => r.pnl === null).reduce((a, r) => a + r.cost, 0);
+  // Concentration: largest single parlay-ticker cost / total deployed.
+  const topTickerCost = n > 0 ? Math.max(...rows.map((r) => r.cost)) : null;
+  const topTickerShare = topTickerCost !== null && cash > 0 ? topTickerCost / cash : null;
   const roiPct = settledCost > 0 ? (100 * pnl) / settledCost : null;
   const decided = [...wins, ...losses];
   const wlDenom = decided.length;
@@ -554,6 +567,9 @@ function aggregateAll(rows: ParlayRow[]): RecapAgg {
     voids: voids.length,
     realized_pnl: pnl,
     payouts,
+    open_cost: openCost,
+    top_ticker_cost: topTickerCost,
+    top_ticker_share: topTickerShare,
     roi_pct: roiPct,
     win_rate_pct: winRatePct,
     breakeven_wr_pct: breakevenWrPct,
