@@ -176,26 +176,78 @@ export const NBA_STAT_LABELS = {
 };
 
 /**
- * Build a tennis/UFC athlete index keyed by 3-letter uppercase last-name prefix.
+ * ESPN files tennis matches (and UFC fights) under nested
+ * event.groupings[].competitions[], not just event.competitions[0] — for a
+ * tennis tournament the top-level event IS the tournament and competitions[0]
+ * is empty. Collect EVERY competition's competitors so the athlete index and
+ * status lookups see all matches on the board, not only the first.
+ */
+export function allCompetitions(ev) {
+  const out = [];
+  if (Array.isArray(ev?.competitions)) out.push(...ev.competitions);
+  for (const g of ev?.groupings || []) {
+    if (Array.isArray(g?.competitions)) out.push(...g.competitions);
+  }
+  return out;
+}
+
+/**
+ * Candidate 3-letter Kalshi codes for an athlete display name. Kalshi's code is
+ * the first 3 letters of the surname, but the surname can be multi-word
+ * ("De Jong" -> DEJ, "Carreno Busta" -> CAR, "Auger-Aliassime" -> AUG). We
+ * can't know which the ticker used, so we return both the last-word prefix and
+ * the full-surname (everything after the first name, letters only) prefix.
+ */
+export function athleteCodeCandidates(displayName) {
+  const dn = String(displayName || "").trim();
+  if (!dn) return [];
+  const words = dn.split(/\s+/);
+  const codes = new Set();
+  const lastWord = words[words.length - 1].replace(/[^A-Za-z]/g, "");
+  if (lastWord.length >= 2) codes.add(lastWord.slice(0, 3).toUpperCase());
+  if (words.length >= 2) {
+    const surname = words.slice(1).join("").replace(/[^A-Za-z]/g, "");
+    if (surname.length >= 2) codes.add(surname.slice(0, 3).toUpperCase());
+  }
+  return [...codes];
+}
+
+/**
+ * Build a tennis/UFC athlete index keyed by 3-letter uppercase surname prefix.
  * The Kalshi ticker uses the 3-letter form; ESPN gives us the full name.
  *
  * Pass in all loaded scoreboard payloads. Returns { "SIN": "Jannik Sinner", ... }.
  */
+// The tennis scoreboard returns the WHOLE tournament (every completed early
+// round too), so 3-letter codes collide — e.g. BER is both "Remy Bertola" (a
+// finished 1st-round match) and "Matteo Berrettini" (playing today). Resolve
+// collisions by match state: a live ("in") or upcoming ("pre") match wins over
+// a finished ("post") one, since our open exposure is on active matches.
+function compStatePriority(comp) {
+  const s = comp?.status?.type?.state;
+  return s === "in" ? 0 : s === "pre" ? 1 : 2;   // lower wins
+}
+
 export function buildAthleteIndex(scoreboards) {
   const idx = {};
+  const seenPri = {};   // code -> priority that claimed it
   for (const sb of Object.values(scoreboards || {})) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
-      const competitors = ev?.competitions?.[0]?.competitors || [];
-      for (const c of competitors) {
-        const display = c?.athlete?.displayName
-          || c?.athlete?.fullName
-          || c?.athletes?.[0]?.displayName
-          || "";
-        if (!display) continue;
-        const last = display.trim().split(/\s+/).pop().toUpperCase();
-        if (last.length >= 2) {
-          idx[last.slice(0, 3)] = display;
+      for (const comp of allCompetitions(ev)) {
+        const pri = compStatePriority(comp);
+        for (const c of comp.competitors || []) {
+          const display = c?.athlete?.displayName
+            || c?.athlete?.fullName
+            || c?.athletes?.[0]?.displayName
+            || "";
+          if (!display) continue;
+          for (const code of athleteCodeCandidates(display)) {
+            if (seenPri[code] === undefined || pri < seenPri[code]) {
+              idx[code] = display;
+              seenPri[code] = pri;
+            }
+          }
         }
       }
     }
@@ -210,23 +262,28 @@ export function buildAthleteIndex(scoreboards) {
  */
 export function buildAthleteFlagIndex(scoreboards) {
   const idx = {};
+  const seenPri = {};
   for (const sb of Object.values(scoreboards || {})) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
-      const competitors = ev?.competitions?.[0]?.competitors || [];
-      for (const c of competitors) {
-        const display = c?.athlete?.displayName
-          || c?.athlete?.fullName
-          || c?.athletes?.[0]?.displayName
-          || "";
-        const flag = c?.athlete?.flag?.href
-          || c?.athlete?.flag?.alt
-          || c?.athletes?.[0]?.flag?.href
-          || "";
-        if (!display || !flag) continue;
-        const last = display.trim().split(/\s+/).pop().toUpperCase();
-        if (last.length >= 2) {
-          idx[last.slice(0, 3)] = flag;
+      for (const comp of allCompetitions(ev)) {
+        const pri = compStatePriority(comp);
+        for (const c of comp.competitors || []) {
+          const display = c?.athlete?.displayName
+            || c?.athlete?.fullName
+            || c?.athletes?.[0]?.displayName
+            || "";
+          const flag = c?.athlete?.flag?.href
+            || c?.athlete?.flag?.alt
+            || c?.athletes?.[0]?.flag?.href
+            || "";
+          if (!display || !flag) continue;
+          for (const code of athleteCodeCandidates(display)) {
+            if (seenPri[code] === undefined || pri < seenPri[code]) {
+              idx[code] = flag;
+              seenPri[code] = pri;
+            }
+          }
         }
       }
     }

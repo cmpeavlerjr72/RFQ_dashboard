@@ -4,6 +4,7 @@
 
 import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp, setLogoContext } from "/labels.js";
 import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker,
+         allCompetitions, athleteCodeCandidates,
          NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
@@ -717,6 +718,37 @@ function findEspnEventForGameKey(gameKey) {
   for (const [k, sb] of Object.entries(state.scoreboards)) {
     if (k.startsWith(`${sport}:`) && !candidates.includes(sb)) candidates.push(sb);
   }
+  // Tennis: ESPN nests individual matches under event.groupings[].competitions[]
+  // (the top-level event is the tournament, e.g. "Roland Garros", and its
+  // competitions[] is empty). The scoreboard returns the WHOLE tournament, so
+  // we match on the player pair — two players meet at most once in a draw, so
+  // the pair is unique — and break ties on the competition date nearest the
+  // ticker date. Returns a synthetic event whose competitions[0] is the match.
+  if (sport === "atp" || sport === "wta") {
+    let best = null;
+    let bestDelta = Infinity;
+    for (const sb of candidates) {
+      if (!sb || !Array.isArray(sb.events)) continue;
+      for (const ev of sb.events) {
+        for (const comp of allCompetitions(ev)) {
+          const players = (comp.competitors || [])
+            .map((c) => c?.athlete?.displayName || c?.athlete?.fullName || "")
+            .filter(Boolean);
+          if (players.length < 2) continue;
+          const hitA = athleteCodeCandidates(players[0]).find((x) => teams.includes(x));
+          const hitB = athleteCodeCandidates(players[1]).find((x) => teams.includes(x));
+          if (!hitA || !hitB || hitA === hitB) continue;
+          const evMs = Date.parse(comp?.date || ev?.date || "");
+          const delta = (tickerMs && Number.isFinite(evMs)) ? Math.abs(evMs - tickerMs) : 0;
+          if (delta < bestDelta) {
+            bestDelta = delta;
+            best = { id: comp.id || ev.id, status: comp.status, competitions: [comp], __tennis: true };
+          }
+        }
+      }
+    }
+    return best;
+  }
   for (const sb of candidates) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
@@ -1143,6 +1175,38 @@ function liveStateFor(ev, sport) {
   const detail = ev?.status?.type?.shortDetail || ev?.status?.type?.description || "";
   const period = ev?.status?.period || null;
   const clock = ev?.status?.displayClock || "";
+  // Tennis: competitors are athletes (no team), scored by sets. linescores[]
+  // holds games per set; a set this player won has winner === true. Show sets
+  // won as the score and the set-by-set games in the status line.
+  if (sport === "atp" || sport === "wta") {
+    const cs = comp.competitors || [];
+    const c0 = cs.find((c) => c.homeAway === "away") || cs[0];
+    const c1 = cs.find((c) => c.homeAway === "home") || cs[1];
+    const sideOf = (c) => {
+      const name = c?.athlete?.displayName || c?.athlete?.fullName || "";
+      const codes = athleteCodeCandidates(name);
+      const setsWon = (c?.linescores || []).filter((s) => s?.winner === true).length;
+      const games = (c?.linescores || []).map((s) => parseInt(s?.value ?? "", 10))
+        .filter((nn) => Number.isFinite(nn));
+      return { abbr: codes[0] || "", name: name || codes[0] || "", setsWon, games };
+    };
+    const a = sideOf(c0), h = sideOf(c1);
+    const sets = [];
+    const ns = Math.max(a.games.length, h.games.length);
+    for (let i = 0; i < ns; i++) sets.push(`${a.games[i] ?? 0}-${h.games[i] ?? 0}`);
+    const setStr = sets.join(", ");
+    let periodLabel;
+    if (state === "pre") periodLabel = detail || "Scheduled";
+    else if (state === "post") periodLabel = setStr ? `Final · ${setStr}` : (detail || "Final");
+    else periodLabel = setStr ? `In Progress · ${setStr}` : (detail || "In Progress");
+    return {
+      state, periodLabel,
+      away: { abbr: a.abbr, name: a.name, score: a.setsWon, record: "" },
+      home: { abbr: h.abbr, name: h.name, score: h.setsWon, record: "" },
+      firstInningRuns: null,
+      raw: ev,
+    };
+  }
   const competitors = comp.competitors || [];
   const away = competitors.find((c) => c.homeAway === "away") || competitors[0];
   const home = competitors.find((c) => c.homeAway === "home") || competitors[1];
@@ -1386,12 +1450,22 @@ function renderGameCards() {
       `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
     ).join("");
     const sport = (g.sport || "").toUpperCase();
-    const title = (g.teams || []).join(" @ ");
+    const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
+    // Tennis cards: show full athlete names ("Matteo Berrettini vs Francisco
+    // Comesana") joined with "vs". The matched ESPN competition carries the
+    // correct names; the global athlete index can collide on 3-letter codes
+    // (BER = Bertola OR Berrettini), so prefer the live-state names, then the
+    // index, then the raw code.
+    const isTennisCard = g.sport === "atp" || g.sport === "wta";
+    const title = isTennisCard
+      ? (live
+          ? [live.away.name, live.home.name].filter(Boolean).join(" vs ")
+          : (g.teams || []).map((a) => state.athleteIdx[a] || a).join(" vs "))
+      : (g.teams || []).join(" @ ");
     const dateHtml = g.dateLabel ? `<span class="game-date">${escapeHtml(g.dateLabel)}</span>` : "";
     const collapsed = !state.gameExpanded.has(g.key);
     const chevron = collapsed ? "▸" : "▾";
 
-    const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
     let scorePanel = "";
     if (live) {
       const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
