@@ -607,20 +607,50 @@ h2 {
   margin-top: 10px; padding-top: 8px;
   border-top: 1px solid var(--border);
 }
-.game-card-body .scenarios .scenario-row {
-  display: flex; justify-content: space-between; align-items: baseline;
-  padding: 4px 0; font-size: 12px;
+
+/* ---- "If the game goes…" decision tree ---- */
+.game-tree .tree-extremes {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 6px 0 10px; padding: 8px 10px;
+  background: var(--card-head); border-radius: 8px;
 }
-.game-card-body .scenarios .scenario-label { color: var(--fg); }
-.game-card-body .scenarios .scenario-vals {
-  display: inline-flex; gap: 10px;
+.game-tree .tree-extreme {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  font-size: 12px;
+}
+.game-tree .tree-extreme-lbl {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  padding: 1px 6px; border-radius: 100px; white-space: nowrap;
+}
+.game-tree .tree-extreme-lbl.pos { background: var(--pos-bg); color: var(--pos); }
+.game-tree .tree-extreme-lbl.neg { background: var(--neg-bg); color: var(--neg); }
+.game-tree .tree-extreme-path { color: var(--muted); flex: 1 1 auto; min-width: 0; }
+.game-tree .tree-extreme b {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700;
+}
+.game-tree .tree-extreme b.pos { color: var(--pos); }
+.game-tree .tree-extreme b.neg { color: var(--neg); }
+
+.game-tree .tree-children {
+  margin-left: 10px; padding-left: 10px;
+  border-left: 1.5px solid var(--border);
+}
+.game-tree .tree-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; padding: 3px 0; font-size: 12px;
+}
+.game-tree .tree-label { color: var(--fg); display: inline-flex; align-items: baseline; gap: 5px; }
+.game-tree .tree-node.lean-good > .tree-row > .tree-label { font-weight: 600; }
+.game-tree .tree-lean { font-size: 9px; line-height: 1; }
+.game-tree .tree-lean.good { color: var(--pos); }
+.game-tree .tree-lean.bad { color: var(--neg); }
+.game-tree .tree-range {
+  display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap;
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
 }
-.game-card-body .scenarios .scenario-vals .pos { color: var(--pos); font-weight: 600; }
-.game-card-body .scenarios .scenario-vals .neg { color: var(--neg); font-weight: 600; }
-.game-card-body .scenarios .scenario-envelope {
-  color: var(--muted-2); font-size: 10px; font-style: italic;
-}
+.game-tree .tree-range .pos { color: var(--pos); font-weight: 600; }
+.game-tree .tree-range .neg { color: var(--neg); font-weight: 600; }
+.game-tree .tree-range .tree-sep { color: var(--muted-2); font-weight: 400; }
 
 footer {
   border-top: 1px solid var(--border); background: var(--card);

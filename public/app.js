@@ -1167,6 +1167,215 @@ function computeGameScenarios(g, parlays) {
   });
 }
 
+// ── "If the game goes…" decision tree ──────────────────────────────────────
+// A flow-chart of game outcomes branching by the variables we actually hold
+// legs on (winner → total → biggest player prop), so a glance shows what to
+// cheer for. Each node carries the best..worst $ envelope for its branch;
+// player props left unbranched stay in the envelope (best = they fail the
+// buyer, worst = they hit). Spreads collapse to the winner category exactly
+// like the quoter's leg_constraint, so leaf worst/best reconcile with the
+// AT RISK (net) / TO WIN numbers on the card header.
+
+function _treeResolveBuyer(yesHits, side) {
+  const buyerYes = (side || "yes").toLowerCase() === "yes";
+  const buyerHits = buyerYes ? yesHits : !yesHits;
+  return buyerHits ? "buyer_hit" : "buyer_miss";
+}
+
+// Resolve one leg under a partial assignment. Returns buyer_hit | buyer_miss |
+// unknown. unknown => the leg's variable isn't pinned yet (stays in envelope).
+function _treeEvalLeg(ticker, side, asg) {
+  const gl = parseGameLevelLeg(ticker);
+  if (gl) {
+    if (gl.kind === "ml" || gl.kind === "spread") {
+      // Spread collapses to the winner category (matches leg_constraint).
+      if (asg.winner == null) return "unknown";
+      return _treeResolveBuyer(gl.pick === asg.winner, side);
+    }
+    if (gl.kind === "total") {
+      if (asg.total == null) return "unknown";
+      return _treeResolveBuyer(asg.total > gl.threshold, side);
+    }
+    if (gl.kind === "rfi") {
+      if (asg.rfi == null) return "unknown";
+      return _treeResolveBuyer(asg.rfi, side); // yes = a run scored in the 1st
+    }
+    if (gl.kind === "btts") {
+      if (asg.btts == null) return "unknown";
+      return _treeResolveBuyer(asg.btts, side); // yes = both teams score
+    }
+    return "unknown";
+  }
+  const prop = parsePlayerProp(ticker);
+  if (prop && prop.threshold != null) {
+    const key = `player|${prop.team}|${prop.lastName}|${prop.stat}`;
+    if (!asg.props || !(key in asg.props)) return "unknown";
+    return _treeResolveBuyer(asg.props[key], side); // true = over threshold
+  }
+  return "unknown";
+}
+
+// Best/worst $ P&L for the book under a partial assignment. A parlay locked to
+// win (some leg misses the buyer) is +max_profit; locked to lose (every leg
+// hits, none unknown) is -cost; otherwise envelope (best +max_profit, worst
+// -cost). Mirrors computeGameScenarios' accounting.
+function _treeNodePnl(parlays, gameKey, asg) {
+  let best = 0, worst = 0;
+  for (const p of parlays) {
+    let anyMiss = false, anyUnknown = false;
+    for (const l of p.legs) {
+      const r = (legGameGroupKey(l.ticker) === gameKey)
+        ? _treeEvalLeg(l.ticker, l.side, asg) : "unknown";
+      if (r === "buyer_miss") { anyMiss = true; break; }
+      if (r === "unknown") anyUnknown = true;
+    }
+    if (anyMiss) { best += p.max_profit; worst += p.max_profit; }
+    else if (anyUnknown) { best += p.max_profit; worst += -p.cost; }
+    else { best += -p.cost; worst += -p.cost; }
+  }
+  return { best, worst };
+}
+
+const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"]);
+
+// Determine which variables we hold legs on and turn them into ordered branch
+// descriptors. Winner is always first (most intuitive for cheering); the rest
+// rank by $ exposure. Capped to keep the tree glanceable.
+function gameBranchVars(g, parlays) {
+  let teams = null;
+  const totalLines = new Set();
+  let hasWinner = false, hasRfi = false, hasBtts = false;
+  const exp = { winner: 0, total: 0, rfi: 0, btts: 0 };
+  const props = new Map(); // key -> {exposure, prop}
+  for (const p of parlays) {
+    for (const l of p.legs) {
+      if (legGameGroupKey(l.ticker) !== g.key) continue;
+      const gl = parseGameLevelLeg(l.ticker);
+      if (gl) {
+        if (gl.kind === "ml" || gl.kind === "spread") { hasWinner = true; exp.winner += p.cost; teams = teams || gl.teams; }
+        else if (gl.kind === "total") { totalLines.add(gl.threshold); exp.total += p.cost; }
+        else if (gl.kind === "rfi") { hasRfi = true; exp.rfi += p.cost; }
+        else if (gl.kind === "btts") { hasBtts = true; exp.btts += p.cost; }
+        continue;
+      }
+      const prop = parsePlayerProp(l.ticker);
+      if (prop && prop.threshold != null) {
+        const key = `player|${prop.team}|${prop.lastName}|${prop.stat}`;
+        const e = props.get(key) || { exposure: 0, prop };
+        e.exposure += p.cost; props.set(key, e);
+      }
+    }
+  }
+
+  const vars = [];
+  if (hasWinner && teams) {
+    const [away, home] = teams;
+    const opts = [
+      { label: `${home} wins`, apply: (a) => ({ ...a, winner: home }) },
+      { label: `${away} wins`, apply: (a) => ({ ...a, winner: away }) },
+    ];
+    if (_SOCCER_TREE_SPORTS.has(g.sport)) {
+      opts.push({ label: "draw", apply: (a) => ({ ...a, winner: "__DRAW__" }) });
+    }
+    vars.push({ kind: "winner", exposure: exp.winner, options: opts });
+  }
+  if (totalLines.size) {
+    const lines = [...totalLines].sort((a, b) => a - b);
+    // Bands cut at each held line. Representative total per band resolves every
+    // held total leg unambiguously (no held line sits inside a band).
+    const opts = [];
+    opts.push({ label: `under ${lines[0] + 0.5}`, apply: (a) => ({ ...a, total: lines[0] }) });
+    for (let i = 0; i < lines.length - 1; i++) {
+      opts.push({ label: `${lines[i] + 0.5}–${lines[i + 1] + 0.5}`, apply: (a) => ({ ...a, total: lines[i] + 1 }) });
+    }
+    opts.push({ label: `over ${lines[lines.length - 1] + 0.5}`, apply: (a) => ({ ...a, total: lines[lines.length - 1] + 1 }) });
+    vars.push({ kind: "total", exposure: exp.total, options: opts });
+  }
+  if (hasRfi) {
+    vars.push({ kind: "rfi", exposure: exp.rfi, options: [
+      { label: "run in 1st", apply: (a) => ({ ...a, rfi: true }) },
+      { label: "no run in 1st", apply: (a) => ({ ...a, rfi: false }) },
+    ] });
+  }
+  if (hasBtts) {
+    vars.push({ kind: "btts", exposure: exp.btts, options: [
+      { label: "both teams score", apply: (a) => ({ ...a, btts: true }) },
+      { label: "not both score", apply: (a) => ({ ...a, btts: false }) },
+    ] });
+  }
+  for (const [key, e] of [...props.entries()].sort((a, b) => b[1].exposure - a[1].exposure)) {
+    const pr = e.prop;
+    const name = pr.lastName || pr.team;
+    const stat = (pr.stat || "").toLowerCase();
+    vars.push({ kind: "prop", exposure: e.exposure, options: [
+      { label: `${name} under ${pr.threshold + 0.5} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }) },
+      { label: `${name} over ${pr.threshold + 0.5} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }) },
+    ] });
+  }
+
+  // Order: winner first (most intuitive), then the biggest game-state variable
+  // (total/rfi/btts), then the biggest player prop — so a typical card reads
+  // winner → total → key prop. Pad from leftovers by exposure. Cap to 3 levels
+  // so the tree stays glanceable on a phone.
+  const winnerV = vars.find((v) => v.kind === "winner");
+  const gameVars = vars.filter((v) => ["total", "rfi", "btts"].includes(v.kind)).sort((a, b) => b.exposure - a.exposure);
+  const propVars = vars.filter((v) => v.kind === "prop"); // already exposure-sorted
+  const ordered = [];
+  if (winnerV) ordered.push(winnerV);
+  if (gameVars[0]) ordered.push(gameVars[0]);
+  if (propVars[0]) ordered.push(propVars[0]);
+  const used = new Set(ordered);
+  const leftovers = [...gameVars, ...propVars].filter((v) => !used.has(v)).sort((a, b) => b.exposure - a.exposure);
+  while (ordered.length < 3 && leftovers.length) ordered.push(leftovers.shift());
+  return ordered.slice(0, 3);
+}
+
+// Build the nested tree of nodes. Each node: {label, best, worst, leanGood,
+// leanBad, children}. Also returns the overall worst/best leaf + their paths.
+function buildGameTree(g, parlays) {
+  // Only parlays touching this game — otherwise other games' costs leak into
+  // this game's envelope.
+  const ourParlays = parlays.filter((p) => p.legs.some((l) => legGameGroupKey(l.ticker) === g.key));
+  if (!ourParlays.length) return null;
+  const branchVars = gameBranchVars(g, ourParlays);
+  if (!branchVars.length) return null;
+
+  let worstLeaf = { worst: Infinity, path: [] };
+  let bestLeaf = { best: -Infinity, path: [] };
+
+  function build(idx, asg, path) {
+    if (idx >= branchVars.length) return null;
+    const children = branchVars[idx].options.map((opt) => {
+      const asg2 = opt.apply(asg);
+      const pnl = _treeNodePnl(ourParlays, g.key, asg2);
+      const myPath = path.concat(opt.label);
+      const kids = build(idx + 1, asg2, myPath);
+      if (!kids) { // leaf — track extremes
+        if (pnl.worst < worstLeaf.worst) worstLeaf = { worst: pnl.worst, path: myPath };
+        if (pnl.best > bestLeaf.best) bestLeaf = { best: pnl.best, path: myPath };
+      }
+      return { label: opt.label, best: pnl.best, worst: pnl.worst, children: kids };
+    });
+    // Mark the sibling we'd most root for (highest midpoint) and most against.
+    if (children.length > 1) {
+      const mid = (c) => (c.best + c.worst) / 2;
+      const sorted = [...children].sort((a, b) => mid(b) - mid(a));
+      sorted[0].leanGood = true;
+      sorted[sorted.length - 1].leanBad = true;
+    }
+    return children;
+  }
+
+  const roots = build(0, {}, []);
+  return {
+    roots,
+    worst: worstLeaf.worst === Infinity ? null : worstLeaf.worst,
+    worstPath: worstLeaf.path,
+    best: bestLeaf.best === -Infinity ? null : bestLeaf.best,
+    bestPath: bestLeaf.path,
+  };
+}
+
 // Compact live-state summary for an ESPN event: { state, score, periodLabel }.
 // score is "AWAY n - n HOME" with the away team first (ESPN convention).
 // `sport` is required so team-abbr aliasing (e.g. ESPN "SA" -> Kalshi "SAS")
@@ -2074,34 +2283,53 @@ function renderGameCards() {
     // wins, red+strikethrough for losses) so the count line is redundant.
     const resolvedNote = "";
 
-    // Scenario rows — game-level legs evaluated deterministically; player
-    // and total legs handled as a best/worst envelope.
-    const scenarioRows = computeGameScenarios(g, state.positions);
+    // "If the game goes…" — a decision tree branching on the variables we
+    // hold legs on (winner → total → biggest prop). Each node shows its
+    // best..worst $ envelope; the favorable branch at each fork is flagged so
+    // a glance tells you what to root for. Overall worst/best up top.
+    const tree = buildGameTree(g, state.positions);
     let scenarioHtml = "";
-    if (scenarioRows.length) {
-      // Rank by best desc so the "thing we most want" floats to the top.
-      const rows = scenarioRows.slice().sort((a, b) => b.best - a.best);
-      const cells = rows.map((s) => {
-        const bestCls = s.best >= 0 ? "pos" : "neg";
-        const worstCls = s.worst >= 0 ? "pos" : "neg";
-        const swingNote = (s.best - s.worst > 0.01)
-          ? `<span class="scenario-envelope" title="best assumes every player prop fails the buyer; worst assumes every player prop hits the buyer">±envelope</span>`
+    if (tree && tree.roots && tree.roots.length) {
+      const money = (n) => `${n >= 0 ? "+" : "−"}$${Math.abs(n).toFixed(2)}`;
+      const renderNodes = (nodes) => nodes.map((node) => {
+        const leanCls = node.leanGood ? " lean-good" : node.leanBad ? " lean-bad" : "";
+        const lean = node.leanGood
+          ? `<span class="tree-lean good" title="root FOR this — best branch at this fork">▲</span>`
+          : node.leanBad
+          ? `<span class="tree-lean bad" title="root AGAINST this — worst branch at this fork">▼</span>`
           : "";
+        const kids = node.children && node.children.length
+          ? `<div class="tree-children">${renderNodes(node.children)}</div>` : "";
         return `
-          <div class="scenario-row">
-            <span class="scenario-label">${escapeHtml(s.label)}</span>
-            <span class="scenario-vals">
-              <span class="${bestCls}">best ${s.best >= 0 ? "+" : ""}${s.best.toFixed(2)}</span>
-              <span class="${worstCls}">worst ${s.worst >= 0 ? "+" : ""}${s.worst.toFixed(2)}</span>
-              ${swingNote}
-            </span>
-          </div>
-        `;
+          <div class="tree-node${leanCls}">
+            <div class="tree-row">
+              <span class="tree-label">${lean}${escapeHtml(node.label)}</span>
+              <span class="tree-range">
+                <span class="${node.worst >= 0 ? "pos" : "neg"}">${money(node.worst)}</span>
+                <span class="tree-sep">to</span>
+                <span class="${node.best >= 0 ? "pos" : "neg"}">${money(node.best)}</span>
+              </span>
+            </div>
+            ${kids}
+          </div>`;
       }).join("");
+      const pathStr = (arr) => (arr && arr.length ? arr.join(" · ") : "—");
       scenarioHtml = `
-        <div class="scenarios">
-          <div class="cheer-list-head">If the game goes...</div>
-          ${cells}
+        <div class="scenarios game-tree">
+          <div class="cheer-list-head">If the game goes…</div>
+          <div class="tree-extremes">
+            <div class="tree-extreme">
+              <span class="tree-extreme-lbl neg">worst case</span>
+              <span class="tree-extreme-path">${escapeHtml(pathStr(tree.worstPath))}</span>
+              <b class="${tree.worst >= 0 ? "pos" : "neg"}">${money(tree.worst)}</b>
+            </div>
+            <div class="tree-extreme">
+              <span class="tree-extreme-lbl pos">best case</span>
+              <span class="tree-extreme-path">${escapeHtml(pathStr(tree.bestPath))}</span>
+              <b class="${tree.best >= 0 ? "pos" : "neg"}">${money(tree.best)}</b>
+            </div>
+          </div>
+          <div class="tree-body">${renderNodes(tree.roots)}</div>
         </div>
       `;
     }
