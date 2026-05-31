@@ -1344,6 +1344,149 @@ function aggregateLegExposure() {
   return out;
 }
 
+// ── Dual-direction / netting math ──────────────────────────────────────────
+// JS mirror of run_netting_maker.py `worst_case_net_loss` + `leg_constraint`.
+// We accept offsetting ("dual direction") flow on a game, so a game's GROSS
+// at-risk overstates real risk: opposing positions on the same game variable
+// can't both hit in the same outcome. We enumerate feasible outcomes and, in
+// each, charge -cost for parlays that hit against us and +(1-cost_per)*qty for
+// parlays that void in our favor; the worst scenario is the net loss. Surfaced
+// as offset% so the card shows the same number the quoter caps against.
+const _NET_GRID_BUDGET = 200_000;
+const _NET_OTHER = "__OTHER__";
+
+// One leg -> {varKey, vtype:'num'|'cat', op, line|set} or null (not modelled =>
+// auto-satisfiable, conservative). Polarity matches the runner: total/player
+// yes=over; GAME/SPREAD suffix=winner (spreads collapse to the winner category
+// exactly like leg_constraint does); btts yes=both score.
+function _legConstraintNet(ticker, buyerSide) {
+  const yes = (buyerSide || "yes").toLowerCase() !== "no";
+  const gl = parseGameLevelLeg(ticker);
+  if (gl) {
+    if (gl.kind === "ml" || gl.kind === "spread") {
+      const team = String(gl.pick || "").replace(/\d+$/, "") || gl.pick;
+      if (!team) return null;
+      return { varKey: "winner", vtype: "cat", op: yes ? "in" : "notin", set: [team] };
+    }
+    if (gl.kind === "total") {
+      if (gl.threshold == null) return null;
+      return { varKey: "total", vtype: "num", op: yes ? "gt" : "le", line: gl.threshold };
+    }
+    if (gl.kind === "btts") {
+      return { varKey: "btts", vtype: "cat", op: "in", set: [yes ? "yes" : "no"] };
+    }
+    return null; // rfi + anything else not modelled
+  }
+  const prop = parsePlayerProp(ticker);
+  if (prop && prop.threshold != null && prop.lastName) {
+    return {
+      varKey: `player|${prop.team}|${prop.lastName}|${prop.stat}`,
+      vtype: "num", op: yes ? "gt" : "le", line: prop.threshold,
+    };
+  }
+  return null;
+}
+
+// Side-independent var key for a leg — used to tag offsetting chips/rows.
+function _legVarKey(ticker) {
+  const c = _legConstraintNet(ticker, "yes");
+  return c ? c.varKey : null;
+}
+
+function _numCandsNet(linesArr) {
+  const s = new Set();
+  for (const L of linesArr) { s.add(L - 0.5); s.add(L + 0.5); }
+  return [...s].sort((a, b) => a - b);
+}
+
+function _satNet(c, val) {
+  if (c.vtype === "num") return c.op === "gt" ? val > c.line : val <= c.line;
+  return c.op === "in" ? c.set.includes(val) : !c.set.includes(val);
+}
+
+// Mirror of worst_case_net_loss for one game. positions: [{contracts, costPer,
+// legs:[{ticker, side}]}] (side = buyer side). Returns {gross, worstCase,
+// offsetRatio, offsetPct, offsettingVars:Set, hedged}.
+function computeGameNetting(positions, gameKey) {
+  const posList = [];
+  const varType = new Map(), varLines = new Map(), varCats = new Map(), varPositions = new Map();
+  let gross = 0;
+  for (const pos of positions) {
+    const c = pos.contracts || 0, cp = pos.costPer || 0;
+    gross += cp * c;
+    const idx = posList.length; // index this position WILL occupy
+    const cons = [];
+    for (const leg of (pos.legs || [])) {
+      if (legGameGroupKey(leg.ticker) !== gameKey) continue; // other-game legs auto-satisfiable
+      const lc = _legConstraintNet(leg.ticker, leg.side);
+      if (!lc) continue;
+      cons.push(lc);
+      varType.set(lc.varKey, lc.vtype);
+      if (lc.vtype === "num") {
+        if (!varLines.has(lc.varKey)) varLines.set(lc.varKey, new Set());
+        varLines.get(lc.varKey).add(lc.line);
+      } else {
+        if (!varCats.has(lc.varKey)) varCats.set(lc.varKey, new Set());
+        for (const t of lc.set) varCats.get(lc.varKey).add(t);
+      }
+      if (!varPositions.has(lc.varKey)) varPositions.set(lc.varKey, new Set());
+      varPositions.get(lc.varKey).add(idx);
+    }
+    posList.push({ c, cp, cons });
+  }
+
+  const candOf = (v) => varType.get(v) === "num"
+    ? _numCandsNet([...varLines.get(v)])
+    : [...varCats.get(v)].sort().concat([_NET_OTHER]);
+
+  // Offsetting var = the >=2 positions touching it can't all hit at once (no
+  // single outcome satisfies every position's constraint). That's the
+  // structural "dual direction" we want to flag.
+  const offsettingVars = new Set();
+  for (const [v, posSet] of varPositions) {
+    if (posSet.size < 2) continue;
+    const cands = candOf(v);
+    const consByPos = [...posSet].map((i) => posList[i].cons.filter((c) => c.varKey === v));
+    const anyAllSat = cands.some((val) => consByPos.every((cl) => cl.every((c) => _satNet(c, val))));
+    if (!anyAllSat) offsettingVars.add(v);
+  }
+
+  // Enumerate shared vars (>=2 positions) up to the grid budget for the worst case.
+  const shared = [...varPositions.entries()].filter(([, s]) => s.size >= 2)
+    .map(([v]) => v).sort((a, b) => varPositions.get(b).size - varPositions.get(a).size);
+  const enumVars = []; let grid = 1;
+  for (const v of shared) {
+    const n = Math.max(1, candOf(v).length);
+    if (grid * n > _NET_GRID_BUDGET) break;
+    enumVars.push(v); grid *= n;
+  }
+  const cand = {}; for (const v of enumVars) cand[v] = candOf(v);
+  const enumIdx = new Map(enumVars.map((v, i) => [v, i]));
+  const allHits = (pos, asg) => pos.cons.every((c) =>
+    !enumIdx.has(c.varKey) || _satNet(c, asg[enumIdx.get(c.varKey)]));
+
+  let bestNet = null;
+  if (enumVars.length) {
+    const lists = enumVars.map((v) => cand[v]);
+    const total = lists.reduce((a, l) => a * l.length, 1);
+    for (let i = 0; i < total; i++) {
+      const asg = []; let rem = i;
+      for (const l of lists) { asg.push(l[rem % l.length]); rem = Math.floor(rem / l.length); }
+      let net = 0;
+      for (const pos of posList) net += allHits(pos, asg) ? (-pos.cp * pos.c) : ((1 - pos.cp) * pos.c);
+      if (bestNet === null || net < bestNet) bestNet = net;
+    }
+  } else {
+    bestNet = posList.reduce((a, pos) => a + (-pos.cp * pos.c), 0);
+  }
+  const worstCase = Math.max(0, -(bestNet == null ? 0 : bestNet));
+  const offsetRatio = gross > 0 ? worstCase / gross : 1;
+  const offsetPct = Math.round((1 - offsetRatio) * 100);
+  // "Hedged" once at least ~3% of gross is netted away by opposing flow.
+  const hedged = offsettingVars.size > 0 && offsetPct >= 3;
+  return { gross, worstCase, offsetRatio, offsetPct, offsettingVars, hedged };
+}
+
 /**
  * Group every open parlay's cheer-for legs into per-game cards. Game-level
  * cost/maxWin are attributed PER GAME: a cross-game parlay counts its full
@@ -1432,6 +1575,23 @@ function aggregateGameCards() {
   // Sort each card's pending legs by max-win desc (highest-impact first).
   for (const g of games.values()) {
     g.legs.sort((a, b) => b.maxWin - a.maxWin);
+  }
+  // Per-game netting: how much offsetting (dual-direction) flow cancels the
+  // gross at-risk. Mirrors the quoter's worst_case_net_loss exactly.
+  for (const g of games.values()) {
+    const gpos = state.positions
+      .filter((p) => p.legs.some((l) => legGameGroupKey(l.ticker) === g.key))
+      .map((p) => ({
+        contracts: p.qty || 0,
+        costPer: (p.qty > 0 ? p.cost / p.qty : 0),
+        legs: p.legs,
+      }));
+    const net = computeGameNetting(gpos, g.key);
+    g.gross = net.gross;
+    g.worstCase = net.worstCase;
+    g.offsetPct = net.offsetPct;
+    g.offsettingVars = net.offsettingVars;
+    g.hedged = net.hedged;
   }
   // Sort cards by total exposure desc (where the money is).
   return Array.from(games.values()).sort((a, b) => b.exposure - a.exposure);
@@ -1580,10 +1740,15 @@ function renderGameCards() {
       } else if (r.statText) {
         liveStat = `<span class="cheer-live" title="current game state">${escapeHtml(r.statText)}</span>`;
       }
+      const isOffset = g.offsettingVars?.has(_legVarKey(r.ticker));
+      const offsetTag = isOffset
+        ? `<span class="offset-tag" title="Dual-direction flow on this market — offsetting positions cancel against the other side.">⇄ offset</span>`
+        : "";
       return `
         <div class="cheer-row">
           <div class="cheer-desc">
             <span>${escapeHtml(desc)}</span>
+            ${offsetTag}
             ${liveStat}
           </div>
           <div class="cheer-meta">
@@ -1690,6 +1855,12 @@ function renderGameCards() {
       const chips = items.slice()
         .sort((a, b) => (a.parsed.threshold || 0) - (b.parsed.threshold || 0))
         .map(gameChipHtml).join("");
+      // Tag the row when this market carries dual-direction flow that nets
+      // against the opposite side (e.g. we hold both teams' ML).
+      const isOffset = items.some((it) => g.offsettingVars?.has(_legVarKey(it.row.ticker)));
+      const offsetTag = isOffset
+        ? ` <span class="offset-tag" title="Dual-direction flow on this market — offsetting positions cancel against the other side.">⇄ offset</span>`
+        : "";
       // Only render a "current" cell if we actually have a number to show.
       // ML row (and any other lookless row) leaves it out instead of "—".
       const currentChip = currentText != null
@@ -1698,7 +1869,7 @@ function renderGameCards() {
       return `
         <div class="stat-ladder">
           <div class="stat-ladder-head">
-            <span class="stat-label">${escapeHtml(label)}</span>
+            <span class="stat-label">${escapeHtml(label)}${offsetTag}</span>
             ${currentChip}
           </div>
           <div class="stat-ladder-chips">${chips}</div>
@@ -1944,11 +2115,16 @@ function renderGameCards() {
             <span class="game-logos">${logos}</span>
             <span class="game-name">${escapeHtml(title)}</span>
             ${dateHtml}
+            ${g.hedged ? `<span class="hedge-badge" title="Dual-direction flow: opposing positions on this game cancel out. ${g.offsetPct}% of the $${g.exposure.toFixed(2)} gross at-risk is netted away — worst-case net loss is $${g.worstCase.toFixed(2)} (the number the quoter caps against).">⇄ HEDGED ${g.offsetPct}%</span>` : ""}
           </div>
           ${scorePanel}
           <div class="game-stats">
             <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
-            <span class="stat"><span class="label">at risk</span><span class="value">${fmtMoney(g.exposure)}</span></span>
+            <span class="stat" title="${g.hedged ? "Worst-case net loss after dual-direction offsets (the quoter's cap number). Gross is the un-netted sum of every parlay's cost." : "Total cost across every parlay touching this game."}">
+              <span class="label">at risk${g.hedged ? " (net)" : ""}</span>
+              <span class="value">${fmtMoney(g.hedged ? g.worstCase : g.exposure)}</span>
+              ${g.hedged ? `<span class="stat-sub">gross ${fmtMoney(g.exposure)}</span>` : ""}
+            </span>
             <span class="stat"><span class="label">to win</span><span class="value pos">+${g.maxWin.toFixed(2)}</span></span>
             ${g.expectedPnl != null && g.expectedCovered === g.parlayCount ? `
               <span class="stat" title="Expected $ if current live odds hold across every parlay touching this game. Sum of (P(we win parlay) * qty - cost) using the latest legMid (else fill-time fair).">

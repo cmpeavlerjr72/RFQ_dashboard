@@ -435,6 +435,26 @@ h2 {
 }
 .game-card-head .game-stats .value.pos { color: var(--pos); }
 .game-card-head .game-stats .value.neg { color: var(--neg); }
+.game-card-head .game-stats .stat-sub {
+  font-size: 10px; color: var(--muted-2);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 1px;
+}
+
+/* Dual-direction / netting signifiers */
+.game-card-head .hedge-badge {
+  font-size: 10px; font-weight: 700; letter-spacing: .03em;
+  padding: 1px 7px; border-radius: 100px;
+  background: var(--accent-bg); color: var(--accent);
+  white-space: nowrap; cursor: help;
+}
+.offset-tag {
+  font-size: 9px; font-weight: 700; letter-spacing: .02em;
+  text-transform: uppercase; cursor: help;
+  color: var(--accent); background: var(--accent-bg);
+  padding: 1px 5px; border-radius: 3px;
+  white-space: nowrap;
+}
 .game-card-body { padding: 8px 12px 10px; }
 .game-card-body .cheer-list-head {
   font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
