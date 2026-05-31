@@ -915,3 +915,69 @@ footer {
   border: 1px solid var(--border); border-radius: 4px;
 }
 .link-btn:hover { background: rgba(25, 118, 210, 0.08); }
+
+/* ============================================================
+   Responsive / mobile — no page-level horizontal scrolling.
+   Strategy:
+     1. Card grids never demand a track wider than the viewport
+        (min(px, 100%) caps each track at the container width).
+     2. Wide data tables scroll INSIDE their own box instead of
+        pushing the page wide.
+     3. A hard guard clips any residual horizontal overflow so the
+        user can never scroll the whole page left/right.
+   ============================================================ */
+
+/* (1) Card grids: cap the min track at 100% so a phone narrower than
+   the design min-width just gets a single full-width column. Applies at
+   every width — harmless on desktop (380px min is unchanged there). */
+.parlays   { grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); }
+.game-cards { grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); }
+.summary   { grid-template-columns: repeat(auto-fit,  minmax(min(160px, 100%), 1fr)); }
+
+/* (2) Table mount points scroll horizontally on their own when their
+   table is wider than the screen, rather than widening the page. */
+#parlays-table-wrap,
+#sport-table-wrap,
+#day-table-wrap,
+#their-prop-wrap,
+#our-prop-wrap,
+.breakdown-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* (3) Final guard against any stray wide element. body keeps vertical
+   scrolling and the sticky header (it is not the y-scroll container). */
+html, body { overflow-x: hidden; }
+
+@media (max-width: 640px) {
+  /* Tighter chrome so content gets the width it needs. */
+  header { padding: 10px 14px; }
+  main { padding: 14px 14px 32px; }
+
+  /* Let the header rows wrap instead of overflowing; keep status/meta
+     from being shoved off-screen by their margin-left:auto. */
+  header .row { flex-wrap: wrap; gap: 8px 12px; }
+  header .status { margin-left: auto; }
+  header .meta { margin-left: 0; }
+  .nav-links { margin-left: 0; }
+  .account-picker { margin-left: 0; }
+
+  /* Control rows (refresh/auto, date pickers) wrap cleanly. */
+  .row.controls { flex-wrap: wrap; gap: 10px; }
+
+  /* One column for every multi-column card/table grid. */
+  .parlays, .game-cards { grid-template-columns: 1fr; }
+  .compare-row, .two-col-tables { grid-template-columns: 1fr; }
+
+  /* Trim columns that otherwise force the recap table wide. The mount
+     wrapper scrolls if it still overflows, but these keep it from
+     needing to in the common case. */
+  .recap-table .t-ticker { max-width: 140px; }
+  .recap-table .t-logos { min-width: 0; }
+  .breakdown-table .bk-sport { min-width: 0; }
+
+  /* Summary KPIs read fine two-up on a phone. */
+  .summary { grid-template-columns: 1fr 1fr; }
+}
