@@ -1272,7 +1272,7 @@ const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "l
 // Determine which variables we hold legs on and turn them into ordered branch
 // descriptors. Winner is always first (most intuitive for cheering); the rest
 // rank by $ exposure. Capped to keep the tree glanceable.
-function gameBranchVars(g, parlays) {
+function gameBranchVars(g, parlays, live) {
   let teams = null;
   const totalLines = new Set();
   let hasWinner = false, hasRfi = false, hasBtts = false;
@@ -1299,88 +1299,144 @@ function gameBranchVars(g, parlays) {
   }
 
   const vars = [];
+  // base = the partial assignment already DECIDED by live play; resolved = the
+  // human-readable facts that have happened. A variable that's settled live is
+  // pinned into base (and shown as "so far") instead of branched, so the tree
+  // and best/worst shift to "given what's happened, here's the situation".
+  const base = {};
+  const resolved = [];
+
+  // WINNER — pinned only when the game is final (it can still flip mid-game).
   if (hasWinner && teams) {
     const [away, home] = teams;
-    const opts = [
-      { label: `${home} wins`, apply: (a) => ({ ...a, winner: home }) },
-      { label: `${away} wins`, apply: (a) => ({ ...a, winner: away }) },
-    ];
-    if (_SOCCER_TREE_SPORTS.has(g.sport)) {
-      opts.push({ label: "draw", apply: (a) => ({ ...a, winner: "__DRAW__" }) });
+    if (live && live.final && live.margin != null) {
+      const w = live.margin > 0 ? home : live.margin < 0 ? away : "__DRAW__";
+      base.winner = w;
+      resolved.push(w === "__DRAW__" ? "draw" : `${w} won`);
+    } else {
+      const opts = [
+        { label: `${home} wins`, apply: (a) => ({ ...a, winner: home }) },
+        { label: `${away} wins`, apply: (a) => ({ ...a, winner: away }) },
+      ];
+      if (_SOCCER_TREE_SPORTS.has(g.sport)) {
+        opts.push({ label: "draw", apply: (a) => ({ ...a, winner: "__DRAW__" }) });
+      }
+      vars.push({ kind: "winner", varKey: "winner", exposure: exp.winner, options: opts });
     }
-    vars.push({ kind: "winner", varKey: "winner", exposure: exp.winner, options: opts });
   }
+
+  // TOTAL — monotonic (only rises). Over a line locks once crossed; bands the
+  // live total has already passed are pruned.
   if (totalLines.size) {
     const lines = [...totalLines].sort((a, b) => a - b);
-    // Each ticker line N displays as N − 0.5 (Over N−0.5) and resolves yes ⟺
-    // total ≥ N. Bands cut at each held line; the representative total per band
-    // resolves every held total leg unambiguously (none sits inside a band):
-    //   under band  → N0 − 1 (< all lines)   |   over band → last N (≥ all lines)
-    const opts = [];
-    opts.push({ label: `under ${lines[0] - 0.5}`, apply: (a) => ({ ...a, total: lines[0] - 1 }) });
-    for (let i = 0; i < lines.length - 1; i++) {
-      opts.push({ label: `${lines[i] - 0.5}–${lines[i + 1] - 0.5}`, apply: (a) => ({ ...a, total: lines[i] }) });
+    const cur = live && live.total != null ? live.total : null;
+    if (live && live.final && cur != null) {
+      base.total = cur; resolved.push(`total ${cur}`);
+    } else if (cur != null && cur >= lines[lines.length - 1]) {
+      base.total = cur; resolved.push(`total ${cur} (over ${lines[lines.length - 1] - 0.5})`);
+    } else {
+      let opts = [];
+      opts.push({ label: `under ${lines[0] - 0.5}`, bandMax: lines[0] - 1, apply: (a) => ({ ...a, total: lines[0] - 1 }) });
+      for (let i = 0; i < lines.length - 1; i++) {
+        opts.push({ label: `${lines[i] - 0.5}–${lines[i + 1] - 0.5}`, bandMax: lines[i + 1] - 1, apply: (a) => ({ ...a, total: lines[i] }) });
+      }
+      opts.push({ label: `over ${lines[lines.length - 1] - 0.5}`, bandMax: Infinity, apply: (a) => ({ ...a, total: lines[lines.length - 1] }) });
+      if (cur != null) opts = opts.filter((o) => o.bandMax >= cur); // drop bands already surpassed
+      if (opts.length <= 1) {
+        base.total = opts.length ? opts[0].apply({}).total : (cur != null ? cur : lines[0]);
+        if (cur != null) resolved.push(`total ${cur}`);
+      } else {
+        vars.push({ kind: "total", varKey: "total", exposure: exp.total, options: opts });
+      }
     }
-    opts.push({ label: `over ${lines[lines.length - 1] - 0.5}`, apply: (a) => ({ ...a, total: lines[lines.length - 1] }) });
-    vars.push({ kind: "total", varKey: "total", exposure: exp.total, options: opts });
   }
+
+  // RFI — pinned once the 1st inning has resolved.
   if (hasRfi) {
-    vars.push({ kind: "rfi", varKey: null, exposure: exp.rfi, options: [
-      { label: "run in 1st", apply: (a) => ({ ...a, rfi: true }) },
-      { label: "no run in 1st", apply: (a) => ({ ...a, rfi: false }) },
-    ] });
+    if (live && live.firstInningRuns != null) {
+      base.rfi = live.firstInningRuns > 0;
+      resolved.push(base.rfi ? "run in 1st" : "no run in 1st");
+    } else {
+      vars.push({ kind: "rfi", varKey: null, exposure: exp.rfi, options: [
+        { label: "run in 1st", apply: (a) => ({ ...a, rfi: true }) },
+        { label: "no run in 1st", apply: (a) => ({ ...a, rfi: false }) },
+      ] });
+    }
   }
+
+  // BTTS — locks true once both teams have scored.
   if (hasBtts) {
-    vars.push({ kind: "btts", varKey: "btts", exposure: exp.btts, options: [
-      { label: "both teams score", apply: (a) => ({ ...a, btts: true }) },
-      { label: "not both score", apply: (a) => ({ ...a, btts: false }) },
-    ] });
+    if (live && live.bothScored === true) { base.btts = true; resolved.push("both teams scored"); }
+    else if (live && live.final && live.bothScored === false) { base.btts = false; resolved.push("not both scored"); }
+    else {
+      vars.push({ kind: "btts", varKey: "btts", exposure: exp.btts, options: [
+        { label: "both teams score", apply: (a) => ({ ...a, btts: true }) },
+        { label: "not both score", apply: (a) => ({ ...a, btts: false }) },
+      ] });
+    }
   }
+
+  // PROPS — counting stats are monotonic: current ≥ N locks the "N+" (over);
+  // if the game is final and still under, it locks under.
   for (const [key, e] of [...props.entries()].sort((a, b) => b[1].exposure - a[1].exposure)) {
     const pr = e.prop;
     const name = pr.lastName || pr.team;
     const stat = (pr.stat || "").toLowerCase();
-    // Props are "N+" markets: under (our NO) = "under N"; over (yes) = "N+".
-    vars.push({ kind: "prop", varKey: key, exposure: e.exposure, options: [
-      { label: `${name} under ${pr.threshold} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }) },
-      { label: `${name} ${pr.threshold}+ ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }) },
-    ] });
+    const cur = live && live.propCurrent ? live.propCurrent(pr) : null;
+    if (cur != null && cur >= pr.threshold) {
+      base.props = { ...(base.props || {}), [key]: true };
+      resolved.push(`${name} ${pr.threshold}+ ${stat} (${cur})`);
+    } else if (live && live.final && cur != null && cur < pr.threshold) {
+      base.props = { ...(base.props || {}), [key]: false };
+      resolved.push(`${name} under ${pr.threshold} ${stat} (${cur})`);
+    } else {
+      // Props are "N+" markets: under (our NO) = "under N"; over (yes) = "N+".
+      vars.push({ kind: "prop", varKey: key, exposure: e.exposure, options: [
+        { label: `${name} under ${pr.threshold} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }) },
+        { label: `${name} ${pr.threshold}+ ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }) },
+      ] });
+    }
   }
 
-  // Leverage = how much forcing a variable swings our expected P&L (max over
-  // its options − min). The highest-leverage variable — the one that most
-  // determines our result, e.g. a prop whose "under" flips the worst case
-  // positive — splits first; deeper levels matter progressively less.
+  // Leverage = how much forcing a variable swings our expected P&L, evaluated
+  // ON TOP OF what's already decided (base). The highest-leverage variable —
+  // the one that most determines our result from here — splits first; deeper
+  // levels matter progressively less.
   for (const v of vars) {
-    const exps = v.options.map((o) => _treeNodeExpected(parlays, g.key, o.apply({})));
+    const exps = v.options.map((o) => _treeNodeExpected(parlays, g.key, o.apply(base)));
     v.leverage = Math.max(...exps) - Math.min(...exps);
   }
 
-  // Dual-direction offsets only resolve once the offsetting variable is
-  // branched (otherwise the tree can't see that two opposing parlays can't
-  // both lose, and its worst case inflates to gross). So FORCE-INCLUDE the
-  // offsetting variables — a hedged variable is naturally low-leverage, so it
-  // sinks to the bottom of the leverage order, which is exactly where its low
-  // predictive value belongs. Fill the remaining slots with the highest
-  // leverage variables, then order the chosen set by leverage. Cap to 3.
+  // Dual-direction offsets only resolve once the offsetting variable is fixed
+  // (branched OR already pinned in base). If it's still open, FORCE-INCLUDE it
+  // so the tree's worst case doesn't inflate to gross. A hedged variable is
+  // naturally low-leverage, so it sinks to the bottom of the leverage order —
+  // exactly where its low predictive value belongs. Fill remaining slots with
+  // the highest leverage variables, then order the chosen set by leverage.
   const offsetting = g.offsettingVars || new Set();
   const essential = vars.filter((v) => v.varKey && offsetting.has(v.varKey));
   const rest = vars.filter((v) => !essential.includes(v)).sort((a, b) => b.leverage - a.leverage);
   const picked = [...essential];
   for (const v of rest) { if (picked.length >= 3) break; picked.push(v); }
   picked.sort((a, b) => b.leverage - a.leverage);
-  return picked.slice(0, 3);
+  return { branchVars: picked.slice(0, 3), base, resolved };
 }
 
 // Build the nested tree of nodes. Each node: {label, best, worst, leanGood,
 // leanBad, children}. Also returns the overall worst/best leaf + their paths.
-function buildGameTree(g, parlays) {
+function buildGameTree(g, parlays, live) {
   // Only parlays touching this game — otherwise other games' costs leak into
   // this game's envelope.
   const ourParlays = parlays.filter((p) => p.legs.some((l) => legGameGroupKey(l.ticker) === g.key));
   if (!ourParlays.length) return null;
-  const branchVars = gameBranchVars(g, ourParlays);
-  if (!branchVars.length) return null;
+  const { branchVars, base, resolved } = gameBranchVars(g, ourParlays, live);
+
+  // Everything that mattered is already decided → no branches, single outcome.
+  if (!branchVars.length) {
+    const pnl = _treeNodePnl(ourParlays, g.key, base);
+    const expected = _treeNodeExpected(ourParlays, g.key, base);
+    return { roots: [], worst: pnl.worst, worstPath: [], best: pnl.best, bestPath: [], expected, resolved };
+  }
 
   let worstLeaf = { worst: Infinity, path: [] };
   let bestLeaf = { best: -Infinity, path: [] };
@@ -1409,13 +1465,14 @@ function buildGameTree(g, parlays) {
     return children;
   }
 
-  const roots = build(0, {}, []);
+  const roots = build(0, base, []); // root assignment = what live play has already decided
   return {
     roots,
     worst: worstLeaf.worst === Infinity ? null : worstLeaf.worst,
     worstPath: worstLeaf.path,
     best: bestLeaf.best === -Infinity ? null : bestLeaf.best,
     bestPath: bestLeaf.path,
+    resolved,
   };
 }
 
@@ -2327,10 +2384,39 @@ function renderGameCards() {
     // hold legs on (winner → total → biggest prop). Each node shows its
     // best..worst $ envelope; the favorable branch at each fork is flagged so
     // a glance tells you what to root for. Overall worst/best up top.
-    const tree = buildGameTree(g, state.positions);
+    // Live context so the tree can pin what's already happened (winner once
+    // final, total over a crossed line, the 1st-inning result, a prop that's
+    // already hit) and only branch what's still undecided. Pregame → null.
+    const treeLive = liveSc ? {
+      final: !!(live && live.state === "post"),
+      margin: liveSc.margin,
+      total: liveSc.total,
+      firstInningRuns: liveSc.firstInningRuns,
+      bothScored: liveSc.awayScore > 0 && liveSc.homeScore > 0,
+      propCurrent: (pr) => {
+        const r = resolvePlayerProp(pr, state.scoreboards, state.boxscores);
+        return r && r.current != null ? r.current : null;
+      },
+    } : null;
+    const tree = buildGameTree(g, state.positions, treeLive);
     let scenarioHtml = "";
-    if (tree && tree.roots && tree.roots.length) {
+    if (tree) {
       const money = (n) => `${n >= 0 ? "+" : "−"}$${Math.abs(n).toFixed(2)}`;
+      // Thermometer: bar from worst (left, red) to best (right, green); the tick
+      // sits at the market-implied EXPECTED outcome. Numbers colored by sign.
+      const meterHtml = (worst, best, expected) => {
+        const span = best - worst;
+        if (span <= 0.01) {
+          return `<span class="tree-meter locked" title="locked outcome"><span class="m-end ${worst >= 0 ? "pos" : "neg"}">${money(worst)}</span></span>`;
+        }
+        const markPct = Math.min(100, Math.max(0, ((expected - worst) / span) * 100));
+        return `
+          <span class="tree-meter" title="worst ${money(worst)} · expected ${money(expected)} · best ${money(best)} — tick = market-implied likely outcome">
+            <span class="m-end ${worst >= 0 ? "pos" : "neg"}">${money(worst)}</span>
+            <span class="m-track"><span class="m-mark" style="left:${markPct.toFixed(1)}%"></span></span>
+            <span class="m-end ${best >= 0 ? "pos" : "neg"}">${money(best)}</span>
+          </span>`;
+      };
       const renderNodes = (nodes) => nodes.map((node) => {
         const leanCls = node.leanGood ? " lean-good" : node.leanBad ? " lean-bad" : "";
         const lean = node.leanGood
@@ -2340,35 +2426,23 @@ function renderGameCards() {
           : "";
         const kids = node.children && node.children.length
           ? `<div class="tree-children">${renderNodes(node.children)}</div>` : "";
-        // Thermometer: bar from worst (left, red) to best (right, green); the
-        // tick sits at the market-implied EXPECTED outcome, so a likely-bad
-        // branch pulls it toward worst. Locked branches (no range) show one $.
-        const span = node.best - node.worst;
-        let meter;
-        if (span > 0.01) {
-          const markPct = Math.min(100, Math.max(0, ((node.expected - node.worst) / span) * 100));
-          meter = `
-            <span class="tree-meter" title="worst ${money(node.worst)} · expected ${money(node.expected)} · best ${money(node.best)} — tick = market-implied likely outcome">
-              <span class="m-end ${node.worst >= 0 ? "pos" : "neg"}">${money(node.worst)}</span>
-              <span class="m-track"><span class="m-mark" style="left:${markPct.toFixed(1)}%"></span></span>
-              <span class="m-end ${node.best >= 0 ? "pos" : "neg"}">${money(node.best)}</span>
-            </span>`;
-        } else {
-          meter = `<span class="tree-meter locked" title="locked outcome"><span class="m-end ${node.worst >= 0 ? "pos" : "neg"}">${money(node.worst)}</span></span>`;
-        }
         return `
           <div class="tree-node${leanCls}">
             <div class="tree-row">
               <span class="tree-label">${lean}${escapeHtml(node.label)}</span>
-              ${meter}
+              ${meterHtml(node.worst, node.best, node.expected)}
             </div>
             ${kids}
           </div>`;
       }).join("");
       const pathStr = (arr) => (arr && arr.length ? arr.join(" · ") : "—");
-      scenarioHtml = `
-        <div class="scenarios game-tree">
-          <div class="cheer-list-head">If the game goes…</div>
+      // "So far" — facts live play has already settled (pins the tree).
+      const resolvedHtml = (tree.resolved && tree.resolved.length)
+        ? `<div class="tree-resolved"><span class="tree-resolved-lbl">so far</span>${tree.resolved.map((r) => `<span class="rs">${escapeHtml(r)}</span>`).join("")}</div>`
+        : "";
+      const hasBranches = tree.roots && tree.roots.length;
+      const body = hasBranches
+        ? `
           <div class="tree-extremes">
             <div class="tree-extreme">
               <span class="tree-extreme-lbl neg">worst case</span>
@@ -2381,7 +2455,17 @@ function renderGameCards() {
               <b class="${tree.best >= 0 ? "pos" : "neg"}">${money(tree.best)}</b>
             </div>
           </div>
-          <div class="tree-body">${renderNodes(tree.roots)}</div>
+          <div class="tree-body">${renderNodes(tree.roots)}</div>`
+        : `
+          <div class="tree-body"><div class="tree-node"><div class="tree-row">
+            <span class="tree-label">outcome from here</span>
+            ${meterHtml(tree.worst, tree.best, tree.expected)}
+          </div></div></div>`;
+      scenarioHtml = `
+        <div class="scenarios game-tree">
+          <div class="cheer-list-head">If the game goes…</div>
+          ${resolvedHtml}
+          ${body}
         </div>
       `;
     }

@@ -618,6 +618,21 @@ h2 {
 .game-tree .tree-extreme b.pos { color: var(--pos); }
 .game-tree .tree-extreme b.neg { color: var(--neg); }
 
+/* "So far" — facts live play has already settled (these pin the tree). */
+.game-tree .tree-resolved {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin: 4px 0 10px;
+}
+.game-tree .tree-resolved-lbl {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted-2);
+}
+.game-tree .tree-resolved .rs {
+  font-size: 11px; color: var(--muted);
+  background: var(--card-head); border: 1px solid var(--border);
+  padding: 1px 7px; border-radius: 100px; white-space: nowrap;
+}
+
 .game-tree .tree-children {
   margin-left: 10px; padding-left: 10px;
   border-left: 1.5px solid var(--border);
