@@ -2614,9 +2614,6 @@ function renderParlayCard(p, n, probs) {
     }
   }
 
-  const unrealHtml = p.unreal != null
-    ? `<div class="col"><div class="lbl">Parlay MTM</div><div class="val ${pnlClass(p.unreal)}">${fmtMoney(p.unreal)}</div></div>`
-    : "";
   const pWinHtml = probs.pWin != null
     ? `<div class="col"><div class="lbl">Win chance</div><div class="val">${(probs.pWin*100).toFixed(0)}%</div></div>`
     : "";
@@ -2646,7 +2643,6 @@ function renderParlayCard(p, n, probs) {
         ${pWinHtml}
         ${evHtml}
         ${roiHtml}
-        ${unrealHtml}
       </div>
     </div>
     ${expanded ? `<div class="legs">${legHtml}</div>` : ""}
