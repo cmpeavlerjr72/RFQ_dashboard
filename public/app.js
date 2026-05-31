@@ -1589,8 +1589,20 @@ function liveStateFor(ev, sport) {
         batter: nm(sit.batter),
         batterLine: sit.batter?.summary || "",
         pitcher: nm(sit.pitcher),
+        pitcherId: sit.pitcher?.athlete?.id || null,
+        pitcherLine: sit.pitcher?.summary || "",
       };
     }
+  }
+  // Probable starting pitchers (pregame) — anchors the pitcher-K props.
+  let probables = null;
+  if (sport === "mlb" && state === "pre") {
+    const pa = (away?.probables || [])[0]?.athlete;
+    const ph = (home?.probables || [])[0]?.athlete;
+    if (pa || ph) probables = {
+      away: pa?.shortName || pa?.displayName || "",
+      home: ph?.shortName || ph?.displayName || "",
+    };
   }
   return {
     state, periodLabel,
@@ -1608,6 +1620,7 @@ function liveStateFor(ev, sport) {
     },
     firstInningRuns,
     baseball,
+    probables,
     raw: ev,
   };
 }
@@ -1635,7 +1648,7 @@ function bbSituationHtml(bb) {
         </div>
         <div class="bb-ab">
           ${bb.batter ? `<span class="bb-pa"><span class="bb-role">AB</span>${escapeHtml(bb.batter)}${bb.batterLine ? ` <span class="bb-line">${escapeHtml(bb.batterLine)}</span>` : ""}</span>` : ""}
-          ${bb.pitcher ? `<span class="bb-pa"><span class="bb-role">P</span>${escapeHtml(bb.pitcher)}</span>` : ""}
+          ${bb.pitcher ? `<span class="bb-pa${bb.pitcherHeld ? " held" : ""}"><span class="bb-role">P</span>${escapeHtml(bb.pitcher)}${(bb.pitches != null || bb.ip) ? ` <span class="bb-line">${bb.pitches != null ? `${bb.pitches}P` : ""}${bb.pitches != null && bb.ip ? " · " : ""}${bb.ip ? `${bb.ip} IP` : ""}</span>` : ""}${bb.pullRisk ? ` <span class="bb-pull" title="high pitch count — likely pulled soon, which caps a strikeout-over">⚠ pull risk</span>` : ""}</span>` : ""}
         </div>
       </div>
     </div>`;
@@ -1990,9 +2003,44 @@ function renderGameCards() {
     const collapsed = !state.gameExpanded.has(g.key);
     const chevron = collapsed ? "▸" : "▾";
 
+    // Pitcher-strikeout props we hold on THIS game, by last name — used to
+    // highlight the matching ESPN starter / current pitcher.
+    const heldKPitchers = new Set();
+    for (const r of (g.legs || [])) {
+      const pp = parsePlayerProp(r.ticker);
+      if (pp && pp.stat === "KS" && pp.lastName) heldKPitchers.add(pp.lastName.toUpperCase());
+    }
+    const lastOf = (n) => (n || "").replace(/^[A-Z]\.\s*/, "").toUpperCase();
+
+    // Enrich the live baseball situation with the current pitcher's workload
+    // (pitch count derived from the summary's play-by-play, IP from the box
+    // line) + a pull-risk flag, and flag if it's a pitcher whose K-prop we hold.
+    if (live && live.baseball && live.baseball.pitcherId) {
+      const summary = state.boxscores[`${g.sport}:${live.raw?.id}`];
+      let pitches = null;
+      if (summary && Array.isArray(summary.plays)) {
+        pitches = 0;
+        for (const pl of summary.plays) {
+          if (pl.summaryType === "P" &&
+              (pl.participants || []).some((pt) => pt.type === "pitcher" && String(pt.athlete?.id) === String(live.baseball.pitcherId))) {
+            pitches++;
+          }
+        }
+      }
+      live.baseball.pitches = pitches;
+      const ipm = (live.baseball.pitcherLine || "").match(/([\d.]+)\s*IP/);
+      live.baseball.ip = ipm ? ipm[1] : null;
+      live.baseball.pullRisk = pitches != null && pitches >= 85;
+      live.baseball.pitcherHeld = heldKPitchers.has(lastOf(live.baseball.pitcher));
+    }
+
     let scorePanel = "";
     if (live) {
       const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
+      const probName = (n) => `<span class="${heldKPitchers.has(lastOf(n)) ? "sp-held" : ""}">${escapeHtml(n)}</span>`;
+      const probablesHtml = live.probables
+        ? `<div class="bb-probables"><span class="bb-role">SP</span>${probName(live.probables.away)}<span class="sp-vs">vs</span>${probName(live.probables.home)}</div>`
+        : "";
       const awayLeading = live.state !== "pre" && live.away.score > live.home.score;
       const homeLeading = live.state !== "pre" && live.home.score > live.away.score;
       const teamRow = (t, leading) => {
@@ -2014,6 +2062,7 @@ function renderGameCards() {
           <div class="score-status"><span class="${dotCls}"></span><span>${escapeHtml(live.periodLabel)}</span></div>
           ${teamRow(live.away, awayLeading)}
           ${teamRow(live.home, homeLeading)}
+          ${probablesHtml}
           ${live.baseball ? bbSituationHtml(live.baseball) : ""}
         </div>`;
     }
