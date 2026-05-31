@@ -455,19 +455,6 @@ h2 {
   padding: 1px 5px; border-radius: 3px;
   white-space: nowrap;
 }
-.game-card-head .game-swing {
-  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
-  margin-top: 6px; cursor: help;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
-}
-.game-card-head .game-swing .swing-label {
-  font-family: inherit; font-size: 10px; color: var(--muted);
-  text-transform: uppercase; letter-spacing: .06em;
-}
-.game-card-head .game-swing .swing-val { font-weight: 700; }
-.game-card-head .game-swing .swing-val.pos { color: var(--pos); }
-.game-card-head .game-swing .swing-val.neg { color: var(--neg); }
-.game-card-head .game-swing .swing-sep { color: var(--muted-2); font-size: 11px; }
 .game-card-body { padding: 8px 12px 10px; }
 .game-card-body .cheer-list-head {
   font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
@@ -636,21 +623,36 @@ h2 {
   border-left: 1.5px solid var(--border);
 }
 .game-tree .tree-row {
-  display: flex; justify-content: space-between; align-items: baseline;
-  gap: 8px; padding: 3px 0; font-size: 12px;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; padding: 3px 0; font-size: 12px; flex-wrap: wrap;
 }
-.game-tree .tree-label { color: var(--fg); display: inline-flex; align-items: baseline; gap: 5px; }
+.game-tree .tree-label { color: var(--fg); display: inline-flex; align-items: baseline; gap: 5px; flex: 1 1 120px; min-width: 0; }
 .game-tree .tree-node.lean-good > .tree-row > .tree-label { font-weight: 600; }
 .game-tree .tree-lean { font-size: 9px; line-height: 1; }
 .game-tree .tree-lean.good { color: var(--pos); }
 .game-tree .tree-lean.bad { color: var(--neg); }
-.game-tree .tree-range {
-  display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+
+/* Thermometer: worst $ — gradient bar with an expected-outcome tick — best $ */
+.game-tree .tree-meter {
+  display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px;
+  cursor: help;
 }
-.game-tree .tree-range .pos { color: var(--pos); font-weight: 600; }
-.game-tree .tree-range .neg { color: var(--neg); font-weight: 600; }
-.game-tree .tree-range .tree-sep { color: var(--muted-2); font-weight: 400; }
+.game-tree .tree-meter .m-end { white-space: nowrap; font-weight: 600; }
+.game-tree .tree-meter .m-end.neg { color: var(--neg); }
+.game-tree .tree-meter .m-end.pos { color: var(--pos); }
+.game-tree .tree-meter .m-track {
+  position: relative; width: 68px; height: 6px; border-radius: 3px;
+  background: linear-gradient(to right,
+    rgba(190, 18, 60, 0.75), rgba(148, 163, 184, 0.18), rgba(21, 128, 61, 0.75));
+}
+.game-tree .tree-meter .m-mark {
+  position: absolute; top: -3px; width: 3px; height: 12px;
+  background: var(--fg); border-radius: 2px;
+  transform: translateX(-1.5px);
+  box-shadow: 0 0 0 1.5px var(--card);
+}
+.game-tree .tree-meter.locked .m-end { opacity: 0.85; }
 
 footer {
   border-top: 1px solid var(--border); background: var(--card);

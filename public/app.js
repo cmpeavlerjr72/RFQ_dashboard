@@ -1236,6 +1236,36 @@ function _treeNodePnl(parlays, gameKey, asg) {
   return { best, worst };
 }
 
+// Market-implied probability that OUR side wins a leg (pUs), from the live
+// leg mid (preferred) or the fill-time fair as fallback. null when unknown.
+function _treeLegPUs(p, leg) {
+  const lm = p.legMids?.[leg.ticker];
+  if (lm && lm.midC != null) return Math.min(1, Math.max(0, lm.midC / 100));
+  if (leg.p != null) return Math.min(1, Math.max(0, 1 - Number(leg.p)));
+  return null;
+}
+
+// Expected $ P&L for the book under a partial assignment, using market-implied
+// per-leg probabilities for everything not pinned by the assignment. Lies
+// inside [worst, best], so its position on that range is the thermometer mark.
+// Unknown-prob legs fall back to 50/50.
+function _treeNodeExpected(parlays, gameKey, asg) {
+  let exp = 0;
+  for (const p of parlays) {
+    let pAllHit = 1;
+    for (const l of p.legs) {
+      const r = (legGameGroupKey(l.ticker) === gameKey) ? _treeEvalLeg(l.ticker, l.side, asg) : "unknown";
+      let pHit;
+      if (r === "buyer_hit") pHit = 1;
+      else if (r === "buyer_miss") pHit = 0;
+      else { const pu = _treeLegPUs(p, l); pHit = pu == null ? 0.5 : (1 - pu); }
+      pAllHit *= pHit;
+    }
+    exp += pAllHit * (-p.cost) + (1 - pAllHit) * p.max_profit;
+  }
+  return exp;
+}
+
 const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"]);
 
 // Determine which variables we hold legs on and turn them into ordered branch
@@ -1348,13 +1378,14 @@ function buildGameTree(g, parlays) {
     const children = branchVars[idx].options.map((opt) => {
       const asg2 = opt.apply(asg);
       const pnl = _treeNodePnl(ourParlays, g.key, asg2);
+      const expected = _treeNodeExpected(ourParlays, g.key, asg2);
       const myPath = path.concat(opt.label);
       const kids = build(idx + 1, asg2, myPath);
       if (!kids) { // leaf — track extremes
         if (pnl.worst < worstLeaf.worst) worstLeaf = { worst: pnl.worst, path: myPath };
         if (pnl.best > bestLeaf.best) bestLeaf = { best: pnl.best, path: myPath };
       }
-      return { label: opt.label, best: pnl.best, worst: pnl.worst, children: kids };
+      return { label: opt.label, best: pnl.best, worst: pnl.worst, expected, children: kids };
     });
     // Mark the sibling we'd most root for (highest midpoint) and most against.
     if (children.length > 1) {
@@ -2300,15 +2331,27 @@ function renderGameCards() {
           : "";
         const kids = node.children && node.children.length
           ? `<div class="tree-children">${renderNodes(node.children)}</div>` : "";
+        // Thermometer: bar from worst (left, red) to best (right, green); the
+        // tick sits at the market-implied EXPECTED outcome, so a likely-bad
+        // branch pulls it toward worst. Locked branches (no range) show one $.
+        const span = node.best - node.worst;
+        let meter;
+        if (span > 0.01) {
+          const markPct = Math.min(100, Math.max(0, ((node.expected - node.worst) / span) * 100));
+          meter = `
+            <span class="tree-meter" title="worst ${money(node.worst)} · expected ${money(node.expected)} · best ${money(node.best)} — tick = market-implied likely outcome">
+              <span class="m-end neg">${money(node.worst)}</span>
+              <span class="m-track"><span class="m-mark" style="left:${markPct.toFixed(1)}%"></span></span>
+              <span class="m-end pos">${money(node.best)}</span>
+            </span>`;
+        } else {
+          meter = `<span class="tree-meter locked" title="locked outcome"><span class="m-end ${node.worst >= 0 ? "pos" : "neg"}">${money(node.worst)}</span></span>`;
+        }
         return `
           <div class="tree-node${leanCls}">
             <div class="tree-row">
               <span class="tree-label">${lean}${escapeHtml(node.label)}</span>
-              <span class="tree-range">
-                <span class="${node.worst >= 0 ? "pos" : "neg"}">${money(node.worst)}</span>
-                <span class="tree-sep">to</span>
-                <span class="${node.best >= 0 ? "pos" : "neg"}">${money(node.best)}</span>
-              </span>
+              ${meter}
             </div>
             ${kids}
           </div>`;
@@ -2360,13 +2403,6 @@ function renderGameCards() {
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
               </span>` : ""}
           </div>
-          ${g.hedged ? `
-          <div class="game-swing" title="Full outcome envelope for every parlay touching this game. Worst = net loss after dual-direction offsets, assuming every player prop hits the buyer. Best = every parlay voids in our favor (props break our way).">
-            <span class="swing-label">outcome range</span>
-            <span class="swing-val neg">${fmtMoney(-g.worstCase)}</span>
-            <span class="swing-sep">to</span>
-            <span class="swing-val pos">+${g.maxWin.toFixed(2)}</span>
-          </div>` : ""}
         </div>
         ${collapsed ? "" : `
         <div class="game-card-body">
