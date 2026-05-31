@@ -1308,7 +1308,7 @@ function gameBranchVars(g, parlays) {
     if (_SOCCER_TREE_SPORTS.has(g.sport)) {
       opts.push({ label: "draw", apply: (a) => ({ ...a, winner: "__DRAW__" }) });
     }
-    vars.push({ kind: "winner", exposure: exp.winner, options: opts });
+    vars.push({ kind: "winner", varKey: "winner", exposure: exp.winner, options: opts });
   }
   if (totalLines.size) {
     const lines = [...totalLines].sort((a, b) => a - b);
@@ -1322,16 +1322,16 @@ function gameBranchVars(g, parlays) {
       opts.push({ label: `${lines[i] - 0.5}–${lines[i + 1] - 0.5}`, apply: (a) => ({ ...a, total: lines[i] }) });
     }
     opts.push({ label: `over ${lines[lines.length - 1] - 0.5}`, apply: (a) => ({ ...a, total: lines[lines.length - 1] }) });
-    vars.push({ kind: "total", exposure: exp.total, options: opts });
+    vars.push({ kind: "total", varKey: "total", exposure: exp.total, options: opts });
   }
   if (hasRfi) {
-    vars.push({ kind: "rfi", exposure: exp.rfi, options: [
+    vars.push({ kind: "rfi", varKey: null, exposure: exp.rfi, options: [
       { label: "run in 1st", apply: (a) => ({ ...a, rfi: true }) },
       { label: "no run in 1st", apply: (a) => ({ ...a, rfi: false }) },
     ] });
   }
   if (hasBtts) {
-    vars.push({ kind: "btts", exposure: exp.btts, options: [
+    vars.push({ kind: "btts", varKey: "btts", exposure: exp.btts, options: [
       { label: "both teams score", apply: (a) => ({ ...a, btts: true }) },
       { label: "not both score", apply: (a) => ({ ...a, btts: false }) },
     ] });
@@ -1341,27 +1341,35 @@ function gameBranchVars(g, parlays) {
     const name = pr.lastName || pr.team;
     const stat = (pr.stat || "").toLowerCase();
     // Props are "N+" markets: under (our NO) = "under N"; over (yes) = "N+".
-    vars.push({ kind: "prop", exposure: e.exposure, options: [
+    vars.push({ kind: "prop", varKey: key, exposure: e.exposure, options: [
       { label: `${name} under ${pr.threshold} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }) },
       { label: `${name} ${pr.threshold}+ ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }) },
     ] });
   }
 
-  // Order: winner first (most intuitive), then the biggest game-state variable
-  // (total/rfi/btts), then the biggest player prop — so a typical card reads
-  // winner → total → key prop. Pad from leftovers by exposure. Cap to 3 levels
-  // so the tree stays glanceable on a phone.
-  const winnerV = vars.find((v) => v.kind === "winner");
-  const gameVars = vars.filter((v) => ["total", "rfi", "btts"].includes(v.kind)).sort((a, b) => b.exposure - a.exposure);
-  const propVars = vars.filter((v) => v.kind === "prop"); // already exposure-sorted
-  const ordered = [];
-  if (winnerV) ordered.push(winnerV);
-  if (gameVars[0]) ordered.push(gameVars[0]);
-  if (propVars[0]) ordered.push(propVars[0]);
-  const used = new Set(ordered);
-  const leftovers = [...gameVars, ...propVars].filter((v) => !used.has(v)).sort((a, b) => b.exposure - a.exposure);
-  while (ordered.length < 3 && leftovers.length) ordered.push(leftovers.shift());
-  return ordered.slice(0, 3);
+  // Leverage = how much forcing a variable swings our expected P&L (max over
+  // its options − min). The highest-leverage variable — the one that most
+  // determines our result, e.g. a prop whose "under" flips the worst case
+  // positive — splits first; deeper levels matter progressively less.
+  for (const v of vars) {
+    const exps = v.options.map((o) => _treeNodeExpected(parlays, g.key, o.apply({})));
+    v.leverage = Math.max(...exps) - Math.min(...exps);
+  }
+
+  // Dual-direction offsets only resolve once the offsetting variable is
+  // branched (otherwise the tree can't see that two opposing parlays can't
+  // both lose, and its worst case inflates to gross). So FORCE-INCLUDE the
+  // offsetting variables — a hedged variable is naturally low-leverage, so it
+  // sinks to the bottom of the leverage order, which is exactly where its low
+  // predictive value belongs. Fill the remaining slots with the highest
+  // leverage variables, then order the chosen set by leverage. Cap to 3.
+  const offsetting = g.offsettingVars || new Set();
+  const essential = vars.filter((v) => v.varKey && offsetting.has(v.varKey));
+  const rest = vars.filter((v) => !essential.includes(v)).sort((a, b) => b.leverage - a.leverage);
+  const picked = [...essential];
+  for (const v of rest) { if (picked.length >= 3) break; picked.push(v); }
+  picked.sort((a, b) => b.leverage - a.leverage);
+  return picked.slice(0, 3);
 }
 
 // Build the nested tree of nodes. Each node: {label, best, worst, leanGood,
@@ -2341,9 +2349,9 @@ function renderGameCards() {
           const markPct = Math.min(100, Math.max(0, ((node.expected - node.worst) / span) * 100));
           meter = `
             <span class="tree-meter" title="worst ${money(node.worst)} · expected ${money(node.expected)} · best ${money(node.best)} — tick = market-implied likely outcome">
-              <span class="m-end neg">${money(node.worst)}</span>
+              <span class="m-end ${node.worst >= 0 ? "pos" : "neg"}">${money(node.worst)}</span>
               <span class="m-track"><span class="m-mark" style="left:${markPct.toFixed(1)}%"></span></span>
-              <span class="m-end pos">${money(node.best)}</span>
+              <span class="m-end ${node.best >= 0 ? "pos" : "neg"}">${money(node.best)}</span>
             </span>`;
         } else {
           meter = `<span class="tree-meter locked" title="locked outcome"><span class="m-end ${node.worst >= 0 ? "pos" : "neg"}">${money(node.worst)}</span></span>`;
