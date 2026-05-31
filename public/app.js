@@ -1015,18 +1015,19 @@ function evalGameLegInScenario(parsed, buyerSide, scenario) {
   }
   if (parsed.kind === "spread") {
     if (margin == null) return "unknown";
-    // SAS{N} yes  = SAS wins by more than N.5 = margin > N (when SAS is home)
-    // For away pick, mirror: pick wins by > N means -margin > N.
+    // Ticker N is the "wins by N+" market (floor_strike N − 0.5), so yes ⟺
+    // margin ≥ N. e.g. N=2 ("by over 1.5") hits on a 2-run win.
     const [away, home] = parsed.teams;
     let yesHits;
-    if (parsed.pick === home) yesHits = margin > parsed.threshold;
-    else if (parsed.pick === away) yesHits = -margin > parsed.threshold;
+    if (parsed.pick === home) yesHits = margin >= parsed.threshold;
+    else if (parsed.pick === away) yesHits = -margin >= parsed.threshold;
     else return "unknown";
     return resolveLeg(yesHits, buyerSide);
   }
   if (parsed.kind === "total") {
     if (scenario.total == null) return "unknown";
-    const yesHits = scenario.total > parsed.threshold;
+    // Ticker N is the "N+" market (Over N − 0.5), so yes ⟺ total ≥ N.
+    const yesHits = scenario.total >= parsed.threshold;
     return resolveLeg(yesHits, buyerSide);
   }
   if (parsed.kind === "btts") {
@@ -1194,7 +1195,7 @@ function _treeEvalLeg(ticker, side, asg) {
     }
     if (gl.kind === "total") {
       if (asg.total == null) return "unknown";
-      return _treeResolveBuyer(asg.total > gl.threshold, side);
+      return _treeResolveBuyer(asg.total >= gl.threshold, side); // ticker N => Over N−0.5
     }
     if (gl.kind === "rfi") {
       if (asg.rfi == null) return "unknown";
@@ -1311,14 +1312,16 @@ function gameBranchVars(g, parlays) {
   }
   if (totalLines.size) {
     const lines = [...totalLines].sort((a, b) => a - b);
-    // Bands cut at each held line. Representative total per band resolves every
-    // held total leg unambiguously (no held line sits inside a band).
+    // Each ticker line N displays as N − 0.5 (Over N−0.5) and resolves yes ⟺
+    // total ≥ N. Bands cut at each held line; the representative total per band
+    // resolves every held total leg unambiguously (none sits inside a band):
+    //   under band  → N0 − 1 (< all lines)   |   over band → last N (≥ all lines)
     const opts = [];
-    opts.push({ label: `under ${lines[0] + 0.5}`, apply: (a) => ({ ...a, total: lines[0] }) });
+    opts.push({ label: `under ${lines[0] - 0.5}`, apply: (a) => ({ ...a, total: lines[0] - 1 }) });
     for (let i = 0; i < lines.length - 1; i++) {
-      opts.push({ label: `${lines[i] + 0.5}–${lines[i + 1] + 0.5}`, apply: (a) => ({ ...a, total: lines[i] + 1 }) });
+      opts.push({ label: `${lines[i] - 0.5}–${lines[i + 1] - 0.5}`, apply: (a) => ({ ...a, total: lines[i] }) });
     }
-    opts.push({ label: `over ${lines[lines.length - 1] + 0.5}`, apply: (a) => ({ ...a, total: lines[lines.length - 1] + 1 }) });
+    opts.push({ label: `over ${lines[lines.length - 1] - 0.5}`, apply: (a) => ({ ...a, total: lines[lines.length - 1] }) });
     vars.push({ kind: "total", exposure: exp.total, options: opts });
   }
   if (hasRfi) {
@@ -1337,9 +1340,10 @@ function gameBranchVars(g, parlays) {
     const pr = e.prop;
     const name = pr.lastName || pr.team;
     const stat = (pr.stat || "").toLowerCase();
+    // Props are "N+" markets: under (our NO) = "under N"; over (yes) = "N+".
     vars.push({ kind: "prop", exposure: e.exposure, options: [
-      { label: `${name} under ${pr.threshold + 0.5} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }) },
-      { label: `${name} over ${pr.threshold + 0.5} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }) },
+      { label: `${name} under ${pr.threshold} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }) },
+      { label: `${name} ${pr.threshold}+ ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }) },
     ] });
   }
 
@@ -2049,18 +2053,15 @@ function renderGameCards() {
         // i.e., "win" regardless of original buyer side.
         chipLabel = "win";
       } else if (parsed.kind === "spread") {
-        // Chip displays our cheering perspective:
-        //   Buyer-YES on TEAM-N: we cheer for the OPPOSING dog at +N.5
-        //   Buyer-NO  on TEAM-N: we cheer for TEAM at -N.5 (favorite)
-        // The bucket is already the team WE cheer for; sign reflects
-        // whether that team is the favorite or the dog of THIS line.
+        // Chip displays our cheering perspective. Ticker N is the "by N+"
+        // market, line = N − 0.5 (= floor_strike). Buyer-YES on TEAM-N: we
+        // cheer the OPPOSING dog at +(N−0.5); Buyer-NO: TEAM at −(N−0.5).
         const sign = buyerSide === "yes" ? "+" : "-";
-        chipLabel = `${sign}${parsed.threshold + 0.5}`;
+        chipLabel = `${sign}${parsed.threshold - 0.5}`;
       } else if (parsed.kind === "total") {
-        // Same rule for total: show OUR side, not buyer's. Buyer-YES on
-        // a total means buyer took the over; we (long-NO) cheer for the
-        // under, so chip = "u N.5". Buyer-NO -> we cheer for the over.
-        const line = parsed.threshold + 0.5;
+        // Same rule for total: show OUR side, not buyer's. Ticker N => Over
+        // N−0.5 market. Buyer-YES (over) -> we cheer under; buyer-NO -> over.
+        const line = parsed.threshold - 0.5;
         chipLabel = buyerSide === "yes" ? `u${line}` : `o${line}`;
       } else if (parsed.kind === "rfi") {
         // RFI is binary "any run in 1st". Buyer-YES (a run scored) -> we

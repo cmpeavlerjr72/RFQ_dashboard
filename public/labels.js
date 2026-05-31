@@ -89,15 +89,18 @@ function ymdHumanFromTicker(date /* "26APR28" */) {
 
 // ---------- main ----------
 
-// Kalshi total markets are integer-N "Over N? YES" contracts that settle
-// strictly ABOVE N (a 2-goal game LOSES an "Over 2?" YES → wins the under).
-// That's equivalent to a standard N.5 line with no push, so display N + 0.5
-// to avoid the "UNDER 2 (but 2 actually wins)" confusion. Applies to ALL
-// totals (goals/runs/points/team totals). Odds/probabilities are unaffected
-// — this is purely the displayed line label.
+// Kalshi markets are "N+" (yes ⟺ value ≥ N), so the actual sportsbook line is
+// N − 0.5 (= the market's floor_strike). e.g. ticker total "12" is the
+// "12+ runs" market, i.e. Over 11.5. So the displayed half-line is N − 0.5.
 function totalLine(v) {
   const x = Number(v);
-  return Number.isFinite(x) ? String(x + 0.5) : v;
+  return Number.isFinite(x) ? String(x - 0.5) : v;
+}
+// Same convention for spreads: ticker integer N is "wins by N+", i.e. by over
+// N − 0.5. Displayed line is N − 0.5.
+function spreadLine(v) {
+  const x = Number(v);
+  return Number.isFinite(x) ? String(x - 0.5) : v;
 }
 
 export function legLabel(ticker, side, athleteIdx) {
@@ -129,7 +132,7 @@ export function legLabel(ticker, side, athleteIdx) {
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NHL_TEAMS);
-    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} spread ${line}` + (side === "yes" ? "" : " (no)");
+    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} spread ${spreadLine(line)}` + (side === "yes" ? "" : " (no)");
   }
 
   // ---------- MLB ----------
@@ -158,7 +161,7 @@ export function legLabel(ticker, side, athleteIdx) {
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, MLB_TEAMS);
-    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} spread ${line}` + (side === "yes" ? "" : " (no)");
+    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} spread ${spreadLine(line)}` + (side === "yes" ? "" : " (no)");
   }
 
   // MLB player props
@@ -211,7 +214,7 @@ export function legLabel(ticker, side, athleteIdx) {
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NBA_TEAMS);
-    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} spread ${line}` + (side === "yes" ? "" : " (no)");
+    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} spread ${spreadLine(line)}` + (side === "yes" ? "" : " (no)");
   }
 
   // NBA player props
@@ -333,7 +336,7 @@ export function legLabel(ticker, side, athleteIdx) {
       // Suffix is the team abbrev + handicap (e.g. "RMA1" = RMA -1.5).
       // We can't always cleanly parse the handicap; render the matchup and
       // direction at minimum.
-      if (side === "yes") return `${label}: ${aName} vs ${bName} spread ${suffix}`;
+      if (side === "yes") return `${label}: ${aName} vs ${bName} spread ${spreadLine(suffix)}`;
       return `${label}: ${aName} vs ${bName} spread NOT ${suffix}`;
     }
     if (pref.endsWith("TOTAL")) {
