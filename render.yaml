@@ -8,11 +8,19 @@ services:
     envVars:
       - key: KALSHI_ENV
         value: PROD
+      # Primary account (MVPeav)
       - key: KALSHI_API_KEY_ID
         sync: false
       - key: KALSHI_PRIVATE_KEY
         sync: false
-      # Render's free tier supports Secret Files. If you prefer a file:
-      #   1) upload kalshi.pem under "Secret Files" in the Render dashboard
-      #   2) set KALSHI_PRIVATE_KEY_PATH=/etc/secrets/kalshi.pem
-      #   3) leave KALSHI_PRIVATE_KEY unset
+      # Second account (TGPeav) — set both in the Render dashboard.
+      - key: KALSHI_API_KEY_ID_SECOND
+        sync: false
+      - key: KALSHI_PRIVATE_KEY_SECOND
+        sync: false
+      # Render's free tier supports Secret Files. If you prefer files over
+      # inline PEMs:
+      #   1) upload each .pem under "Secret Files" in the Render dashboard
+      #   2) set KALSHI_PRIVATE_KEY_PATH=/etc/secrets/kalshi.pem  (MVPeav)
+      #      and KALSHI_PRIVATE_KEY_PATH_SECOND=/etc/secrets/kalshi_second.pem (TGPeav)
+      #   3) leave the inline KALSHI_PRIVATE_KEY / KALSHI_PRIVATE_KEY_SECOND unset

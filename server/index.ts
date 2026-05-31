@@ -18,6 +18,8 @@ import {
   getRfqLegs,
   recoverParlay,
   cacheStats as kalshiCacheStats,
+  resolveAccount,
+  listAccounts,
 } from "./kalshi.js";
 import {
   getScoreboard,
@@ -51,6 +53,17 @@ app.use(express.json({ limit: "1mb" }));
 let upstreamCallCount = 0;
 let lastError: { ts: number; msg: string } | null = null;
 
+// Which Kalshi account a request targets. Read from ?account=, validated and
+// defaulted to MVPeav by resolveAccount() so missing/garbage values are safe.
+function acct(req: Request): string {
+  return resolveAccount(req.query.account as string | undefined);
+}
+
+// Frontend uses this to populate the account switcher.
+app.get("/api/accounts", (_req, res) => {
+  res.json({ accounts: listAccounts() });
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
@@ -68,10 +81,10 @@ app.get("/api/health", (_req, res) => {
 // Kalshi endpoints
 // ----------------------------------------------------------------------------
 
-app.get("/api/kalshi/balance", async (_req, res, next) => {
+app.get("/api/kalshi/balance", async (req, res, next) => {
   try {
     upstreamCallCount++;
-    res.json(await getBalance());
+    res.json(await getBalance(acct(req)));
   } catch (e) { next(e); }
 });
 
@@ -79,7 +92,7 @@ app.get("/api/kalshi/positions", async (req, res, next) => {
   try {
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
-    res.json(await getPositions(force));
+    res.json(await getPositions(acct(req), force));
   } catch (e) { next(e); }
 });
 
@@ -87,7 +100,7 @@ app.get("/api/kalshi/market/:ticker", async (req, res, next) => {
   try {
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
-    res.json(await getMarket(req.params.ticker, force));
+    res.json(await getMarket(acct(req), req.params.ticker, force));
   } catch (e) { next(e); }
 });
 
@@ -99,14 +112,14 @@ app.post("/api/kalshi/markets", async (req, res, next) => {
       return res.status(400).json({ error: "max 100 tickers per request" });
     }
     upstreamCallCount++;
-    res.json(await getMarketsBatch(tickers));
+    res.json(await getMarketsBatch(acct(req), tickers));
   } catch (e) { next(e); }
 });
 
 app.get("/api/kalshi/rfq/:rfqId", async (req, res, next) => {
   try {
     upstreamCallCount++;
-    res.json(await getRfqLegs(req.params.rfqId));
+    res.json(await getRfqLegs(acct(req), req.params.rfqId));
   } catch (e) { next(e); }
 });
 
@@ -115,7 +128,7 @@ app.get("/api/kalshi/rfq/:rfqId", async (req, res, next) => {
 app.get("/api/kalshi/recover/:ticker", async (req, res, next) => {
   try {
     upstreamCallCount++;
-    res.json(await recoverParlay(req.params.ticker));
+    res.json(await recoverParlay(acct(req), req.params.ticker));
   } catch (e) { next(e); }
 });
 
@@ -174,14 +187,28 @@ app.get("/api/roster", async (req, res, next) => {
 // Fills endpoint — reads local fills.jsonl produced by the runners
 // ----------------------------------------------------------------------------
 
-const FILLS_PATH = process.env.FILLS_PATH
-  ? path.resolve(process.cwd(), process.env.FILLS_PATH)
-  : path.resolve(__dirname, "..", "..", "data", "fills.jsonl");
+// Per-account local fills file. MVPeav keeps the original FILLS_PATH (default
+// data/fills.jsonl); TGPeav uses FILLS_PATH_SECOND (default data/fills_second.jsonl).
+// This file is only an optional fast-path for the live open-positions panel —
+// positions + leg recovery come from Kalshi regardless (see kalshi.ts), so a
+// missing file just yields {fills: []}, exactly like the deployed MVPeav case.
+function fillsPathFor(account: string): string {
+  if (account === "MVPeav") {
+    return process.env.FILLS_PATH
+      ? path.resolve(process.cwd(), process.env.FILLS_PATH)
+      : path.resolve(__dirname, "..", "..", "data", "fills.jsonl");
+  }
+  // Suffix convention for non-default accounts: FILLS_PATH_<ACCOUNT-UPPER>
+  const envVar = `FILLS_PATH_${account.toUpperCase()}`;
+  if (process.env[envVar]) return path.resolve(process.cwd(), process.env[envVar]!);
+  return path.resolve(__dirname, "..", "..", "data", `fills_${account.toLowerCase()}.jsonl`);
+}
 
-app.get("/api/fills", (_req, res) => {
-  if (!fs.existsSync(FILLS_PATH)) return res.json({ fills: [] });
+app.get("/api/fills", (req, res) => {
+  const fillsPath = fillsPathFor(acct(req));
+  if (!fs.existsSync(fillsPath)) return res.json({ fills: [] });
   try {
-    const text = fs.readFileSync(FILLS_PATH, "utf-8");
+    const text = fs.readFileSync(fillsPath, "utf-8");
     const lines = text.split("\n").filter(Boolean);
     const fills = lines.map((l) => {
       try { return JSON.parse(l); } catch { return null; }
@@ -203,7 +230,7 @@ app.get("/api/recap", async (req, res, next) => {
     if (!start) return res.status(400).json({ error: "start=YYYY-MM-DD required" });
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
-    const payload = await getRecap(start, end, force);
+    const payload = await getRecap(acct(req), start, end, force);
     res.json(payload);
   } catch (e) { next(e); }
 });
@@ -252,5 +279,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 app.listen(PORT, () => {
   console.log(`kalshi-dashboard listening on http://localhost:${PORT}`);
   console.log(`  Kalshi env:  ${process.env.KALSHI_ENV || "PROD"}`);
-  console.log(`  Fills file:  ${FILLS_PATH}`);
+  console.log(`  Accounts:    ${listAccounts().join(", ")}`);
+  console.log(`  Fills file:  ${fillsPathFor("MVPeav")} (MVPeav)`);
 });

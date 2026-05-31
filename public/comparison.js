@@ -15,6 +15,8 @@
 //  - Daily chart shows cumulative ROI as two lines so we can see whether
 //    the strategies move together or diverge.
 
+import { initAccountPicker, withAccount } from "/account.js";
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -137,7 +139,7 @@ async function fetchAll({ force }) {
   const force_q = force ? "&fresh=1" : "";
   try {
     const [oursR, theirsR] = await Promise.all([
-      fetch(`/api/recap?start=${start}&end=${end}${force_q}`).then((r) => r.json()),
+      fetch(withAccount(`/api/recap?start=${start}&end=${end}${force_q}`)).then((r) => r.json()),
       fetch(`/api/partner-recap${force ? "?fresh=1" : ""}`).then((r) => r.json()),
     ]);
     state.ours = oursR;
@@ -546,5 +548,12 @@ $("start-date").value = "2026-05-16";
 $("end-date").value = todayEt();
 $("end-date").max = todayEt();
 $("start-date").max = todayEt();
+
+// Account switcher: our side is account-specific (partner side is not), so
+// reload if a comparison is already on screen.
+initAccountPicker((newAccount) => {
+  setStatus(`switched to ${newAccount}`);
+  if (state.ours) fetchAll({ force: false });
+});
 
 setStatus("ready — click Load");

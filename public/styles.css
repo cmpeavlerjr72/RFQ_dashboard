@@ -603,6 +603,19 @@ footer {
 .nav-links a:hover { background: var(--card-head); color: var(--fg); }
 .nav-links a.active { color: var(--fg); background: var(--accent-bg); }
 
+/* Account switcher in the header — sits between nav and the (right-pushed) status. */
+.account-picker {
+  display: flex; align-items: center; gap: 6px;
+  margin-left: 16px;
+  color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.account-picker select {
+  background: var(--card-head); color: var(--fg);
+  border: 1px solid var(--accent-bg); border-radius: 6px;
+  padding: 4px 8px; font-size: 13px; text-transform: none; letter-spacing: 0;
+  cursor: pointer;
+}
+
 /* ---------- recap controls ---------- */
 .recap-date {
   display: flex; align-items: center; gap: 6px;

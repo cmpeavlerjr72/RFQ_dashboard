@@ -6,6 +6,7 @@ import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEven
 import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker,
          allCompetitions, athleteCodeCandidates,
          NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
+import { initAccountPicker, withAccount } from "/account.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -67,7 +68,10 @@ function pnlClass(n) {
 }
 async function api(path, opts = {}) {
   state.apiCallsThisSession++;
-  const r = await fetch(path, opts);
+  // Route same-origin API calls through the active account. ESPN endpoints
+  // ignore the extra ?account= param harmlessly; Kalshi endpoints need it.
+  const url = path.startsWith("/api/") ? withAccount(path) : path;
+  const r = await fetch(url, opts);
   if (!r.ok) throw new Error(`${path} → ${r.status}`);
   return r.json();
 }
@@ -2491,4 +2495,27 @@ $("auto-interval").addEventListener("change", () => {
   }
 });
 
-refresh();
+// Account switcher: on change, wipe account-specific state and reload so the
+// page shows the newly-selected account's balance / positions / fills.
+function resetForAccountSwitch() {
+  state.balance = null;
+  state.positions = [];
+  state.fillsByParlay = {};
+  state.scoreboards = {};
+  state.boxscores = {};
+  state.rosters = {};
+  state.athletesByKey = {};
+  state.athleteIdx = {};
+  state.gameExpanded = new Set();
+  state.parlayExpanded = new Set();
+  state.excludedPortfolioValue = 0;
+  render();
+}
+
+initAccountPicker((newAccount) => {
+  setStatus(`switched to ${newAccount}`, "");
+  resetForAccountSwitch();
+  refresh();
+}).then(() => {
+  refresh();
+});

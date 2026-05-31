@@ -188,13 +188,13 @@ function parseIsoMs(s: string | undefined): number | null {
 // Pagination — fills (newest first) until we go past startUtcMs
 // ----------------------------------------------------------------------------
 
-async function fetchFillsBack(startUtcMs: number, maxPages = 30): Promise<{ fills: KalshiFill[]; pages: number }> {
+async function fetchFillsBack(account: string, startUtcMs: number, maxPages = 30): Promise<{ fills: KalshiFill[]; pages: number }> {
   const out: KalshiFill[] = [];
   let cursor = "";
   let pages = 0;
   for (let i = 0; i < maxPages; i++) {
     const q = "/portfolio/fills?limit=200" + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
-    const body = await getJson(q);
+    const body = await getJson(account, q);
     pages++;
     const page: KalshiFill[] = body?.fills || [];
     out.push(...page);
@@ -208,13 +208,13 @@ async function fetchFillsBack(startUtcMs: number, maxPages = 30): Promise<{ fill
   return { fills: out, pages };
 }
 
-async function fetchSettlementsBack(startUtcMs: number, maxPages = 30): Promise<{ settles: KalshiSettlement[]; pages: number }> {
+async function fetchSettlementsBack(account: string, startUtcMs: number, maxPages = 30): Promise<{ settles: KalshiSettlement[]; pages: number }> {
   const out: KalshiSettlement[] = [];
   let cursor = "";
   let pages = 0;
   for (let i = 0; i < maxPages; i++) {
     const q = "/portfolio/settlements?limit=200" + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
-    const body = await getJson(q);
+    const body = await getJson(account, q);
     pages++;
     const page: KalshiSettlement[] = body?.settlements || [];
     out.push(...page);
@@ -488,10 +488,10 @@ function buildLegCountBreakdown(rows: ParlayRow[]): LegCountRow[] {
 }
 
 /** Pull /markets/{tk}.mve_selected_legs for each parlay and stuff legs+sub_title onto the row. */
-async function enrichLegs(rows: ParlayRow[]): Promise<void> {
+async function enrichLegs(account: string, rows: ParlayRow[]): Promise<void> {
   if (rows.length === 0) return;
   const tickers = rows.map((r) => r.parlay_ticker);
-  const markets = await getMarketsBatch(tickers);
+  const markets = await getMarketsBatch(account, tickers);
   for (const r of rows) {
     const payload = markets[r.parlay_ticker];
     const m = payload?.market || payload;
@@ -621,7 +621,7 @@ function currentEtDate(): string {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
-export async function getRecap(startEt: string, endEt: string, force = false): Promise<RecapResult> {
+export async function getRecap(account: string, startEt: string, endEt: string, force = false): Promise<RecapResult> {
   if (!isYmd(startEt) || !isYmd(endEt)) {
     throw new Error(`bad date format (expected YYYY-MM-DD): start=${startEt} end=${endEt}`);
   }
@@ -629,7 +629,7 @@ export async function getRecap(startEt: string, endEt: string, force = false): P
     throw new Error(`end (${endEt}) is before start (${startEt})`);
   }
 
-  const key = `${startEt}|${endEt}`;
+  const key = `${account}|${startEt}|${endEt}`;
   if (force) recapCache.set(key, undefined as any, 0);
 
   return recapCache.getOrFetch(
@@ -638,8 +638,8 @@ export async function getRecap(startEt: string, endEt: string, force = false): P
       const startUtcMs = etDayStartUtcMs(startEt);
       const endUtcMs = etDayEndUtcMs(endEt);
 
-      const { fills, pages: pagesFills } = await fetchFillsBack(startUtcMs);
-      const { settles, pages: pagesSettle } = await fetchSettlementsBack(startUtcMs);
+      const { fills, pages: pagesFills } = await fetchFillsBack(account, startUtcMs);
+      const { settles, pages: pagesSettle } = await fetchSettlementsBack(account, startUtcMs);
 
       // Group fills by parlay ticker, restricted to those whose FIRST fill is
       // inside [start, end). Skip non-sports tickers the dashboard is
@@ -683,7 +683,7 @@ export async function getRecap(startEt: string, endEt: string, force = false): P
 
       // Enrich with leg tickers from /markets — costs N upstream calls but cached
       // for the lifetime of the recapCache entry (60s/5min).
-      await enrichLegs(rows);
+      await enrichLegs(account, rows);
 
       return {
         start_et: startEt,

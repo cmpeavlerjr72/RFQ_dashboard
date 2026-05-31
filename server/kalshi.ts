@@ -26,41 +26,91 @@ interface KalshiClient {
   baseUrl: string;
 }
 
-let _client: KalshiClient | null = null;
+// ----------------------------------------------------------------------------
+// Multi-account registry
+// ----------------------------------------------------------------------------
+// Each account maps a UI label to the env-var names that hold its credentials.
+// MVPeav keeps the original unsuffixed names so existing single-account
+// deployments behave identically with zero config changes. TGPeav uses the
+// `_SECOND` suffix, matching the runner's .env convention.
+//
+// Two ways to supply each private key (checked per account):
+//   1. <inline> env var  — full PEM contents (Render-friendly, escape \n as newlines)
+//   2. <keyPath> env var — file path (works locally and with Render Secret Files)
 
-function loadClient(): KalshiClient {
-  if (_client) return _client;
+interface AccountConfig {
+  keyId: string;     // env var holding the API key id
+  inline: string;    // env var holding the inline PEM (optional)
+  keyPath: string;   // env var holding the PEM file path (optional)
+}
+
+const ACCOUNTS: Record<string, AccountConfig> = {
+  MVPeav: {
+    keyId: "KALSHI_API_KEY_ID",
+    inline: "KALSHI_PRIVATE_KEY",
+    keyPath: "KALSHI_PRIVATE_KEY_PATH",
+  },
+  TGPeav: {
+    keyId: "KALSHI_API_KEY_ID_SECOND",
+    inline: "KALSHI_PRIVATE_KEY_SECOND",
+    keyPath: "KALSHI_PRIVATE_KEY_PATH_SECOND",
+  },
+};
+
+export const DEFAULT_ACCOUNT = "MVPeav";
+
+export function isValidAccount(a: string): boolean {
+  return Object.prototype.hasOwnProperty.call(ACCOUNTS, a);
+}
+
+export function listAccounts(): string[] {
+  return Object.keys(ACCOUNTS);
+}
+
+/** Normalise an arbitrary account input to a known account, defaulting safely. */
+export function resolveAccount(a: string | undefined | null): string {
+  const v = (a || "").trim();
+  return isValidAccount(v) ? v : DEFAULT_ACCOUNT;
+}
+
+const _clients = new Map<string, KalshiClient>();
+
+function loadClient(account: string = DEFAULT_ACCOUNT): KalshiClient {
+  const acct = resolveAccount(account);
+  const cached = _clients.get(acct);
+  if (cached) return cached;
+
+  const cfg = ACCOUNTS[acct];
   const env = (process.env.KALSHI_ENV || "PROD").toUpperCase();
   const baseUrl = HOSTS[env] || HOSTS.PROD;
 
-  const apiKeyId = process.env.KALSHI_API_KEY_ID;
-  if (!apiKeyId) throw new Error("KALSHI_API_KEY_ID not set");
+  const apiKeyId = process.env[cfg.keyId];
+  if (!apiKeyId) throw new Error(`${cfg.keyId} not set (account ${acct})`);
 
-  // Two ways to supply the private key:
-  //   1. KALSHI_PRIVATE_KEY      — full PEM contents in an env var (Render-friendly,
-  //                                 escape \n as actual newlines)
-  //   2. KALSHI_PRIVATE_KEY_PATH — file path (works locally and with Render Secret Files)
   let pem: Buffer | string | undefined;
-  const inlineKey = process.env.KALSHI_PRIVATE_KEY;
+  const inlineKey = process.env[cfg.inline];
   if (inlineKey && inlineKey.includes("BEGIN")) {
     pem = inlineKey.replace(/\\n/g, "\n");
   } else {
-    const keyPath = process.env.KALSHI_PRIVATE_KEY_PATH;
-    if (!keyPath) throw new Error("KALSHI_PRIVATE_KEY or KALSHI_PRIVATE_KEY_PATH must be set");
+    const keyPath = process.env[cfg.keyPath];
+    if (!keyPath) {
+      throw new Error(`${cfg.inline} or ${cfg.keyPath} must be set (account ${acct})`);
+    }
     const resolved = path.resolve(process.cwd(), keyPath);
     if (!fs.existsSync(resolved)) {
-      throw new Error(`Kalshi private key not found at ${resolved}`);
+      throw new Error(`Kalshi private key not found at ${resolved} (account ${acct})`);
     }
     pem = fs.readFileSync(resolved);
   }
   const privateKey = crypto.createPrivateKey({ key: pem, format: "pem" });
 
-  _client = { apiKeyId, privateKey, baseUrl };
-  return _client;
+  const client: KalshiClient = { apiKeyId, privateKey, baseUrl };
+  _clients.set(acct, client);
+  return client;
 }
 
-function signedHeaders(method: string, fullPath: string): Record<string, string> {
-  const c = loadClient();
+function signedHeaders(account: string, method: string, fullPath: string): Record<string, string> {
+  const c = loadClient(account);
   const ts = String(Date.now());
   // Strip query string before signing — matches Python signer
   const signPath = fullPath.split("?", 1)[0];
@@ -78,11 +128,11 @@ function signedHeaders(method: string, fullPath: string): Record<string, string>
   };
 }
 
-export async function getJson(apiPath: string, retryOn429 = 3): Promise<any> {
-  const c = loadClient();
+export async function getJson(account: string, apiPath: string, retryOn429 = 3): Promise<any> {
+  const c = loadClient(account);
   const fullPath = API_PREFIX + apiPath;
   for (let attempt = 0; attempt <= retryOn429; attempt++) {
-    const headers = signedHeaders("GET", fullPath);  // re-sign each attempt (timestamp must be fresh)
+    const headers = signedHeaders(account, "GET", fullPath);  // re-sign each attempt (timestamp must be fresh)
     try {
       return await fetchJsonWithTimeout(c.baseUrl + fullPath, 10_000, { headers });
     } catch (e: any) {
@@ -139,41 +189,47 @@ const RFQ_DISK_DIR = path.join(CACHE_ROOT, "rfq_legs");
 const RFQ_DISK_OK = ensureDir(RFQ_DISK_DIR);
 const rfqMemCache = new TTLCache<any>();
 
-function rfqDiskPath(rfqId: string): string {
-  return path.join(RFQ_DISK_DIR, `${rfqId}.json`);
+function rfqDiskPath(account: string, rfqId: string): string {
+  return path.join(RFQ_DISK_DIR, `${account}__${rfqId}.json`);
 }
 
 // ----------------------------------------------------------------------------
 // Public API consumed by index.ts
 // ----------------------------------------------------------------------------
 
-export async function getBalance(force = false): Promise<any> {
+export async function getBalance(account: string, force = false): Promise<any> {
+  const key = `${account}:balance`;
+  if (force) positionsCache.set(key, undefined as any, 0);
   return positionsCache.getOrFetch(
-    "balance",
-    () => getJson("/portfolio/balance"),
+    key,
+    () => getJson(account, "/portfolio/balance"),
     30_000,
   );
 }
 
-export async function getPositions(force = false): Promise<any> {
-  if (force) positionsCache.set("positions", undefined as any, 0);
+export async function getPositions(account: string, force = false): Promise<any> {
+  const key = `${account}:positions`;
+  if (force) positionsCache.set(key, undefined as any, 0);
   return positionsCache.getOrFetch(
-    "positions",
-    () => getJson("/portfolio/positions?limit=200"),
+    key,
+    () => getJson(account, "/portfolio/positions?limit=200"),
     30_000,
   );
 }
 
-export async function getMarket(ticker: string, force = false): Promise<any> {
-  if (force) marketCache.set(ticker, undefined as any, 0);
+export async function getMarket(account: string, ticker: string, force = false): Promise<any> {
+  // Market price is account-independent public data, but namespacing the key
+  // keeps the cache uniform and avoids any cross-account surprise.
+  const key = `${account}:${ticker}`;
+  if (force) marketCache.set(key, undefined as any, 0);
   return marketCache.getOrFetch(
-    ticker,
-    () => getJson(`/markets/${encodeURIComponent(ticker)}`),
+    key,
+    () => getJson(account, `/markets/${encodeURIComponent(ticker)}`),
     60_000, // 1 minute; could go adaptive later
   );
 }
 
-export async function getMarketsBatch(tickers: string[]): Promise<Record<string, any>> {
+export async function getMarketsBatch(account: string, tickers: string[]): Promise<Record<string, any>> {
   const out: Record<string, any> = {};
   // Cap concurrency to be polite to Kalshi
   const CONCURRENCY = 5;
@@ -183,7 +239,7 @@ export async function getMarketsBatch(tickers: string[]): Promise<Record<string,
       const idx = i++;
       const t = tickers[idx];
       try {
-        out[t] = await getMarket(t);
+        out[t] = await getMarket(account, t);
       } catch (e: any) {
         out[t] = { error: String(e?.message || e) };
       }
@@ -194,17 +250,20 @@ export async function getMarketsBatch(tickers: string[]): Promise<Record<string,
   return out;
 }
 
-export async function getRfqLegs(rfqId: string): Promise<any> {
+export async function getRfqLegs(account: string, rfqId: string): Promise<any> {
+  // RFQ legs are immutable + account-independent, but we namespace the cache
+  // key/disk path by account anyway for uniformity.
+  const cacheKey = `${account}:${rfqId}`;
   // 1. Check in-memory cache
-  const cached = rfqMemCache.get(rfqId);
+  const cached = rfqMemCache.get(cacheKey);
   if (cached) return cached;
 
   // 2. Check disk cache (only if the cache dir exists)
-  const dp = rfqDiskPath(rfqId);
+  const dp = rfqDiskPath(account, rfqId);
   if (RFQ_DISK_OK && fs.existsSync(dp)) {
     try {
       const v = JSON.parse(fs.readFileSync(dp, "utf-8"));
-      rfqMemCache.set(rfqId, v, 86_400_000);
+      rfqMemCache.set(cacheKey, v, 86_400_000);
       return v;
     } catch {
       // fall through to refetch
@@ -212,7 +271,7 @@ export async function getRfqLegs(rfqId: string): Promise<any> {
   }
 
   // 3. Fetch and persist
-  const v = await getJson(`/communications/rfqs/${encodeURIComponent(rfqId)}`);
+  const v = await getJson(account, `/communications/rfqs/${encodeURIComponent(rfqId)}`);
   if (RFQ_DISK_OK) {
     try {
       const tmp = dp + ".tmp";
@@ -222,7 +281,7 @@ export async function getRfqLegs(rfqId: string): Promise<any> {
       console.warn("rfq disk cache write failed:", e);
     }
   }
-  rfqMemCache.set(rfqId, v, 86_400_000);
+  rfqMemCache.set(cacheKey, v, 86_400_000);
   return v;
 }
 
@@ -237,10 +296,10 @@ const RECOVERY_DISK_DIR = path.join(CACHE_ROOT, "parlay_recovery");
 const RECOVERY_DISK_OK = ensureDir(RECOVERY_DISK_DIR);
 const recoveryMemCache = new TTLCache<any>();
 
-function recoveryDiskPath(parlayTicker: string): string {
+function recoveryDiskPath(account: string, parlayTicker: string): string {
   // Filenames must be safe — replace any chars that aren't alnum/-_
   const safe = parlayTicker.replace(/[^A-Za-z0-9_-]/g, "_");
-  return path.join(RECOVERY_DISK_DIR, `${safe}.json`);
+  return path.join(RECOVERY_DISK_DIR, `${account}__${safe}.json`);
 }
 
 export interface ParlayRecovery {
@@ -251,17 +310,18 @@ export interface ParlayRecovery {
   legs: { ticker: string; side: string; p: number | null }[];
 }
 
-export async function recoverParlay(parlayTicker: string): Promise<ParlayRecovery> {
+export async function recoverParlay(account: string, parlayTicker: string): Promise<ParlayRecovery> {
+  const memKey = `${account}:${parlayTicker}`;
   // 1. mem cache
-  const memHit = recoveryMemCache.get(parlayTicker);
+  const memHit = recoveryMemCache.get(memKey);
   if (memHit) return memHit;
 
   // 2. disk cache (only if writable)
-  const dp = recoveryDiskPath(parlayTicker);
+  const dp = recoveryDiskPath(account, parlayTicker);
   if (RECOVERY_DISK_OK && fs.existsSync(dp)) {
     try {
       const v = JSON.parse(fs.readFileSync(dp, "utf-8")) as ParlayRecovery;
-      recoveryMemCache.set(parlayTicker, v, 86_400_000);
+      recoveryMemCache.set(memKey, v, 86_400_000);
       return v;
     } catch {}
   }
@@ -274,6 +334,7 @@ export async function recoverParlay(parlayTicker: string): Promise<ParlayRecover
   let result: ParlayRecovery = empty;
   try {
     const fills = await getJson(
+      account,
       `/portfolio/fills?ticker=${encodeURIComponent(parlayTicker)}&limit=20`,
     );
     const fillsList: any[] = fills?.fills || [];
@@ -285,18 +346,18 @@ export async function recoverParlay(parlayTicker: string): Promise<ParlayRecover
     const orderId = first?.order_id;
     if (!orderId) return empty;
 
-    const order = (await getJson(`/portfolio/orders/${encodeURIComponent(orderId)}`))?.order;
+    const order = (await getJson(account, `/portfolio/orders/${encodeURIComponent(orderId)}`))?.order;
     const clientOrderId: string = order?.client_order_id || "";
     if (!clientOrderId.startsWith("quote:")) return empty;
     const parts = clientOrderId.split(":");
     if (parts.length < 3) return empty;
     const quoteId = parts[2];
 
-    const quote = (await getJson(`/communications/quotes/${encodeURIComponent(quoteId)}`))?.quote;
+    const quote = (await getJson(account, `/communications/quotes/${encodeURIComponent(quoteId)}`))?.quote;
     const rfqId: string | undefined = quote?.rfq_id;
     if (!rfqId) return empty;
 
-    const rfqResp = await getRfqLegs(rfqId);
+    const rfqResp = await getRfqLegs(account, rfqId);
     const rfq = rfqResp?.rfq || rfqResp;
     const legsRaw: any[] = rfq?.mve_selected_legs || [];
     const legs = legsRaw
@@ -315,9 +376,9 @@ export async function recoverParlay(parlayTicker: string): Promise<ParlayRecover
       legs,
     };
   } catch (e) {
-    console.warn(`recoverParlay(${parlayTicker}) failed:`, (e as any)?.message || e);
+    console.warn(`recoverParlay(${account}/${parlayTicker}) failed:`, (e as any)?.message || e);
     // Return empty (cached briefly so we don't hammer on every refresh)
-    recoveryMemCache.set(parlayTicker, empty, 60_000);
+    recoveryMemCache.set(memKey, empty, 60_000);
     return empty;
   }
 
@@ -332,9 +393,9 @@ export async function recoverParlay(parlayTicker: string): Promise<ParlayRecover
         console.warn("parlay recovery disk cache write failed:", e);
       }
     }
-    recoveryMemCache.set(parlayTicker, result, 86_400_000);
+    recoveryMemCache.set(memKey, result, 86_400_000);
   } else {
-    recoveryMemCache.set(parlayTicker, result, 60_000);
+    recoveryMemCache.set(memKey, result, 60_000);
   }
   return result;
 }

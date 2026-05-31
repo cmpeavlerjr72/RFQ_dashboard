@@ -3,6 +3,7 @@
 
 import { legTeams, teamLogoUrl, setLogoContext } from "/labels.js";
 import { buildAthleteFlagIndex, MLB_STAT_LABELS, NBA_STAT_LABELS } from "/teams.js";
+import { initAccountPicker, withAccount } from "/account.js";
 
 // Stat-code → human label dictionaries the breakdown rows draw from. The MLB
 // and NBA player maps live in teams.js; the rest are inline because they're
@@ -134,7 +135,7 @@ async function loadTennisFlagsForRange(start, end) {
     dates.flatMap((date) =>
       ["atp", "wta"].map(async (sport) => {
         try {
-          const r = await fetch(`/api/scoreboard?sport=${sport}&date=${date}`);
+          const r = await fetch(withAccount(`/api/scoreboard?sport=${sport}&date=${date}`));
           if (!r.ok) return;
           const body = await r.json();
           scoreboards[`${sport}:${date}`] = body.payload || body;
@@ -166,7 +167,7 @@ async function loadRecap({ force = false } = {}) {
     // Kick off tennis-flag prefetch in parallel with the recap fetch — it
     // populates the module-level logo context used during render.
     const flagsP = loadTennisFlagsForRange(start, end);
-    const url = `/api/recap?start=${start}&end=${end}${force ? "&fresh=1" : ""}`;
+    const url = withAccount(`/api/recap?start=${start}&end=${end}${force ? "&fresh=1" : ""}`);
     const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     state.data = await r.json();
@@ -827,5 +828,12 @@ $("start-date").value = yesterdayEt();
 $("end-date").value = yesterdayEt();
 $("end-date").max = todayEt();
 $("start-date").max = todayEt();
+
+// Account switcher: reload the recap for the newly-selected account if data
+// is already on screen (otherwise just wait for the user to hit Load).
+initAccountPicker((newAccount) => {
+  setStatus(`switched to ${newAccount}`);
+  if (state.data) loadRecap({ force: false });
+});
 
 setStatus("ready");
