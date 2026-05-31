@@ -2132,6 +2132,13 @@ function renderGameCards() {
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
               </span>` : ""}
           </div>
+          ${g.hedged ? `
+          <div class="game-swing" title="Full outcome envelope for every parlay touching this game. Worst = net loss after dual-direction offsets, assuming every player prop hits the buyer. Best = every parlay voids in our favor (props break our way).">
+            <span class="swing-label">outcome range</span>
+            <span class="swing-val neg">${fmtMoney(-g.worstCase)}</span>
+            <span class="swing-sep">to</span>
+            <span class="swing-val pos">+${g.maxWin.toFixed(2)}</span>
+          </div>` : ""}
         </div>
         ${collapsed ? "" : `
         <div class="game-card-body">

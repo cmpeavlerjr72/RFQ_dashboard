@@ -455,6 +455,19 @@ h2 {
   padding: 1px 5px; border-radius: 3px;
   white-space: nowrap;
 }
+.game-card-head .game-swing {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  margin-top: 6px; cursor: help;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+}
+.game-card-head .game-swing .swing-label {
+  font-family: inherit; font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.game-card-head .game-swing .swing-val { font-weight: 700; }
+.game-card-head .game-swing .swing-val.pos { color: var(--pos); }
+.game-card-head .game-swing .swing-val.neg { color: var(--neg); }
+.game-card-head .game-swing .swing-sep { color: var(--muted-2); font-size: 11px; }
 .game-card-body { padding: 8px 12px 10px; }
 .game-card-body .cheer-list-head {
   font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
