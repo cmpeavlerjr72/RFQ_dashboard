@@ -419,6 +419,42 @@ h2 {
 .game-card-head .score-panel .score-team.leading .score-abbr {
   color: var(--pos);
 }
+
+/* ---- live baseball situation: bases / outs / count / at-bat ---- */
+.bb-situation {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.bb-diamond { flex-shrink: 0; }
+.bb-diamond .bb-bag {
+  fill: var(--card); stroke: var(--muted-2); stroke-width: 1.3;
+}
+.bb-diamond .bb-bag.on { fill: var(--accent); stroke: var(--accent); }
+.bb-meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bb-outs { display: flex; align-items: center; gap: 5px; }
+.bb-out {
+  width: 7px; height: 7px; border-radius: 50%;
+  border: 1.3px solid var(--muted-2); background: var(--card); flex-shrink: 0;
+}
+.bb-out.on { background: var(--neg); border-color: var(--neg); }
+.bb-outs-lbl {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted);
+}
+.bb-count {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px;
+  color: var(--muted); background: var(--card-head);
+  padding: 0 6px; border-radius: 4px; margin-left: 2px;
+}
+.bb-ab { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; }
+.bb-pa { display: inline-flex; align-items: baseline; gap: 5px; color: var(--fg); white-space: nowrap; }
+.bb-role {
+  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent); background: var(--accent-bg);
+  padding: 1px 5px; border-radius: 3px;
+}
+.bb-line { font-size: 11px; color: var(--muted-2); }
 .game-card-head .game-stats {
   display: flex; gap: 14px; flex-wrap: wrap;
 }

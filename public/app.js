@@ -1571,6 +1571,27 @@ function liveStateFor(ev, sport) {
       }
     }
   }
+  // MLB live situation: outs, baserunners, count, current batter/pitcher.
+  // ESPN puts it on competition.situation for in-progress games.
+  let baseball = null;
+  if (sport === "mlb" && state === "in") {
+    const sit = comp?.situation;
+    if (sit) {
+      const nm = (x) => (x?.athlete?.shortName || x?.athlete?.displayName || "");
+      const num = (v) => (Number.isFinite(+v) ? +v : null);
+      baseball = {
+        outs: num(sit.outs) ?? 0,
+        balls: num(sit.balls),
+        strikes: num(sit.strikes),
+        onFirst: !!sit.onFirst,
+        onSecond: !!sit.onSecond,
+        onThird: !!sit.onThird,
+        batter: nm(sit.batter),
+        batterLine: sit.batter?.summary || "",
+        pitcher: nm(sit.pitcher),
+      };
+    }
+  }
   return {
     state, periodLabel,
     away: {
@@ -1586,8 +1607,38 @@ function liveStateFor(ev, sport) {
       record: recordOf(home),
     },
     firstInningRuns,
+    baseball,
     raw: ev,
   };
+}
+
+// Compact live-baseball widget: bases diamond (occupied bags filled), outs
+// dots, count, and the current AB (batter + pitcher). MLB in-progress only.
+function bbSituationHtml(bb) {
+  if (!bb) return "";
+  const onCls = (b) => (b ? " on" : "");
+  const outs = bb.outs || 0;
+  const count = (bb.balls != null && bb.strikes != null) ? `${bb.balls}-${bb.strikes}` : "";
+  return `
+    <div class="bb-situation">
+      <svg class="bb-diamond" viewBox="0 0 40 36" width="34" height="31" aria-hidden="true">
+        <rect class="bb-bag${onCls(bb.onSecond)}" x="15.5" y="3.5"  width="9" height="9" rx="1.5" transform="rotate(45 20 8)"/>
+        <rect class="bb-bag${onCls(bb.onThird)}"  x="4.5"  y="14.5" width="9" height="9" rx="1.5" transform="rotate(45 9 19)"/>
+        <rect class="bb-bag${onCls(bb.onFirst)}"  x="26.5" y="14.5" width="9" height="9" rx="1.5" transform="rotate(45 31 19)"/>
+      </svg>
+      <div class="bb-meta">
+        <div class="bb-outs">
+          <span class="bb-out${0 < outs ? " on" : ""}"></span>
+          <span class="bb-out${1 < outs ? " on" : ""}"></span>
+          <span class="bb-outs-lbl">${outs} out${outs === 1 ? "" : "s"}</span>
+          ${count ? `<span class="bb-count">${count}</span>` : ""}
+        </div>
+        <div class="bb-ab">
+          ${bb.batter ? `<span class="bb-pa"><span class="bb-role">AB</span>${escapeHtml(bb.batter)}${bb.batterLine ? ` <span class="bb-line">${escapeHtml(bb.batterLine)}</span>` : ""}</span>` : ""}
+          ${bb.pitcher ? `<span class="bb-pa"><span class="bb-role">P</span>${escapeHtml(bb.pitcher)}</span>` : ""}
+        </div>
+      </div>
+    </div>`;
 }
 
 // --------------------------- leg exposure ----------------------------------
@@ -1963,6 +2014,7 @@ function renderGameCards() {
           <div class="score-status"><span class="${dotCls}"></span><span>${escapeHtml(live.periodLabel)}</span></div>
           ${teamRow(live.away, awayLeading)}
           ${teamRow(live.home, homeLeading)}
+          ${live.baseball ? bbSituationHtml(live.baseball) : ""}
         </div>`;
     }
 
