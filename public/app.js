@@ -615,18 +615,19 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
 
   if (current == null) return { current: null, status: "loading" };
 
+  // The stat can no longer change once the game is over or the pitcher is out.
+  const frozen = gameState === "post" || gameState === "final" || pitcherRelieved;
   let status;
   if (current >= prop.threshold) {
     // For monotonic stats (hits/runs/RBIs/HR), once you cross the threshold
     // you can't uncross. So even if game is in progress, this is locked dead.
     status = "dead";
-  } else if (gameState === "post" || gameState === "final" || pitcherRelieved) {
-    // Game over, or the pitcher's been pulled — the stat can't climb further.
+  } else if (frozen) {
     status = "alive";
   } else {
     status = "alive_pending";  // currently alive but stat could still climb
   }
-  return { current, status, label, threshold: prop.threshold };
+  return { current, status, frozen, label, threshold: prop.threshold };
 }
 
 // --------------------------------- render ----------------------------------
@@ -1093,31 +1094,26 @@ function scenariosForSport(sport) {
 }
 
 // ---- Chip color helpers shared by player and game-level ladders ----
-// Sign class: live state (livePos) takes priority over market view (pUs).
-//   livePos=true  -> we're CURRENTLY winning per live data -> green
-//   livePos=false -> we're CURRENTLY losing per live data  -> red
-//   pUs only used when live state is unknown (no boxscore/no eval yet).
-// This avoids the case where market over-prices a near-locked outcome
-// (illiquid late-game props) and pUs flips the chip red even though the
-// live stat hasn't crossed yet.
-function chipSignClass(pUs, livePos) {
-  if (livePos === true) return "pos";
-  if (livePos === false) return "neg";
+// Sign class: a LOCKED outcome takes priority over the market view (pUs).
+//   locked=true  -> we've LOCKED the win  -> solid green
+//   locked=false -> we've LOCKED the loss -> solid red
+//   otherwise color by the market win prob: pUs >= 50% green, < 50% red.
+// (Color matches the % shown on the chip; a not-yet-decided 20% leg is red.)
+function chipSignClass(pUs, locked) {
+  if (locked === true) return "pos";
+  if (locked === false) return "neg";
   if (pUs != null) return pUs >= 0.5 ? "pos" : "neg";
   return "pending";
 }
-// Background / border shading. Color direction matches the sign class
-// (live state when known, else pUs). Intensity scales by |pUs - 0.5|
-// when pUs is available — strong shade when market is confident, faint
-// when market is at 50/50. When only live state is known (no pUs),
-// uses a moderate intensity floor.
-function chipShadeStyle(pUs, livePos) {
-  let isPos;
-  if (livePos === true) isPos = true;
-  else if (livePos === false) isPos = false;
-  else if (pUs != null) isPos = pUs >= 0.5;
+// Background / border shading. Direction matches the sign class. Locked
+// outcomes render at full intensity; otherwise intensity scales by how far the
+// market is from 50/50 (strong when confident, faint near a coin flip).
+function chipShadeStyle(pUs, locked) {
+  let isPos, dist;
+  if (locked === true) { isPos = true; dist = 1; }
+  else if (locked === false) { isPos = false; dist = 1; }
+  else if (pUs != null) { isPos = pUs >= 0.5; dist = Math.min(1, Math.abs(pUs - 0.5) * 2); }
   else return "";  // truly unknown -> pending grey from CSS default
-  const dist = pUs != null ? Math.min(1, Math.abs(pUs - 0.5) * 2) : 0.5;
   const bgAlpha = (0.06 + dist * 0.32).toFixed(2);
   const borderAlpha = (0.20 + dist * 0.50).toFixed(2);
   const rgb = isPos ? "21, 128, 61" : "190, 18, 60";
@@ -2312,9 +2308,21 @@ function renderGameCards() {
           lockedLoss = true;
         }
       }
-      const livePos = res === "buyer_miss" ? true : res === "buyer_hit" ? false : null;
-      const sign = chipSignClass(row.pUs, livePos);
-      const style = chipShadeStyle(row.pUs, livePos);
+      // Symmetric: when have we LOCKED a win (buyer permanently misses)?
+      let lockedWin = false;
+      if (res === "buyer_miss") {
+        if (stateIsPost) lockedWin = true;
+        else if (parsed.kind === "rfi") lockedWin = true;
+        else if ((parsed.kind === "total" || parsed.kind === "btts") && buyerSide === "no") {
+          // buyer-no on a monotonic market: a miss means the over/both already
+          // happened, so the buyer's under is permanently busted (our win).
+          lockedWin = true;
+        }
+      }
+      // locked tri-state; mid-game ML/spread stay null and color by the market %.
+      const locked = lockedWin ? true : lockedLoss ? false : null;
+      const sign = chipSignClass(row.pUs, locked);
+      const style = chipShadeStyle(row.pUs, locked);
       const cls = sign + (lockedLoss ? " locked-loss" : "");
       const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
       let chipLabel;
@@ -2529,14 +2537,18 @@ function renderGameCards() {
             // hold the buyer's opposite — i.e., buyer-yes leg with dead.
             // Buyer-no leg with dead means buyer LOSES (we won) — no
             // strikethrough on a win.
-            const dead = current != null && current >= prop.threshold;
+            const dead = current != null && current >= prop.threshold; // over hit
             const buyerSide = (row.buyerSide || "yes").toLowerCase();
-            const lockedLoss = dead && buyerSide === "yes";
-            const livePos = current == null
-              ? null
-              : (buyerSide === "yes" ? !dead : dead);
-            const sign = chipSignClass(row.pUs, livePos);
-            const style = chipShadeStyle(row.pUs, livePos);
+            // locked tri-state from OUR perspective: true = we've locked the
+            // win, false = locked the loss, null = still live (color by market).
+            //   over hit  -> buyer-yes loses us / buyer-no wins us
+            //   under locked (frozen, still short) -> buyer-yes wins us / buyer-no loses us
+            let locked = null;
+            if (dead) locked = buyerSide === "yes" ? false : true;
+            else if (current != null && pr?.frozen) locked = buyerSide === "yes" ? true : false;
+            const lockedLoss = locked === false;
+            const sign = chipSignClass(row.pUs, locked);
+            const style = chipShadeStyle(row.pUs, locked);
             const cls = sign + (lockedLoss ? " locked-loss" : "");
             const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
             const tip =
