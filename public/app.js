@@ -10,6 +10,30 @@ import { initAccountPicker, withAccount } from "/account.js";
 
 const $ = (id) => document.getElementById(id);
 
+// Global crash reporter — historically the Live page would die silently on
+// iOS Safari (heavy page / unhandled throw in render) leaving a blank screen
+// with nothing logged. Surface any uncaught error/rejection as a dismissible
+// banner so it can be read/screenshotted on devices we can't debug directly.
+function showCrashBanner(label, err) {
+  try {
+    const msg = (err && (err.stack || err.message)) ? (err.stack || err.message) : String(err);
+    let bar = $("crash-banner");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "crash-banner";
+      bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;" +
+        "background:#7f1d1d;color:#fff;font:12px/1.4 ui-monospace,monospace;" +
+        "padding:8px 12px;white-space:pre-wrap;max-height:40vh;overflow:auto;" +
+        "box-shadow:0 -2px 8px rgba(0,0,0,.4)";
+      bar.addEventListener("click", () => bar.remove());
+      document.body.appendChild(bar);
+    }
+    bar.textContent = `⚠️ ${label}: ${msg}\n(tap to dismiss)`;
+  } catch (_) { /* never let the reporter itself throw */ }
+}
+window.addEventListener("error", (e) => showCrashBanner("error", e.error || e.message));
+window.addEventListener("unhandledrejection", (e) => showCrashBanner("promise", e.reason));
+
 const state = {
   balance: null,
   positions: [],          // each = full parlay record
@@ -2296,7 +2320,7 @@ function renderGameCards() {
 
   const html = live.map((g) => {
     const logos = (g.teams || []).map((abbr) =>
-      `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+      `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
     ).join("");
     const sport = (g.sport || "").toUpperCase();
     const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
@@ -2388,7 +2412,7 @@ function renderGameCards() {
       const teamRow = (t, leading) => {
         const logoUrl = teamLogoUrl(g.sportLogoKey, t.abbr, { league: g.league });
         const logoImg = logoUrl
-          ? `<img class="team-logo" src="${logoUrl}" alt="${escapeHtml(t.abbr)}" onerror="this.style.display='none'">`
+          ? `<img class="team-logo" src="${logoUrl}" alt="${escapeHtml(t.abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
           : "";
         return `
           <div class="score-team ${leading ? "leading" : ""}">
@@ -2665,7 +2689,7 @@ function renderGameCards() {
         const teamMargin = (teamScore != null && oppScore != null) ? teamScore - oppScore : null;
         const logoUrl = teamLogoUrl(g.sportLogoKey, ab, { league: g.league });
         const logo = logoUrl
-          ? `<img class="player-head" src="${logoUrl}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'">`
+          ? `<img class="player-head" src="${logoUrl}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
           : `<div class="player-head fallback">${escapeHtml(ab.slice(0, 1))}</div>`;
         const headLine = teamScore != null
           ? `score ${teamScore}${teamMargin != null ? ` · ${teamMargin > 0 ? "leading by " + teamMargin : teamMargin < 0 ? "trailing by " + (-teamMargin) : "tied"}` : ""}`
@@ -2741,7 +2765,7 @@ function renderGameCards() {
         const meta = p.meta || {};
         const pretty = p.lastName.charAt(0) + p.lastName.slice(1).toLowerCase();
         const headshot = meta.headshot
-          ? `<img class="player-head" src="${meta.headshot}" alt="${escapeHtml(pretty)}" onerror="this.style.display='none'">`
+          ? `<img class="player-head" src="${meta.headshot}" alt="${escapeHtml(pretty)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
           : `<div class="player-head fallback">${escapeHtml(p.lastName.slice(0, 1))}</div>`;
         const jersey = meta.jersey || p.jersey;
         const posCell = [p.team, meta.position, jersey ? `#${jersey}` : ""].filter(Boolean).join(" · ");
@@ -3394,7 +3418,7 @@ function parlayLegLogosHtml(p, max = 8) {
     ? `<span class="parlay-logo-more">+${out.length - max}</span>`
     : "";
   const imgs = truncated.map(({ sport, abbr, league }) =>
-    `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+    `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
   ).join("");
   return `<span class="parlay-logos">${imgs}${extra}</span>`;
 }
@@ -3438,7 +3462,7 @@ function renderParlayCard(p, n, probs) {
     // rooting interest).
     const { sport, teams: logoTeams, league } = legTeams(leg.ticker, ourSide);
     const logoHtml = logoTeams.map(abbr =>
-      `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'">`
+      `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
     ).join("");
 
     // Date tag — disambiguates same-matchup legs across multiple dates
