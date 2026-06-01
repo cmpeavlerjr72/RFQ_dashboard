@@ -1997,6 +1997,12 @@ function computeGameNetting(positions, gameKey) {
   const posList = [];
   const varType = new Map(), varLines = new Map(), varCats = new Map(), varPositions = new Map();
   let gross = 0;
+  // Game key is "sport|date|teams". A margin of 0 is a tie — feasible only in
+  // draw sports (soccer); excluding it elsewhere keeps best-case honest (no
+  // phantom both-win on an impossible tie). Unknown sport -> keep it (the
+  // no-game bucket has no margin var anyway).
+  const sport = gameKey ? String(gameKey).split("|")[0] : null;
+  const drawPossible = sport ? _SOCCER_TREE_SPORTS.has(sport) : true;
 
   // Pass 1: gather raw constraints for this game and pick a reference team per
   // margin var (deterministic: smallest team abbr). Mirrors worst_case_net_loss.
@@ -2018,13 +2024,13 @@ function computeGameNetting(positions, gameKey) {
         if (cur == null || lc.team < cur) marginRef.set(lc.varKey, lc.team);
       }
     }
-    raw.push({ c, cp, cons });
+    raw.push({ c, cp, cons, legCount: (pos.legs || []).length });
   }
 
   // Pass 2: canonicalise margin specs onto the reference axis (flip legs about
   // the other team: margin_other = -margin_ref, so ">L" <=> "<=-L"), then build
   // the variable tables.
-  for (const { c, cp, cons } of raw) {
+  for (const { c, cp, cons, legCount } of raw) {
     const idx = posList.length;
     const ccons = [];
     for (const lc0 of cons) {
@@ -2045,12 +2051,15 @@ function computeGameNetting(positions, gameKey) {
       if (!varPositions.has(lc.varKey)) varPositions.set(lc.varKey, new Set());
       varPositions.get(lc.varKey).add(idx);
     }
-    posList.push({ c, cp, cons: ccons });
+    posList.push({ c, cp, cons: ccons, legCount });
   }
 
-  const candOf = (v) => varType.get(v) === "num"
-    ? _numCandsNet([...varLines.get(v)])
-    : [...varCats.get(v)].sort().concat([_NET_OTHER]);
+  const candOf = (v) => {
+    if (varType.get(v) !== "num") return [...varCats.get(v)].sort().concat([_NET_OTHER]);
+    let cs = _numCandsNet([...varLines.get(v)]);
+    if (v === "margin" && !drawPossible) cs = cs.filter((x) => x !== 0); // no ties
+    return cs;
+  };
 
   // Offsetting var = the >=2 positions touching it can't all hit at once (no
   // single outcome satisfies every position's constraint). That's the
@@ -2075,29 +2084,54 @@ function computeGameNetting(positions, gameKey) {
   }
   const cand = {}; for (const v of enumVars) cand[v] = candOf(v);
   const enumIdx = new Map(enumVars.map((v, i) => [v, i]));
+  // Worst case: a parlay LOSES (-cost) when all its enumerated legs hit (others
+  // assumed to hit too — conservative). Best case: a parlay WINS (+profit)
+  // unless it's fully PINNED to lose — every leg modelled, enumerated, and
+  // hitting; a free (other-game/unmodelled) or failing leg lets it break our
+  // way. Same enumeration, opposite extreme: min net = worst, max net = best.
   const allHits = (pos, asg) => pos.cons.every((c) =>
     !enumIdx.has(c.varKey) || _satNet(c, asg[enumIdx.get(c.varKey)]));
+  const voidsBest = (pos, asg) => {
+    if (pos.legCount > pos.cons.length) return true;     // has a free leg
+    for (const c of pos.cons) {
+      if (!enumIdx.has(c.varKey)) return true;
+      if (!_satNet(c, asg[enumIdx.get(c.varKey)])) return true;
+    }
+    return false;                                        // fully pinned to lose
+  };
 
-  let bestNet = null;
+  let bestNet = null, bestGain = null;
   if (enumVars.length) {
     const lists = enumVars.map((v) => cand[v]);
     const total = lists.reduce((a, l) => a * l.length, 1);
     for (let i = 0; i < total; i++) {
       const asg = []; let rem = i;
       for (const l of lists) { asg.push(l[rem % l.length]); rem = Math.floor(rem / l.length); }
-      let net = 0;
-      for (const pos of posList) net += allHits(pos, asg) ? (-pos.cp * pos.c) : ((1 - pos.cp) * pos.c);
-      if (bestNet === null || net < bestNet) bestNet = net;
+      let netW = 0, netB = 0;
+      for (const pos of posList) {
+        const win = (1 - pos.cp) * pos.c, lose = -pos.cp * pos.c;
+        netW += allHits(pos, asg) ? lose : win;
+        netB += voidsBest(pos, asg) ? win : lose;
+      }
+      if (bestNet === null || netW < bestNet) bestNet = netW;
+      if (bestGain === null || netB > bestGain) bestGain = netB;
     }
   } else {
-    bestNet = posList.reduce((a, pos) => a + (-pos.cp * pos.c), 0);
+    bestNet = posList.reduce((a, pos) => a + (-pos.cp * pos.c), 0);          // all lose
+    bestGain = posList.reduce((a, pos) => a + ((1 - pos.cp) * pos.c), 0);    // all win
   }
   const worstCase = Math.max(0, -(bestNet == null ? 0 : bestNet));
   const offsetRatio = gross > 0 ? worstCase / gross : 1;
   const offsetPct = Math.round((1 - offsetRatio) * 100);
   // "Hedged" once at least ~3% of gross is netted away by opposing flow.
   const hedged = offsettingVars.size > 0 && offsetPct >= 3;
-  return { gross, worstCase, offsetRatio, offsetPct, offsettingVars, hedged };
+  // Best-case net gain ("to win"): the naive sum of max_profit overstates when
+  // offsetting positions can't all win at once. grossWin = that naive sum.
+  const grossWin = posList.reduce((a, pos) => a + (1 - pos.cp) * pos.c, 0);
+  const bestCase = bestGain == null ? grossWin : bestGain;
+  const winOffsetPct = grossWin > 0.005 ? Math.round((1 - bestCase / grossWin) * 100) : 0;
+  return { gross, worstCase, offsetRatio, offsetPct, offsettingVars, hedged,
+           grossWin, bestCase, winOffsetPct };
 }
 
 // Portfolio-wide worst-case net loss — our TRUE risk across the whole book.
@@ -2120,14 +2154,17 @@ function computePortfolioNetting() {
     if (!byGame.has(key)) byGame.set(key, []);
     byGame.get(key).push({ contracts: qty, costPer: qty > 0 ? cost / qty : 0, legs: p.legs });
   }
-  let worstCase = 0, gross = 0;
+  let worstCase = 0, gross = 0, bestCase = 0, grossWin = 0;
   for (const [key, pos] of byGame) {
     const net = computeGameNetting(pos, key === "__nogame__" ? null : key);
     worstCase += net.worstCase;
     gross += net.gross;
+    bestCase += net.bestCase;       // realistic max gain (offsets can't all win)
+    grossWin += net.grossWin;       // naive sum of max_profit
   }
   const offsetPct = gross > 0 ? Math.round((1 - worstCase / gross) * 100) : 0;
-  return { gross, worstCase, offsetPct };
+  const winOffsetPct = grossWin > 0.005 ? Math.round((1 - bestCase / grossWin) * 100) : 0;
+  return { gross, worstCase, offsetPct, bestCase, grossWin, winOffsetPct };
 }
 
 /**
@@ -2235,6 +2272,11 @@ function aggregateGameCards() {
     g.offsetPct = net.offsetPct;
     g.offsettingVars = net.offsettingVars;
     g.hedged = net.hedged;
+    // Best-case net gain ("to win"): below the gross max_profit sum (g.maxWin)
+    // when offsetting positions can't all win at once. winHedged once >~3% of
+    // the upside is unreachable due to offsets.
+    g.bestWin = net.bestCase;
+    g.winHedged = net.winOffsetPct >= 3 && (net.grossWin - net.bestCase) > 0.005;
   }
   // Sort cards by total exposure desc (where the money is).
   return Array.from(games.values()).sort((a, b) => b.exposure - a.exposure);
@@ -2924,7 +2966,11 @@ function renderGameCards() {
               <span class="value">${fmtMoney(g.hedged ? g.worstCase : g.exposure)}</span>
               ${g.hedged ? `<span class="stat-sub">gross ${fmtMoney(g.exposure)}</span>` : ""}
             </span>
-            <span class="stat"><span class="label">to win</span><span class="value pos">+${g.maxWin.toFixed(2)}</span></span>
+            <span class="stat" title="${g.winHedged ? "Best-case net gain after dual-direction offsets — offsetting positions can't all win in the same outcome, so the most we can net is below the un-netted sum of every parlay's max profit (shown as gross)." : "Most we win if every parlay touching this game breaks our way."}">
+              <span class="label">to win${g.winHedged ? " (net)" : ""}</span>
+              <span class="value ${(g.winHedged ? g.bestWin : g.maxWin) >= 0 ? "pos" : "neg"}">${(g.winHedged ? g.bestWin : g.maxWin) >= 0 ? "+" : ""}${(g.winHedged ? g.bestWin : g.maxWin).toFixed(2)}</span>
+              ${g.winHedged ? `<span class="stat-sub">gross +${g.maxWin.toFixed(2)}</span>` : ""}
+            </span>
             ${g.expectedPnl != null && g.expectedCovered === g.parlayCount ? `
               <span class="stat" title="Expected $ if current live odds hold across every parlay touching this game. Sum of (P(we win parlay) * qty - cost) using the latest legMid (else fill-time fair).">
                 <span class="label">expected</span>
@@ -3000,7 +3046,6 @@ function renderSummary() {
   const pvRaw = parseFloat(state.balance?.portfolio_value || 0) / 100;
   const pvKalshi = pvRaw - (state.excludedPortfolioValue || 0);
   const totalCost   = state.positions.reduce((s, p) => s + p.cost, 0);
-  const maxProfit   = state.positions.reduce((s, p) => s + p.max_profit, 0);
 
   // Aggregate live expected P&L from per-parlay implied probabilities.
   // Independence within each parlay; parlays-across summed.
@@ -3027,6 +3072,11 @@ function renderSummary() {
   // tooltip for cross-check.
   const pv = cash + totalCost + evTotal;
   const pvTip = `free cash (${fmtMoney(cash)}) + cost paid (${fmtMoney(totalCost)}) + expected current outcome (${fmtMoney(evTotal)}). Kalshi's liquidation-value reading (incl. cash): ${fmtMoney(pvKalshi + cash)}.`;
+  // Upside: max gross = sum of every parlay's max profit (if they all won);
+  // to-win (net) = the most we can actually net, since offsetting positions
+  // can't all win in the same outcome. Symmetric to cost-paid / at-risk(net).
+  const maxWinNet = net.bestCase;
+  const winHedgedP = net.winOffsetPct >= 1 && (net.grossWin - net.bestCase) > 0.005;
 
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
@@ -3038,7 +3088,10 @@ function renderSummary() {
     </div>
     <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
     <div class="kpi" title="${escapeHtml(`Expected outcome ÷ amount truly at risk (${fmtMoney(evTotal)} / ${fmtMoney(roiDenom)}). The denominator is worst-case net loss after offsets, not gross cost — return on what we can actually lose.`)}"><div class="label">current ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
-    <div class="kpi"><div class="label">max gross profit</div><div class="value pos">+${maxProfit.toFixed(2)}</div></div>
+    <div class="kpi kpi-split" title="${escapeHtml(`Max gross = un-netted sum of every parlay's max profit (if they all won). TO WIN (net) = the most we can actually net — offsetting positions can't all win in the same outcome.${winHedgedP ? ` ${net.winOffsetPct}% of the upside is unreachable due to offsets.` : " Nothing offsets, so they're equal."}`)}">
+      <div class="kpi-half"><div class="label">max gross</div><div class="value pos">+${net.grossWin.toFixed(2)}</div></div>
+      <div class="kpi-half"><div class="label">to win (net)</div><div class="value ${maxWinNet >= 0 ? "pos" : "neg"}">${maxWinNet >= 0 ? "+" : ""}${maxWinNet.toFixed(2)}</div></div>
+    </div>
   `;
 }
 
