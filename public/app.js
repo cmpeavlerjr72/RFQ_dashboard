@@ -1490,11 +1490,21 @@ function buildGameTree(g, parlays, live) {
       const expected = _treeNodeExpected(ourParlays, g.key, asg2);
       const myPath = path.concat(opt.label);
       const kids = build(idx + 1, asg2, myPath);
-      if (!kids) { // leaf — track extremes
+      // A node's range is the ACTUAL reachable range within its branch — the
+      // min/max over its descendant leaves — not the envelope at this depth.
+      // (At a shallow node the envelope is over-pessimistic because the hedged
+      // winner isn't resolved yet; aggregating from leaves resolves it and the
+      // top nodes reconcile with the headline worst/best.)
+      let worst, best;
+      if (kids && kids.length) {
+        worst = Math.min(...kids.map((k) => k.worst));
+        best = Math.max(...kids.map((k) => k.best));
+      } else { // leaf — track extremes
+        worst = pnl.worst; best = pnl.best;
         if (pnl.worst < worstLeaf.worst) worstLeaf = { worst: pnl.worst, path: myPath };
         if (pnl.best > bestLeaf.best) bestLeaf = { best: pnl.best, path: myPath };
       }
-      return { label: opt.label, best: pnl.best, worst: pnl.worst, expected, children: kids };
+      return { label: opt.label, best, worst, expected, children: kids };
     });
     // Mark the sibling we'd most root for (highest midpoint) and most against.
     if (children.length > 1) {
