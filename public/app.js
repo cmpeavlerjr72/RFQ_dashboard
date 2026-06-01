@@ -1758,7 +1758,12 @@ function aggregateLegExposure() {
   for (const p of state.positions) {
     for (const leg of p.legs) {
       const tk = leg.ticker;
-      let row = byTicker.get(tk);
+      // Key by ticker AND our side: a hedged market (we hold both the over and
+      // the under of the same threshold — e.g. CINCBURNS26-8 yes+no) must stay
+      // two rows, else the opposing legs merge into one chip with summed
+      // exposure across sides and a single (wrong) label.
+      const rowKey = `${tk}|${leg.side}`;
+      let row = byTicker.get(rowKey);
       if (!row) {
         row = {
           ticker: tk,
@@ -1770,7 +1775,7 @@ function aggregateLegExposure() {
           legMid: null,                // most recent legMid we've seen
           fillP: null,                 // fill-time fair (fallback)
         };
-        byTicker.set(tk, row);
+        byTicker.set(rowKey, row);
       }
       row.parlays++;
       row.exposure += p.cost;
@@ -1876,7 +1881,9 @@ function computeGameNetting(positions, gameKey) {
     const idx = posList.length; // index this position WILL occupy
     const cons = [];
     for (const leg of (pos.legs || [])) {
-      if (legGameGroupKey(leg.ticker) !== gameKey) continue; // other-game legs auto-satisfiable
+      // gameKey === null => portfolio scope: keep every leg as a constraint.
+      // Otherwise scope to this game; other-game legs are auto-satisfiable.
+      if (gameKey != null && legGameGroupKey(leg.ticker) !== gameKey) continue;
       const lc = _legConstraintNet(leg.ticker, leg.side);
       if (!lc) continue;
       cons.push(lc);
@@ -1944,6 +1951,36 @@ function computeGameNetting(positions, gameKey) {
   // "Hedged" once at least ~3% of gross is netted away by opposing flow.
   const hedged = offsettingVars.size > 0 && offsetPct >= 3;
   return { gross, worstCase, offsetRatio, offsetPct, offsettingVars, hedged };
+}
+
+// Portfolio-wide worst-case net loss — our TRUE risk across the whole book.
+// Games are independent (their variables can't offset each other), so the
+// portfolio worst case is the sum of each game's worst-case net loss. We bucket
+// every parlay into a single "home" game (its first parseable leg) so each
+// dollar of cost is counted exactly once — unlike the per-game cards, which
+// attribute a cross-game parlay's full cost to EVERY game it touches (useful
+// for the per-card "if this game goes bad" view, but it double-counts if you
+// sum them). Result is therefore guaranteed ≤ cost paid, and equals cost paid
+// when nothing is hedged. Within each game, dual-direction (over+under) flow
+// nets down exactly as the quoter's worst_case_net_loss does.
+function computePortfolioNetting() {
+  const byGame = new Map();
+  for (const p of state.positions) {
+    const cost = p.cost || 0, qty = p.qty || 0;
+    let gk = null;
+    for (const l of (p.legs || [])) { const k = legGameGroupKey(l.ticker); if (k) { gk = k; break; } }
+    const key = gk || "__nogame__";
+    if (!byGame.has(key)) byGame.set(key, []);
+    byGame.get(key).push({ contracts: qty, costPer: qty > 0 ? cost / qty : 0, legs: p.legs });
+  }
+  let worstCase = 0, gross = 0;
+  for (const [key, pos] of byGame) {
+    const net = computeGameNetting(pos, key === "__nogame__" ? null : key);
+    worstCase += net.worstCase;
+    gross += net.gross;
+  }
+  const offsetPct = gross > 0 ? Math.round((1 - worstCase / gross) * 100) : 0;
+  return { gross, worstCase, offsetPct };
 }
 
 /**
@@ -2260,8 +2297,12 @@ function renderGameCards() {
       if (prop) {
         const pr = resolvePlayerProp(prop, state.scoreboards, state.boxscores);
         if (pr && pr.current != null) {
+          // Color from OUR perspective: over the threshold is bad on an under
+          // leg (buyer-yes) but GOOD on an over hedge leg (buyer-no).
           const overThreshold = pr.current >= prop.threshold;
-          liveStat = `<span class="cheer-live ${overThreshold ? "neg" : "pos"}" title="player's current value vs threshold">${pr.current} / ${prop.threshold}</span>`;
+          const ourOver = (r.buyerSide || "yes").toLowerCase() === "no";
+          const goodForUs = ourOver ? overThreshold : !overThreshold;
+          liveStat = `<span class="cheer-live ${goodForUs ? "pos" : "neg"}" title="player's current value vs threshold">${pr.current} / ${prop.threshold}</span>`;
         }
       } else if (r.statText) {
         liveStat = `<span class="cheer-live" title="current game state">${escapeHtml(r.statText)}</span>`;
@@ -2539,7 +2580,11 @@ function renderGameCards() {
           return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi);
         });
         const ladders = orderedStats.map((stat) => {
-          const items = byStat.get(stat).slice().sort((a, b) => a.prop.threshold - b.prop.threshold);
+          // Sort by threshold; at an equal threshold put our under (buyer-yes)
+          // before our over (buyer-no) so a hedged pair reads "u8 o8".
+          const items = byStat.get(stat).slice().sort((a, b) =>
+            (a.prop.threshold - b.prop.threshold) ||
+            (((a.row.buyerSide || "yes") === "no") - ((b.row.buyerSide || "yes") === "no")));
           const sampleProp = items[0].prop;
           const pr = resolvePlayerProp(sampleProp, state.scoreboards, state.boxscores);
           const current = pr?.current;
@@ -2554,6 +2599,10 @@ function renderGameCards() {
             // strikethrough on a win.
             const dead = current != null && current >= prop.threshold; // over hit
             const buyerSide = (row.buyerSide || "yes").toLowerCase();
+            // Our side: buyer-yes => we're UNDER (long NO); buyer-no => we hold
+            // the OVER (the hedge leg). Label/tooltip flip on this; the locked
+            // logic below is already side-aware.
+            const ourOver = buyerSide === "no";
             // locked tri-state from OUR perspective: true = we've locked the
             // win, false = locked the loss, null = still live (color by market).
             //   over hit  -> buyer-yes loses us / buyer-no wins us
@@ -2567,22 +2616,30 @@ function renderGameCards() {
             const cls = sign + (lockedLoss ? " locked-loss" : "");
             const pUsPct = row.pUs != null ? `${(row.pUs * 100).toFixed(0)}%` : "—";
             const tip =
-              `Buyer needs ${stat} ≥ ${prop.threshold} (we're under ${prop.threshold}).\n` +
-              `${current != null ? `Current ${stat}: ${current} — ${dead ? "buyer hit it (locked)" : "still alive"}\n` : ""}` +
+              (ourOver
+                ? `Buyer needs ${stat} < ${prop.threshold} (we're OVER — need ${stat} ≥ ${prop.threshold}).\n`
+                : `Buyer needs ${stat} ≥ ${prop.threshold} (we're under ${prop.threshold}).\n`) +
+              `${current != null ? `Current ${stat}: ${current} — ${dead ? (ourOver ? "we hit it (locked win)" : "buyer hit it (locked loss)") : "still alive"}\n` : ""}` +
               `In ${row.parlays} parlay${row.parlays === 1 ? "" : "s"} · at risk ${fmtMoney(row.exposure)} · ` +
               `+$${row.maxWin.toFixed(2)} if it breaks our way · win chance ${pUsPct}`;
             return `
               <span class="ladder-chip ${cls}" style="${style}" title="${escapeHtml(tip)}">
-                <span class="ladder-chip-thresh">u${prop.threshold}</span>
+                <span class="ladder-chip-thresh">${ourOver ? "o" : "u"}${prop.threshold}</span>
                 <span class="ladder-chip-meta">
                   +$${row.maxWin.toFixed(0)}<span class="ladder-chip-sep">·</span>${pUsPct}
                 </span>
               </span>`;
           }).join("");
+          // Flag the stat when we hold dual-direction (over+under) flow on it —
+          // same offsetting-var test the quoter and game ladders use.
+          const isOffset = items.some((it) => g.offsettingVars?.has(_legVarKey(it.row.ticker)));
+          const offsetTag = isOffset
+            ? ` <span class="offset-tag" title="Dual-direction flow on this stat — over and under legs cancel against each other.">⇄ offset</span>`
+            : "";
           return `
             <div class="stat-ladder">
               <div class="stat-ladder-head">
-                <span class="stat-label">${escapeHtml(stat)}</span>
+                <span class="stat-label">${escapeHtml(stat)}${offsetTag}</span>
                 ${currentChip}
               </div>
               <div class="stat-ladder-chips">${chips}</div>
@@ -2807,7 +2864,15 @@ function renderSummary() {
     else evTotal += probs.expectedPnl;
   }
   const evNote = evMissing > 0 ? ` <small>(${evMissing} missing odds)</small>` : "";
-  const roiPct = totalCost > 0 ? (evTotal / totalCost * 100) : null;
+  // True risk = portfolio worst-case net loss after dual-direction offsets.
+  // This is what we can actually lose, so it's the right ROI denominator:
+  // ROI = expected outcome ÷ amount truly at risk. Falls back to cost paid
+  // only if the netting math somehow returns nothing.
+  const net = computePortfolioNetting();
+  const atRisk = net.worstCase;
+  const hedgedPortfolio = net.offsetPct >= 1 && net.gross - net.worstCase > 0.005;
+  const roiDenom = atRisk > 0.005 ? atRisk : totalCost;
+  const roiPct = roiDenom > 0 ? (evTotal / roiDenom * 100) : null;
   // Portfolio value = total account value we expect to walk away with: free
   // cash PLUS the open parlays' cost paid plus their summed expected P&L.
   // Inherits the same "missing odds" caveat as the EV line. Kalshi's
@@ -2820,9 +2885,10 @@ function renderSummary() {
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
     <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value${evNote}</div><div class="value">${fmtMoney(pv)}</div></div>
     <div class="kpi"><div class="label">parlays open</div><div class="value">${state.positions.length}</div></div>
-    <div class="kpi"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
+    <div class="kpi" title="Total premium paid across every open parlay (gross). This is the cash out the door, before any dual-direction offsets net down what we can actually lose."><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
+    <div class="kpi" title="${escapeHtml(`Worst-case net loss across the whole book after dual-direction (over+under) offsets — our true risk. Each parlay is counted once.${hedgedPortfolio ? ` ${net.offsetPct}% of the ${fmtMoney(net.gross)} cost paid is hedged away.` : " Nothing is hedged, so this equals cost paid."}`)}"><div class="label">at risk${hedgedPortfolio ? " (net)" : ""}</div><div class="value">${fmtMoney(atRisk)}${hedgedPortfolio ? ` <small>of ${fmtMoney(net.gross)}</small>` : ""}</div></div>
     <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
-    <div class="kpi"><div class="label">current ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
+    <div class="kpi" title="${escapeHtml(`Expected outcome ÷ amount truly at risk (${fmtMoney(evTotal)} / ${fmtMoney(roiDenom)}). The denominator is worst-case net loss after offsets, not gross cost — return on what we can actually lose.`)}"><div class="label">current ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
     <div class="kpi"><div class="label">max gross profit</div><div class="value pos">+${maxProfit.toFixed(2)}</div></div>
   `;
 }
