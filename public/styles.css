@@ -82,6 +82,9 @@ h2 {
 .kpi {
   background: var(--card); border: 1px solid var(--border); border-radius: 8px;
   padding: 14px 16px; box-shadow: var(--shadow);
+  /* min-width:0 lets the card shrink below its content's intrinsic width so a
+     long monospace value can't blow the grid column past the viewport. */
+  min-width: 0;
 }
 .kpi .label {
   color: var(--muted); font-size: 10px;
@@ -90,16 +93,16 @@ h2 {
 .kpi .label small { font-weight: 400; text-transform: none; letter-spacing: 0; }
 .kpi .value {
   font-size: 22px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  margin-top: 4px; font-weight: 600;
+  margin-top: 4px; font-weight: 600; overflow-wrap: anywhere;
 }
 .kpi .kpi-sub {
   margin-top: 6px; font-size: 11px; color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere;
 }
 .kpi .kpi-sub.muted { font-style: italic; }
 /* Split KPI: two metrics in one tile, divided by a vertical bar. */
 .kpi-split { display: flex; align-items: stretch; padding: 0; }
-.kpi-split .kpi-half { flex: 1; padding: 14px 16px; }
+.kpi-split .kpi-half { flex: 1; padding: 14px 16px; min-width: 0; }
 .kpi-split .kpi-half + .kpi-half { border-left: 1px solid var(--border); }
 
 /* ---------- parlay sort bar ---------- */
@@ -1149,6 +1152,10 @@ html, body { overflow-x: hidden; }
   .recap-table .t-logos { min-width: 0; }
   .breakdown-table .bk-sport { min-width: 0; }
 
-  /* Summary KPIs read fine two-up on a phone. */
-  .summary { grid-template-columns: 1fr 1fr; }
+  /* Summary KPIs read fine two-up on a phone — tighten padding/value size and
+     let them shrink so they fit the width instead of clipping off the right. */
+  .summary { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kpi { padding: 12px; }
+  .kpi .value { font-size: 18px; }
+  .kpi-split .kpi-half { padding: 12px; }
 }
