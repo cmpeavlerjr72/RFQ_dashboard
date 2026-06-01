@@ -1625,8 +1625,32 @@ function liveStateFor(ev, sport) {
   };
 }
 
+// Strike-zone plot for the current at-bat. ESPN pitchCoordinate space is
+// calibrated empirically (1.7k pitches): called strikes sit in x[82,148],
+// y[146,197]; the plot window pads that so out-of-zone pitches show outside the
+// box. Dots: strike red, ball green, in-play blue.
+function strikeZoneSvg(pitches) {
+  if (!pitches || !pitches.length) return "";
+  const W = 56, H = 72, R = 4;
+  const PX0 = 50, PX1 = 180, PY0 = 120, PY1 = 230; // plot window (ESPN coords)
+  const ZX0 = 82, ZX1 = 148, ZY0 = 146, ZY1 = 197; // strike zone (ESPN coords)
+  const sx = (x) => Math.max(R, Math.min(W - R, ((x - PX0) / (PX1 - PX0)) * W));
+  const sy = (y) => Math.max(R, Math.min(H - R, ((y - PY0) / (PY1 - PY0)) * H));
+  const zx = ((ZX0 - PX0) / (PX1 - PX0)) * W, zy = ((ZY0 - PY0) / (PY1 - PY0)) * H;
+  const zw = ((ZX1 - ZX0) / (PX1 - PX0)) * W, zh = ((ZY1 - ZY0) / (PY1 - PY0)) * H;
+  const dots = pitches.map((p) =>
+    `<circle class="pz-dot ${p.cls}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${R}"><title>pitch ${p.n}: ${p.cls}</title></circle>`
+  ).join("");
+  return `
+    <svg class="pz" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-label="pitch locations this at-bat">
+      <rect class="pz-zone" x="${zx.toFixed(1)}" y="${zy.toFixed(1)}" width="${zw.toFixed(1)}" height="${zh.toFixed(1)}" rx="2"/>
+      ${dots}
+    </svg>`;
+}
+
 // Compact live-baseball widget: bases diamond (occupied bags filled), outs
-// dots, count, and the current AB (batter + pitcher). MLB in-progress only.
+// dots, count, the current AB (batter + pitcher), and a strike-zone plot of
+// this at-bat's pitches. MLB in-progress only.
 function bbSituationHtml(bb) {
   if (!bb) return "";
   const onCls = (b) => (b ? " on" : "");
@@ -1651,6 +1675,7 @@ function bbSituationHtml(bb) {
           ${bb.pitcher ? `<span class="bb-pa${bb.pitcherHeld ? " held" : ""}"><span class="bb-role">P</span>${escapeHtml(bb.pitcher)}${(bb.pitches != null || bb.ip) ? ` <span class="bb-line">${bb.pitches != null ? `${bb.pitches}P` : ""}${bb.pitches != null && bb.ip ? " · " : ""}${bb.ip ? `${bb.ip} IP` : ""}</span>` : ""}${bb.pullRisk ? ` <span class="bb-pull" title="high pitch count — likely pulled soon, which caps a strikeout-over">⚠ pull risk</span>` : ""}</span>` : ""}
         </div>
       </div>
+      ${strikeZoneSvg(bb.abPitches)}
     </div>`;
 }
 
@@ -2032,6 +2057,24 @@ function renderGameCards() {
       live.baseball.ip = ipm ? ipm[1] : null;
       live.baseball.pullRisk = pitches != null && pitches >= 85;
       live.baseball.pitcherHeld = heldKPitchers.has(lastOf(live.baseball.pitcher));
+
+      // Current at-bat pitch locations for the strike-zone plot. Each pitch in
+      // summary.plays carries pitchCoordinate {x,y} + a type; classify it as
+      // strike (called/swinging/foul = red), ball (green), or in-play (blue).
+      if (summary && Array.isArray(summary.plays) && live.baseball.batter) {
+        const pitchPlays = summary.plays.filter((pl) => pl.summaryType === "P" && pl.pitchCoordinate);
+        if (pitchPlays.length) {
+          const curAb = pitchPlays[pitchPlays.length - 1].atBatId;
+          live.baseball.abPitches = pitchPlays
+            .filter((pl) => pl.atBatId === curAb)
+            .map((pl) => {
+              const t = ((pl.type || {}).text || "").toLowerCase();
+              const cls = (t.includes("foul") || t.includes("strike")) ? "strike"
+                        : t.includes("ball") ? "ball" : "inplay";
+              return { x: pl.pitchCoordinate.x, y: pl.pitchCoordinate.y, cls, n: pl.atBatPitchNumber };
+            });
+        }
+      }
     }
 
     let scorePanel = "";

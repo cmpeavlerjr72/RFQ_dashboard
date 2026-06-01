@@ -447,6 +447,19 @@ h2 {
   color: var(--muted); background: var(--card-head);
   padding: 0 6px; border-radius: 4px; margin-left: 2px;
 }
+/* Strike-zone plot for the current at-bat */
+.bb-situation .pz {
+  flex-shrink: 0; margin-left: auto;
+  background: var(--card-head); border-radius: 4px;
+}
+.bb-situation .pz .pz-zone {
+  fill: none; stroke: var(--muted-2); stroke-width: 1; stroke-dasharray: 2 2;
+}
+.bb-situation .pz .pz-dot { stroke: var(--card); stroke-width: 1; }
+.bb-situation .pz .pz-dot.strike { fill: var(--neg); }
+.bb-situation .pz .pz-dot.ball { fill: var(--pos); }
+.bb-situation .pz .pz-dot.inplay { fill: var(--accent); }
+
 .bb-ab { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; }
 .bb-pa { display: inline-flex; align-items: baseline; gap: 5px; color: var(--fg); white-space: nowrap; }
 .bb-role {
