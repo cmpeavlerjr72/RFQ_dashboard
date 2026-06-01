@@ -463,8 +463,11 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
   // Find the player in any stat group whose last name matches.
   let current = null;
   let label = "";
-  // A pitcher whose team has since used another pitcher has been relieved — he
-  // can't return, so his stat is frozen (locks an under before the game ends).
+  // A player who's out of the game can't add to his stat (locks an under
+  // before the game ends): ESPN flags him active:false in the box once he's
+  // subbed out / pulled. (Belt-and-suspenders: also treat a pitcher as done
+  // when his team has since used a later pitcher.)
+  let playerOut = false;
   let pitcherRelieved = false;
   const propLast = normLast(prop.lastName);
   for (const sg of teamGroup.statistics || []) {
@@ -475,6 +478,7 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
       return normLast(a?.athlete?.lastName || lastNameFromDisplay(nm)) === propLast;
     });
     if (!ath) continue;
+    if (ath.active === false) playerOut = true;
     if (sg.type === "pitching" && aths.indexOf(ath) < aths.length - 1) pitcherRelieved = true;
     const stats = ath.stats || [];
 
@@ -615,8 +619,9 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
 
   if (current == null) return { current: null, status: "loading" };
 
-  // The stat can no longer change once the game is over or the pitcher is out.
-  const frozen = gameState === "post" || gameState === "final" || pitcherRelieved;
+  // The stat can no longer change once the game is over or the player is out
+  // (subbed out / pitcher pulled).
+  const frozen = gameState === "post" || gameState === "final" || playerOut || pitcherRelieved;
   let status;
   if (current >= prop.threshold) {
     // For monotonic stats (hits/runs/RBIs/HR), once you cross the threshold
