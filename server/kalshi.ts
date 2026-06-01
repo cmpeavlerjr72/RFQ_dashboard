@@ -31,7 +31,7 @@ interface KalshiClient {
 // ----------------------------------------------------------------------------
 // Each account maps a UI label to the env-var names that hold its credentials.
 // MVPeav keeps the original unsuffixed names so existing single-account
-// deployments behave identically with zero config changes. TGPeav uses the
+// deployments behave identically with zero config changes. GPeavT uses the
 // `_SECOND` suffix, matching the runner's .env convention.
 //
 // Two ways to supply each private key (checked per account):
@@ -50,7 +50,7 @@ const ACCOUNTS: Record<string, AccountConfig> = {
     inline: "KALSHI_PRIVATE_KEY",
     keyPath: "KALSHI_PRIVATE_KEY_PATH",
   },
-  TGPeav: {
+  GPeavT: {
     keyId: "KALSHI_API_KEY_ID_SECOND",
     inline: "KALSHI_PRIVATE_KEY_SECOND",
     keyPath: "KALSHI_PRIVATE_KEY_PATH_SECOND",
