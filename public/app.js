@@ -2698,7 +2698,12 @@ function renderGameCards() {
               <span class="stat" title="Expected $ if current live odds hold across every parlay touching this game. Sum of (P(we win parlay) * qty - cost) using the latest legMid (else fill-time fair).">
                 <span class="label">expected</span>
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
-              </span>` : ""}
+              </span>
+              ${(g.hedged ? g.worstCase : g.exposure) > 0 ? `
+              <span class="stat" title="Game-level ROI = expected ÷ net at-risk (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.hedged ? g.worstCase : g.exposure)}).">
+                <span class="label">ROI</span>
+                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / (g.hedged ? g.worstCase : g.exposure) * 100).toFixed(0)}%</span>
+              </span>` : ""}` : ""}
           </div>
         </div>
         ${collapsed ? "" : `
