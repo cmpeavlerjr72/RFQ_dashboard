@@ -1196,9 +1196,23 @@ function _treeEvalLeg(ticker, side, asg) {
   const gl = parseGameLevelLeg(ticker);
   if (gl) {
     if (gl.kind === "ml" || gl.kind === "spread") {
-      // Spread collapses to the winner category (matches leg_constraint).
+      const team = gl.pick;
+      // Draw/tie pick stays on the categorical winner axis.
+      if (team === "TIE" || team === "DRAW") {
+        if (asg.winner == null) return "unknown";
+        return _treeResolveBuyer(asg.winner === "__DRAW__", side);
+      }
+      // Margin-aware (matches the netting margin var): team covers by n iff its
+      // signed margin >= n. asg.margin is home-positive. ML => n = 1 (win).
+      if (asg.margin != null && gl.teams) {
+        const [away, home] = gl.teams;
+        const n = gl.kind === "spread" ? gl.threshold : 1;
+        const tm = team === home ? asg.margin : team === away ? -asg.margin : null;
+        if (tm != null) return _treeResolveBuyer(tm >= n, side);
+      }
+      // Fallback (soccer/draw branches still use the winner category).
       if (asg.winner == null) return "unknown";
-      return _treeResolveBuyer(gl.pick === asg.winner, side);
+      return _treeResolveBuyer(team === asg.winner, side);
     }
     if (gl.kind === "total") {
       if (asg.total == null) return "unknown";
@@ -1298,6 +1312,11 @@ function gameBranchVars(g, parlays, live) {
   let teams = null;
   const totalLines = new Set();
   let hasWinner = false, hasRfi = false, hasBtts = false;
+  let hasSpread = false, hasDrawPick = false;
+  // Signed home-margin "cut" points where a held ML/spread leg flips: home
+  // covers by n => cut at n (covered at/above); away covers by n => cut at
+  // -n+1 (covered below). Used to branch the tree on margin, not just winner.
+  const marginCuts = new Set();
   const exp = { winner: 0, total: 0, rfi: 0, btts: 0 };
   const props = new Map(); // key -> {exposure, prop}
   for (const p of parlays) {
@@ -1305,7 +1324,17 @@ function gameBranchVars(g, parlays, live) {
       if (legGameGroupKey(l.ticker) !== g.key) continue;
       const gl = parseGameLevelLeg(l.ticker);
       if (gl) {
-        if (gl.kind === "ml" || gl.kind === "spread") { hasWinner = true; exp.winner += p.cost; teams = teams || gl.teams; }
+        if (gl.kind === "ml" || gl.kind === "spread") {
+          hasWinner = true; exp.winner += p.cost; teams = teams || gl.teams;
+          if (gl.pick === "TIE" || gl.pick === "DRAW") hasDrawPick = true;
+          else if (gl.teams) {
+            const [away, home] = gl.teams;
+            const n = gl.kind === "spread" ? gl.threshold : 1;
+            if (gl.kind === "spread") hasSpread = true;
+            if (gl.pick === home) marginCuts.add(n);
+            else if (gl.pick === away) marginCuts.add(-n + 1);
+          }
+        }
         else if (gl.kind === "total") { totalLines.add(gl.threshold); exp.total += p.cost; }
         else if (gl.kind === "rfi") { hasRfi = true; exp.rfi += p.cost; }
         else if (gl.kind === "btts") { hasBtts = true; exp.btts += p.cost; }
@@ -1331,6 +1360,38 @@ function gameBranchVars(g, parlays, live) {
   // Each pin records whether the settled outcome went our way (good), computed
   // against base BEFORE this pin is applied.
 
+  // MARGIN — for non-draw games where we hold spreads, branch on the signed
+  // home margin (not a binary winner) so nested/opposing spreads resolve by how
+  // much, reconciling with the card's AT RISK (net). Cut points come from the
+  // held legs; we always add the win/loss split at 1. Each region's rep is the
+  // smallest margin in it; the leg resolver (_treeEvalLeg) does the real test.
+  const useMargin = hasSpread && teams && !hasDrawPick && !_SOCCER_TREE_SPORTS.has(g.sport);
+  if (useMargin) {
+    const [away, home] = teams;
+    marginCuts.add(1); // home wins (>=1) vs away wins (<=0)
+    const cuts = [...marginCuts].sort((a, b) => a - b);
+    const reps = [cuts[0] - 1, ...cuts];
+    const mApply = (r) => (a) => ({ ...a, margin: r });
+    const mLabel = (r, i) => {
+      const top = i === reps.length - 1, bot = i === 0;
+      if (r > 0) return `${home} by ${r}${top ? "+" : ""}`;
+      if (r < 0) return `${away} by ${-r}${bot ? "+" : ""}`;
+      return `${away} wins`; // r === 0 region (margin <= 0) — away wins, no draw
+    };
+    if (live && live.final && live.margin != null) {
+      let idx = 0;
+      for (let i = 0; i < reps.length; i++) if (live.margin >= reps[i]) idx = i;
+      const good = _pinGood(parlays, g.key, base, reps.map(mApply), idx);
+      base.margin = live.margin;
+      resolved.push({
+        text: live.margin > 0 ? `${home} by ${live.margin}` : `${away} by ${-live.margin}`,
+        good,
+      });
+    } else {
+      vars.push({ kind: "margin", varKey: "margin", exposure: exp.winner,
+        options: reps.map((r, i) => ({ label: mLabel(r, i), apply: mApply(r) })) });
+    }
+  } else
   // WINNER — pinned only when the game is final (it can still flip mid-game).
   if (hasWinner && teams) {
     const [away, home] = teams;
@@ -1819,10 +1880,13 @@ function aggregateLegExposure() {
 const _NET_GRID_BUDGET = 200_000;
 const _NET_OTHER = "__OTHER__";
 
-// One leg -> {varKey, vtype:'num'|'cat', op, line|set} or null (not modelled =>
-// auto-satisfiable, conservative). Polarity matches the runner: total/player
-// yes=over; GAME/SPREAD suffix=winner (spreads collapse to the winner category
-// exactly like leg_constraint does); btts yes=both score.
+// One leg -> {varKey, vtype:'num'|'cat', op, line|set, team?} or null (not
+// modelled => auto-satisfiable, conservative). Polarity matches the runner:
+// total/player yes=over; GAME/SPREAD => signed margin from `team`'s view
+// (yes=team covers), so nested/opposing spreads net correctly — except a
+// draw/tie pick stays on the categorical winner axis; btts yes=both score.
+// Margin legs carry `team`; computeGameNetting re-orients them onto one
+// reference team per game (mirrors leg_constraint + worst_case_net_loss).
 function _legConstraintNet(ticker, buyerSide) {
   const yes = (buyerSide || "yes").toLowerCase() !== "no";
   const gl = parseGameLevelLeg(ticker);
@@ -1830,7 +1894,14 @@ function _legConstraintNet(ticker, buyerSide) {
     if (gl.kind === "ml" || gl.kind === "spread") {
       const team = String(gl.pick || "").replace(/\d+$/, "") || gl.pick;
       if (!team) return null;
-      return { varKey: "winner", vtype: "cat", op: yes ? "in" : "notin", set: [team] };
+      if (team === "TIE" || team === "DRAW") {
+        return { varKey: "winner", vtype: "cat", op: yes ? "in" : "notin", set: [team] };
+      }
+      // SPREAD "TEAMn" => team covers by n <=> margin_team >= n <=> > n-0.5.
+      // ML (no number) => win <=> margin_team >= 1 <=> > 0.5.
+      const n = gl.kind === "spread" ? gl.threshold : 1;
+      if (n == null) return null;
+      return { varKey: "margin", vtype: "num", op: yes ? "gt" : "le", line: n - 0.5, team };
     }
     if (gl.kind === "total") {
       if (gl.threshold == null) return null;
@@ -1875,10 +1946,14 @@ function computeGameNetting(positions, gameKey) {
   const posList = [];
   const varType = new Map(), varLines = new Map(), varCats = new Map(), varPositions = new Map();
   let gross = 0;
+
+  // Pass 1: gather raw constraints for this game and pick a reference team per
+  // margin var (deterministic: smallest team abbr). Mirrors worst_case_net_loss.
+  const raw = [];        // [{ c, cp, cons:[lc...] }]
+  const marginRef = new Map();
   for (const pos of positions) {
     const c = pos.contracts || 0, cp = pos.costPer || 0;
     gross += cp * c;
-    const idx = posList.length; // index this position WILL occupy
     const cons = [];
     for (const leg of (pos.legs || [])) {
       // gameKey === null => portfolio scope: keep every leg as a constraint.
@@ -1887,6 +1962,27 @@ function computeGameNetting(positions, gameKey) {
       const lc = _legConstraintNet(leg.ticker, leg.side);
       if (!lc) continue;
       cons.push(lc);
+      if (lc.vtype === "num" && lc.team != null) {
+        const cur = marginRef.get(lc.varKey);
+        if (cur == null || lc.team < cur) marginRef.set(lc.varKey, lc.team);
+      }
+    }
+    raw.push({ c, cp, cons });
+  }
+
+  // Pass 2: canonicalise margin specs onto the reference axis (flip legs about
+  // the other team: margin_other = -margin_ref, so ">L" <=> "<=-L"), then build
+  // the variable tables.
+  for (const { c, cp, cons } of raw) {
+    const idx = posList.length;
+    const ccons = [];
+    for (const lc0 of cons) {
+      let lc = lc0;
+      if (lc0.vtype === "num" && lc0.team != null && lc0.team !== marginRef.get(lc0.varKey)) {
+        lc = { varKey: lc0.varKey, vtype: "num",
+               op: lc0.op === "gt" ? "le" : "gt", line: -lc0.line };
+      }
+      ccons.push(lc);
       varType.set(lc.varKey, lc.vtype);
       if (lc.vtype === "num") {
         if (!varLines.has(lc.varKey)) varLines.set(lc.varKey, new Set());
@@ -1898,7 +1994,7 @@ function computeGameNetting(positions, gameKey) {
       if (!varPositions.has(lc.varKey)) varPositions.set(lc.varKey, new Set());
       varPositions.get(lc.varKey).add(idx);
     }
-    posList.push({ c, cp, cons });
+    posList.push({ c, cp, cons: ccons });
   }
 
   const candOf = (v) => varType.get(v) === "num"
