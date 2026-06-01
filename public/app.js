@@ -1591,6 +1591,8 @@ function liveStateFor(ev, sport) {
         pitcher: nm(sit.pitcher),
         pitcherId: sit.pitcher?.athlete?.id || null,
         pitcherLine: sit.pitcher?.summary || "",
+        lastPlay: sit.lastPlay?.text || "",
+        lastPlayId: sit.lastPlay?.id || null,
       };
     }
   }
@@ -1658,6 +1660,7 @@ function bbSituationHtml(bb) {
   const count = (bb.balls != null && bb.strikes != null) ? `${bb.balls}-${bb.strikes}` : "";
   return `
     <div class="bb-situation">
+      <div class="bb-row">
       <svg class="bb-diamond" viewBox="0 0 40 36" width="34" height="31" aria-hidden="true">
         <rect class="bb-bag${onCls(bb.onSecond)}" x="15.5" y="3.5"  width="9" height="9" rx="1.5" transform="rotate(45 20 8)"/>
         <rect class="bb-bag${onCls(bb.onThird)}"  x="4.5"  y="14.5" width="9" height="9" rx="1.5" transform="rotate(45 9 19)"/>
@@ -1676,6 +1679,8 @@ function bbSituationHtml(bb) {
         </div>
       </div>
       ${strikeZoneSvg(bb.abPitches)}
+      </div>
+      ${bb.lastPlay ? `<div class="bb-lastplay">${escapeHtml(bb.lastPlay)}${(bb.lastPitchMph || bb.lastPitchType) ? ` <span class="bb-pitch-detail">${bb.lastPitchMph ? `${bb.lastPitchMph} mph` : ""}${bb.lastPitchMph && bb.lastPitchType ? " · " : ""}${bb.lastPitchType ? escapeHtml(bb.lastPitchType) : ""}</span>` : ""}</div>` : ""}
     </div>`;
 }
 
@@ -2073,6 +2078,16 @@ function renderGameCards() {
                         : t.includes("ball") ? "ball" : "inplay";
               return { x: pl.pitchCoordinate.x, y: pl.pitchCoordinate.y, cls, n: pl.atBatPitchNumber };
             });
+        }
+      }
+
+      // If the last play was a pitch, pull its velocity + type from the matching
+      // summary play (the scoreboard lastPlay.text has neither).
+      if (summary && Array.isArray(summary.plays) && live.baseball.lastPlayId) {
+        const lp = summary.plays.find((pl) => String(pl.id) === String(live.baseball.lastPlayId));
+        if (lp && lp.pitchVelocity) {
+          live.baseball.lastPitchMph = lp.pitchVelocity;
+          live.baseball.lastPitchType = (lp.pitchType || {}).text || (lp.pitchType || {}).abbreviation || "";
         }
       }
     }

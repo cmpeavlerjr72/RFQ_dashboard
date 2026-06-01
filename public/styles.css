@@ -422,9 +422,19 @@ h2 {
 
 /* ---- live baseball situation: bases / outs / count / at-bat ---- */
 .bb-situation {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; flex-direction: column; gap: 7px;
   margin-top: 8px; padding-top: 8px;
   border-top: 1px dashed var(--border);
+}
+.bb-situation .bb-row { display: flex; align-items: center; gap: 12px; }
+.bb-lastplay {
+  font-size: 11px; color: var(--muted); font-style: italic;
+  line-height: 1.3;
+}
+.bb-pitch-detail {
+  font-style: normal; font-weight: 600; color: var(--accent);
+  background: var(--accent-bg); padding: 0 5px; border-radius: 3px;
+  white-space: nowrap;
 }
 .bb-diamond { flex-shrink: 0; }
 .bb-diamond .bb-bag {
