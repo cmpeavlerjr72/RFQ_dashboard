@@ -1526,7 +1526,17 @@ function gameBranchVars(g, parlays, live) {
   // exactly where its low predictive value belongs. Fill remaining slots with
   // the highest leverage variables, then order the chosen set by leverage.
   const offsetting = g.offsettingVars || new Set();
-  const essential = vars.filter((v) => v.varKey && offsetting.has(v.varKey));
+  // The netting keys every ML/spread offset as "margin", but the tree branches
+  // that same axis as a "winner" var (ML-only / soccer) OR a "margin" var (when
+  // spreads are held). Treat the two as one axis so an offsetting winner var
+  // still gets force-branched — otherwise the tree's worst case inflates to
+  // gross while the card's AT RISK (net) shows the netted figure (LADAZ: two
+  // opposing MLs net to $5.41, but a "winner"-keyed tree var wouldn't match the
+  // "margin" offset key and the tree would still show the full $11.41).
+  const winnerAxisOffset = offsetting.has("margin") || offsetting.has("winner");
+  const matchesOffset = (vk) =>
+    offsetting.has(vk) || ((vk === "winner" || vk === "margin") && winnerAxisOffset);
+  const essential = vars.filter((v) => v.varKey && matchesOffset(v.varKey));
   const rest = vars.filter((v) => !essential.includes(v)).sort((a, b) => b.leverage - a.leverage);
   const picked = [...essential];
   for (const v of rest) { if (picked.length >= 3) break; picked.push(v); }
