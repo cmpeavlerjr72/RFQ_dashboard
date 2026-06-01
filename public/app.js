@@ -463,14 +463,19 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
   // Find the player in any stat group whose last name matches.
   let current = null;
   let label = "";
+  // A pitcher whose team has since used another pitcher has been relieved — he
+  // can't return, so his stat is frozen (locks an under before the game ends).
+  let pitcherRelieved = false;
   const propLast = normLast(prop.lastName);
   for (const sg of teamGroup.statistics || []) {
     const keys = sg.keys || [];
-    const ath = (sg.athletes || []).find((a) => {
+    const aths = sg.athletes || [];
+    const ath = aths.find((a) => {
       const nm = (a?.athlete?.displayName || "").trim();
       return normLast(a?.athlete?.lastName || lastNameFromDisplay(nm)) === propLast;
     });
     if (!ath) continue;
+    if (sg.type === "pitching" && aths.indexOf(ath) < aths.length - 1) pitcherRelieved = true;
     const stats = ath.stats || [];
 
     function statByKey(key) {
@@ -615,7 +620,8 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
     // For monotonic stats (hits/runs/RBIs/HR), once you cross the threshold
     // you can't uncross. So even if game is in progress, this is locked dead.
     status = "dead";
-  } else if (gameState === "post" || gameState === "final") {
+  } else if (gameState === "post" || gameState === "final" || pitcherRelieved) {
+    // Game over, or the pitcher's been pulled — the stat can't climb further.
     status = "alive";
   } else {
     status = "alive_pending";  // currently alive but stat could still climb
@@ -1413,19 +1419,21 @@ function gameBranchVars(g, parlays, live) {
     const pr = e.prop;
     const name = pr.lastName || pr.team;
     const stat = (pr.stat || "").toLowerCase();
-    const cur = live && live.propCurrent ? live.propCurrent(pr) : null;
+    const res = live && live.propResolve ? live.propResolve(pr) : null;
+    const cur = res ? res.current : null;
+    const st = res ? res.status : null; // "dead"=over locked, "alive"=under locked
     const propApplies = [
       (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }), // under
       (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }),  // over (N+)
     ];
-    if (cur != null && cur >= pr.threshold) {
+    if (st === "dead") {
       const good = _pinGood(parlays, g.key, base, propApplies, 1);
       base.props = { ...(base.props || {}), [key]: true };
-      resolved.push({ text: `${name} ${pr.threshold}+ ${stat} (${cur})`, good });
-    } else if (live && live.final && cur != null && cur < pr.threshold) {
+      resolved.push({ text: `${name} ${pr.threshold}+ ${stat}${cur != null ? ` (${cur})` : ""}`, good });
+    } else if (st === "alive") {
       const good = _pinGood(parlays, g.key, base, propApplies, 0);
       base.props = { ...(base.props || {}), [key]: false };
-      resolved.push({ text: `${name} under ${pr.threshold} ${stat} (${cur})`, good });
+      resolved.push({ text: `${name} under ${pr.threshold} ${stat}${cur != null ? ` (${cur})` : ""}`, good });
     } else {
       // Props are "N+" markets: under (our NO) = "under N"; over (yes) = "N+".
       vars.push({ kind: "prop", varKey: key, exposure: e.exposure, options: [
@@ -2591,10 +2599,7 @@ function renderGameCards() {
       total: liveSc.total,
       firstInningRuns: liveSc.firstInningRuns,
       bothScored: liveSc.awayScore > 0 && liveSc.homeScore > 0,
-      propCurrent: (pr) => {
-        const r = resolvePlayerProp(pr, state.scoreboards, state.boxscores);
-        return r && r.current != null ? r.current : null;
-      },
+      propResolve: (pr) => resolvePlayerProp(pr, state.scoreboards, state.boxscores),
     } : null;
     const tree = buildGameTree(g, state.positions, treeLive);
     let scenarioHtml = "";
