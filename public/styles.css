@@ -987,6 +987,12 @@ footer {
   margin-left: auto; color: var(--muted); font-size: 11px;
   white-space: nowrap; padding-right: 8px;
 }
+.parlay .top .merged-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: .02em;
+  text-transform: uppercase; cursor: help;
+  color: var(--accent); background: var(--accent-bg);
+  padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+}
 
 /* ---------- comparison page ---------- */
 .compare-card {

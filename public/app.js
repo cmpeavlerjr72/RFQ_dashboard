@@ -170,6 +170,11 @@ async function refresh() {
 
     await enrichMissingLegs();
 
+    // Fold positions that hold the EXACT same legs into one logical parlay
+    // (legs are known now). Must run before the price/legMid loop so the merged
+    // position gets its mids computed once.
+    state.positions = mergeIdenticalParlays(state.positions);
+
     // Batch market price fetch (parlays + every leg)
     const tickerSet = new Set();
     for (const p of state.positions) {
@@ -1801,6 +1806,42 @@ function bbSituationHtml(bb) {
     </div>`;
 }
 
+// Combine positions holding the EXACT same legs into one logical parlay.
+// Kalshi mints a distinct parlay ticker per RFQ accept and per MVE collection,
+// so the same economic bet (e.g. Wood u1 HIT + u2 HRR) can show up as 2+
+// separate positions across KXMVECROSSCATEGORY / KXMVESPORTSMULTIGAMEEXTENDED.
+// They're perfectly correlated identical bets, so summing qty/cost/max_profit
+// is exact for exposure, netting and EV. The merged position keeps the first
+// ticker as its id (so expand/collapse + parlay MTM still resolve) and records
+// mergedTickers/mergedCount for the UI. Positions whose legs aren't known yet
+// key on their own ticker so they never collapse together.
+function mergeIdenticalParlays(positions) {
+  const keyOf = (p) => (p.legs && p.legs.length)
+    ? `${(p.side || "").toUpperCase()}::` +
+      p.legs.map((l) => `${l.ticker}|${(l.side || "").toLowerCase()}`).sort().join("~")
+    : `__solo__${p.ticker}`;
+  const out = new Map();
+  for (const p of positions) {
+    const k = keyOf(p);
+    const ex = out.get(k);
+    if (!ex) {
+      out.set(k, { ...p, mergedCount: 1, mergedTickers: [p.ticker] });
+      continue;
+    }
+    ex.qty += p.qty;
+    ex.cost += p.cost;
+    ex.max_profit += p.max_profit;
+    ex.avgCostC = ex.qty ? Math.round((ex.cost / ex.qty) * 100) : 0;
+    ex.mergedCount += 1;
+    ex.mergedTickers.push(p.ticker);
+    // keep the earliest fill time so the combined card sorts/labels by first entry
+    if (p.fillTs != null && (ex.fillTs == null || p.fillTs < ex.fillTs)) {
+      ex.fillTs = p.fillTs; ex.fillIso = p.fillIso;
+    }
+  }
+  return [...out.values()];
+}
+
 // --------------------------- leg exposure ----------------------------------
 
 /**
@@ -3393,11 +3434,17 @@ function renderParlayCard(p, n, probs) {
     ? `<span class="fill-ts" title="When this parlay filled">🕒 ${escapeHtml(fillStr)}</span>`
     : "";
 
+  // Identical-leg fills folded into this card (see mergeIdenticalParlays).
+  const mergedHtml = (p.mergedCount > 1)
+    ? `<span class="merged-badge" title="${escapeHtml(`${p.mergedCount} fills with identical legs combined into one. Risk / To win / qty are summed.\n${p.mergedTickers.join("\n")}`)}">⧉ ${p.mergedCount} fills</span>`
+    : "";
+
   return `<div class="parlay ${expanded ? "expanded" : "collapsed"}">
     <div class="head" data-ticker="${escapeHtml(p.ticker)}" role="button" aria-expanded="${expanded}" tabindex="0">
       <div class="top">
         <span class="badge ${cardBadgeCls}">#${n} · ${cardBadge}</span>
         ${parlayLegLogosHtml(p)}
+        ${mergedHtml}
         ${fillTsHtml}
         <span class="chev" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
       </div>
