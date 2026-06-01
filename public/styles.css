@@ -97,6 +97,10 @@ h2 {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 .kpi .kpi-sub.muted { font-style: italic; }
+/* Split KPI: two metrics in one tile, divided by a vertical bar. */
+.kpi-split { display: flex; align-items: stretch; padding: 0; }
+.kpi-split .kpi-half { flex: 1; padding: 14px 16px; }
+.kpi-split .kpi-half + .kpi-half { border-left: 1px solid var(--border); }
 
 /* ---------- parlay sort bar ---------- */
 .parlay-sort-bar {

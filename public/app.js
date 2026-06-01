@@ -2981,8 +2981,10 @@ function renderSummary() {
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
     <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value${evNote}</div><div class="value">${fmtMoney(pv)}</div></div>
     <div class="kpi"><div class="label">parlays open</div><div class="value">${state.positions.length}</div></div>
-    <div class="kpi" title="Total premium paid across every open parlay (gross). This is the cash out the door, before any dual-direction offsets net down what we can actually lose."><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
-    <div class="kpi" title="${escapeHtml(`Worst-case net loss across the whole book after dual-direction (over+under) offsets — our true risk. Each parlay is counted once.${hedgedPortfolio ? ` ${net.offsetPct}% of the ${fmtMoney(net.gross)} cost paid is hedged away.` : " Nothing is hedged, so this equals cost paid."}`)}"><div class="label">at risk${hedgedPortfolio ? " (net)" : ""}</div><div class="value">${fmtMoney(atRisk)}${hedgedPortfolio ? ` <small>of ${fmtMoney(net.gross)}</small>` : ""}</div></div>
+    <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay (gross). NET = worst-case net loss after dual-direction (over+under) offsets — our true risk, each parlay counted once.${hedgedPortfolio ? ` ${net.offsetPct}% of cost is hedged away.` : " Nothing is hedged, so NET equals cost."}`)}">
+      <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
+      <div class="kpi-half"><div class="label">at risk (net)</div><div class="value ${hedgedPortfolio ? "pos" : ""}">${fmtMoney(atRisk)}</div></div>
+    </div>
     <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
     <div class="kpi" title="${escapeHtml(`Expected outcome ÷ amount truly at risk (${fmtMoney(evTotal)} / ${fmtMoney(roiDenom)}). The denominator is worst-case net loss after offsets, not gross cost — return on what we can actually lose.`)}"><div class="label">current ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
     <div class="kpi"><div class="label">max gross profit</div><div class="value pos">+${maxProfit.toFixed(2)}</div></div>
