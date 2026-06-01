@@ -3081,7 +3081,6 @@ function renderSummary() {
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
     <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value${evNote}</div><div class="value">${fmtMoney(pv)}</div></div>
-    <div class="kpi"><div class="label">parlays open</div><div class="value">${state.positions.length}</div></div>
     <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay (gross). NET = worst-case net loss after dual-direction (over+under) offsets — our true risk, each parlay counted once.${hedgedPortfolio ? ` ${net.offsetPct}% of cost is hedged away.` : " Nothing is hedged, so NET equals cost."}`)}">
       <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
       <div class="kpi-half"><div class="label">at risk (net)</div><div class="value ${hedgedPortfolio ? "pos" : ""}">${fmtMoney(atRisk)}</div></div>
