@@ -707,6 +707,12 @@ h2 {
   background: var(--card-head); border: 1px solid var(--border);
   padding: 1px 7px; border-radius: 100px; white-space: nowrap;
 }
+.game-tree .tree-resolved .rs.good {
+  color: var(--pos); background: var(--pos-bg); border-color: transparent;
+}
+.game-tree .tree-resolved .rs.bad {
+  color: var(--neg); background: var(--neg-bg); border-color: transparent;
+}
 
 .game-tree .tree-children {
   margin-left: 10px; padding-left: 10px;

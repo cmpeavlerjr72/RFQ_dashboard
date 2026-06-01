@@ -1269,6 +1269,21 @@ function _treeNodeExpected(parlays, gameKey, asg) {
 
 const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"]);
 
+// Did a settled outcome go our way? Compare the expected $ under the outcome
+// that actually happened vs the alternative outcomes for that variable (holding
+// everything else already settled). true = the result is the BEST of the
+// options for us (green), false = the WORST (red), null = neutral/hedged.
+function _pinGood(parlays, gameKey, baseSoFar, optionApplies, actualIdx) {
+  if (!optionApplies || optionApplies.length < 2) return null;
+  const ps = optionApplies.map((ap) => _treeNodeExpected(parlays, gameKey, ap(baseSoFar)));
+  const actual = ps[actualIdx];
+  const others = ps.filter((_, i) => i !== actualIdx);
+  const bestOther = Math.max(...others), worstOther = Math.min(...others);
+  if (actual - bestOther > 0.5) return true;    // the result that happened is best for us
+  if (worstOther - actual > 0.5) return false;  // it's the worst for us
+  return null;                                   // negligible difference (e.g. hedged)
+}
+
 // Determine which variables we hold legs on and turn them into ordered branch
 // descriptors. Winner is always first (most intuitive for cheering); the rest
 // rank by $ exposure. Capped to keep the tree glanceable.
@@ -1306,21 +1321,26 @@ function gameBranchVars(g, parlays, live) {
   const base = {};
   const resolved = [];
 
+  // Each pin records whether the settled outcome went our way (good), computed
+  // against base BEFORE this pin is applied.
+
   // WINNER — pinned only when the game is final (it can still flip mid-game).
   if (hasWinner && teams) {
     const [away, home] = teams;
+    const winApplies = [(a) => ({ ...a, winner: home }), (a) => ({ ...a, winner: away })];
+    if (_SOCCER_TREE_SPORTS.has(g.sport)) winApplies.push((a) => ({ ...a, winner: "__DRAW__" }));
     if (live && live.final && live.margin != null) {
       const w = live.margin > 0 ? home : live.margin < 0 ? away : "__DRAW__";
+      const idx = w === home ? 0 : w === away ? 1 : 2;
+      const good = _pinGood(parlays, g.key, base, winApplies, idx);
       base.winner = w;
-      resolved.push(w === "__DRAW__" ? "draw" : `${w} won`);
+      resolved.push({ text: w === "__DRAW__" ? "draw" : `${w} won`, good });
     } else {
       const opts = [
-        { label: `${home} wins`, apply: (a) => ({ ...a, winner: home }) },
-        { label: `${away} wins`, apply: (a) => ({ ...a, winner: away }) },
+        { label: `${home} wins`, apply: winApplies[0] },
+        { label: `${away} wins`, apply: winApplies[1] },
       ];
-      if (_SOCCER_TREE_SPORTS.has(g.sport)) {
-        opts.push({ label: "draw", apply: (a) => ({ ...a, winner: "__DRAW__" }) });
-      }
+      if (_SOCCER_TREE_SPORTS.has(g.sport)) opts.push({ label: "draw", apply: winApplies[2] });
       vars.push({ kind: "winner", varKey: "winner", exposure: exp.winner, options: opts });
     }
   }
@@ -1330,21 +1350,24 @@ function gameBranchVars(g, parlays, live) {
   if (totalLines.size) {
     const lines = [...totalLines].sort((a, b) => a - b);
     const cur = live && live.total != null ? live.total : null;
-    if (live && live.final && cur != null) {
-      base.total = cur; resolved.push(`total ${cur}`);
-    } else if (cur != null && cur >= lines[lines.length - 1]) {
-      base.total = cur; resolved.push(`total ${cur} (over ${lines[lines.length - 1] - 0.5})`);
+    const bands = [];
+    bands.push({ label: `under ${lines[0] - 0.5}`, bandMax: lines[0] - 1, apply: (a) => ({ ...a, total: lines[0] - 1 }) });
+    for (let i = 0; i < lines.length - 1; i++) {
+      bands.push({ label: `${lines[i] - 0.5}–${lines[i + 1] - 0.5}`, bandMax: lines[i + 1] - 1, apply: (a) => ({ ...a, total: lines[i] }) });
+    }
+    bands.push({ label: `over ${lines[lines.length - 1] - 0.5}`, bandMax: Infinity, apply: (a) => ({ ...a, total: lines[lines.length - 1] }) });
+    const resolvedTotal = (live && live.final && cur != null) || (cur != null && cur >= lines[lines.length - 1]);
+    if (resolvedTotal) {
+      let idx = bands.findIndex((o) => cur <= o.bandMax);
+      if (idx < 0) idx = bands.length - 1;
+      const good = _pinGood(parlays, g.key, base, bands.map((b) => b.apply), idx);
+      base.total = cur;
+      resolved.push({ text: `total ${cur}`, good });
     } else {
-      let opts = [];
-      opts.push({ label: `under ${lines[0] - 0.5}`, bandMax: lines[0] - 1, apply: (a) => ({ ...a, total: lines[0] - 1 }) });
-      for (let i = 0; i < lines.length - 1; i++) {
-        opts.push({ label: `${lines[i] - 0.5}–${lines[i + 1] - 0.5}`, bandMax: lines[i + 1] - 1, apply: (a) => ({ ...a, total: lines[i] }) });
-      }
-      opts.push({ label: `over ${lines[lines.length - 1] - 0.5}`, bandMax: Infinity, apply: (a) => ({ ...a, total: lines[lines.length - 1] }) });
-      if (cur != null) opts = opts.filter((o) => o.bandMax >= cur); // drop bands already surpassed
+      let opts = cur != null ? bands.filter((o) => o.bandMax >= cur) : bands; // drop surpassed bands
       if (opts.length <= 1) {
         base.total = opts.length ? opts[0].apply({}).total : (cur != null ? cur : lines[0]);
-        if (cur != null) resolved.push(`total ${cur}`);
+        if (cur != null) resolved.push({ text: `total ${cur}`, good: null });
       } else {
         vars.push({ kind: "total", varKey: "total", exposure: exp.total, options: opts });
       }
@@ -1353,25 +1376,33 @@ function gameBranchVars(g, parlays, live) {
 
   // RFI — pinned once the 1st inning has resolved.
   if (hasRfi) {
+    const rfiApplies = [(a) => ({ ...a, rfi: true }), (a) => ({ ...a, rfi: false })];
     if (live && live.firstInningRuns != null) {
-      base.rfi = live.firstInningRuns > 0;
-      resolved.push(base.rfi ? "run in 1st" : "no run in 1st");
+      const yes = live.firstInningRuns > 0;
+      const good = _pinGood(parlays, g.key, base, rfiApplies, yes ? 0 : 1);
+      base.rfi = yes;
+      resolved.push({ text: yes ? "run in 1st" : "no run in 1st", good });
     } else {
       vars.push({ kind: "rfi", varKey: null, exposure: exp.rfi, options: [
-        { label: "run in 1st", apply: (a) => ({ ...a, rfi: true }) },
-        { label: "no run in 1st", apply: (a) => ({ ...a, rfi: false }) },
+        { label: "run in 1st", apply: rfiApplies[0] },
+        { label: "no run in 1st", apply: rfiApplies[1] },
       ] });
     }
   }
 
   // BTTS — locks true once both teams have scored.
   if (hasBtts) {
-    if (live && live.bothScored === true) { base.btts = true; resolved.push("both teams scored"); }
-    else if (live && live.final && live.bothScored === false) { base.btts = false; resolved.push("not both scored"); }
-    else {
+    const bttsApplies = [(a) => ({ ...a, btts: true }), (a) => ({ ...a, btts: false })];
+    if (live && live.bothScored === true) {
+      const good = _pinGood(parlays, g.key, base, bttsApplies, 0);
+      base.btts = true; resolved.push({ text: "both teams scored", good });
+    } else if (live && live.final && live.bothScored === false) {
+      const good = _pinGood(parlays, g.key, base, bttsApplies, 1);
+      base.btts = false; resolved.push({ text: "not both scored", good });
+    } else {
       vars.push({ kind: "btts", varKey: "btts", exposure: exp.btts, options: [
-        { label: "both teams score", apply: (a) => ({ ...a, btts: true }) },
-        { label: "not both score", apply: (a) => ({ ...a, btts: false }) },
+        { label: "both teams score", apply: bttsApplies[0] },
+        { label: "not both score", apply: bttsApplies[1] },
       ] });
     }
   }
@@ -1383,17 +1414,23 @@ function gameBranchVars(g, parlays, live) {
     const name = pr.lastName || pr.team;
     const stat = (pr.stat || "").toLowerCase();
     const cur = live && live.propCurrent ? live.propCurrent(pr) : null;
+    const propApplies = [
+      (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }), // under
+      (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }),  // over (N+)
+    ];
     if (cur != null && cur >= pr.threshold) {
+      const good = _pinGood(parlays, g.key, base, propApplies, 1);
       base.props = { ...(base.props || {}), [key]: true };
-      resolved.push(`${name} ${pr.threshold}+ ${stat} (${cur})`);
+      resolved.push({ text: `${name} ${pr.threshold}+ ${stat} (${cur})`, good });
     } else if (live && live.final && cur != null && cur < pr.threshold) {
+      const good = _pinGood(parlays, g.key, base, propApplies, 0);
       base.props = { ...(base.props || {}), [key]: false };
-      resolved.push(`${name} under ${pr.threshold} ${stat} (${cur})`);
+      resolved.push({ text: `${name} under ${pr.threshold} ${stat} (${cur})`, good });
     } else {
       // Props are "N+" markets: under (our NO) = "under N"; over (yes) = "N+".
       vars.push({ kind: "prop", varKey: key, exposure: e.exposure, options: [
-        { label: `${name} under ${pr.threshold} ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: false } }) },
-        { label: `${name} ${pr.threshold}+ ${stat}`, apply: (a) => ({ ...a, props: { ...(a.props || {}), [key]: true } }) },
+        { label: `${name} under ${pr.threshold} ${stat}`, apply: propApplies[0] },
+        { label: `${name} ${pr.threshold}+ ${stat}`, apply: propApplies[1] },
       ] });
     }
   }
@@ -1675,7 +1712,7 @@ function bbSituationHtml(bb) {
         </div>
         <div class="bb-ab">
           ${bb.batter ? `<span class="bb-pa"><span class="bb-role">AB</span>${escapeHtml(bb.batter)}${bb.batterLine ? ` <span class="bb-line">${escapeHtml(bb.batterLine)}</span>` : ""}</span>` : ""}
-          ${bb.pitcher ? `<span class="bb-pa${bb.pitcherHeld ? " held" : ""}"><span class="bb-role">P</span>${escapeHtml(bb.pitcher)}${(bb.pitches != null || bb.ip) ? ` <span class="bb-line">${bb.pitches != null ? `${bb.pitches}P` : ""}${bb.pitches != null && bb.ip ? " · " : ""}${bb.ip ? `${bb.ip} IP` : ""}</span>` : ""}${bb.pullRisk ? ` <span class="bb-pull" title="high pitch count — likely pulled soon, which caps a strikeout-over">⚠ pull risk</span>` : ""}</span>` : ""}
+          ${bb.pitcher ? `<span class="bb-pa${bb.pitcherHeld ? " held" : ""}"><span class="bb-role">P</span>${escapeHtml(bb.pitcher)}${(bb.pitches != null || bb.ks != null) ? ` <span class="bb-line">${bb.pitches != null ? `${bb.pitches}P` : ""}${bb.pitches != null && bb.ks != null ? " · " : ""}${bb.ks != null ? `${bb.ks} K` : ""}</span>` : ""}${bb.pullRisk ? ` <span class="bb-pull" title="high pitch count — likely pulled soon, which caps a strikeout-over">⚠ pull risk</span>` : ""}</span>` : ""}
         </div>
       </div>
       ${strikeZoneSvg(bb.abPitches)}
@@ -2047,19 +2084,21 @@ function renderGameCards() {
     // line) + a pull-risk flag, and flag if it's a pitcher whose K-prop we hold.
     if (live && live.baseball && live.baseball.pitcherId) {
       const summary = state.boxscores[`${g.sport}:${live.raw?.id}`];
-      let pitches = null;
+      // Pitch count + strikeouts for the current pitcher, both derived from the
+      // play-by-play (boxscore pitching is null early). A strikeout is a "Play
+      // Result" whose text says "struck out", credited to the pitcher participant.
+      let pitches = null, ks = null;
       if (summary && Array.isArray(summary.plays)) {
-        pitches = 0;
+        pitches = 0; ks = 0;
         for (const pl of summary.plays) {
-          if (pl.summaryType === "P" &&
-              (pl.participants || []).some((pt) => pt.type === "pitcher" && String(pt.athlete?.id) === String(live.baseball.pitcherId))) {
-            pitches++;
-          }
+          const isOurs = (pl.participants || []).some((pt) => pt.type === "pitcher" && String(pt.athlete?.id) === String(live.baseball.pitcherId));
+          if (!isOurs) continue;
+          if (pl.summaryType === "P") pitches++;
+          if (/struck out/i.test(pl.text || "")) ks++;
         }
       }
       live.baseball.pitches = pitches;
-      const ipm = (live.baseball.pitcherLine || "").match(/([\d.]+)\s*IP/);
-      live.baseball.ip = ipm ? ipm[1] : null;
+      live.baseball.ks = ks;
       live.baseball.pullRisk = pitches != null && pitches >= 85;
       live.baseball.pitcherHeld = heldKPitchers.has(lastOf(live.baseball.pitcher));
 
@@ -2595,9 +2634,10 @@ function renderGameCards() {
           </div>`;
       }).join("");
       const pathStr = (arr) => (arr && arr.length ? arr.join(" · ") : "—");
-      // "So far" — facts live play has already settled (pins the tree).
+      // "So far" — facts live play has already settled (pins the tree). Each
+      // pill is green if it went our way, red if it didn't, grey if neutral.
       const resolvedHtml = (tree.resolved && tree.resolved.length)
-        ? `<div class="tree-resolved"><span class="tree-resolved-lbl">so far</span>${tree.resolved.map((r) => `<span class="rs">${escapeHtml(r)}</span>`).join("")}</div>`
+        ? `<div class="tree-resolved"><span class="tree-resolved-lbl">so far</span>${tree.resolved.map((r) => `<span class="rs${r.good === true ? " good" : r.good === false ? " bad" : ""}">${escapeHtml(r.text)}</span>`).join("")}</div>`
         : "";
       const hasBranches = tree.roots && tree.roots.length;
       const body = hasBranches
@@ -2622,7 +2662,7 @@ function renderGameCards() {
           </div></div></div>`;
       scenarioHtml = `
         <div class="scenarios game-tree">
-          <div class="cheer-list-head">If the game goes…</div>
+          <div class="cheer-list-head">Rooting interests</div>
           ${resolvedHtml}
           ${body}
         </div>
