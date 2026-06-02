@@ -217,6 +217,12 @@ async function refresh() {
           body: JSON.stringify({ tickers: slice }),
         });
         Object.assign(markets, part);
+        // Record each market's authoritative line (floor_strike) so netting +
+        // labels use the REAL line, not a league-dependent ticker-integer guess.
+        for (const [tk, v] of Object.entries(part)) {
+          const fs = v?.market?.floor_strike;
+          if (typeof fs === "number") _floorStrikeByTicker[tk] = fs;
+        }
       }
       for (const p of state.positions) {
         const m = markets[p.ticker]?.market || {};
@@ -1955,6 +1961,13 @@ function aggregateLegExposure() {
 const _NET_GRID_BUDGET = 200_000;
 const _NET_OTHER = "__OTHER__";
 
+// Authoritative line per ticker = the market's `floor_strike` (yes ⟺ value >
+// floor_strike). NEVER derive the line from the ticker integer ±0.5: that
+// offset is league-specific (MLB total/spread = N−0.5, but NBA & NHL = N+0.5),
+// so a hardcoded rule silently mis-prints NBA/NHL by a full unit and corrupts
+// the netting candidate grid. Populated in the markets-fetch loop on refresh.
+const _floorStrikeByTicker = {};
+
 // One leg -> {varKey, vtype:'num'|'cat', op, line|set, team?} or null (not
 // modelled => auto-satisfiable, conservative). Polarity matches the runner:
 // total/player yes=over; GAME/SPREAD => signed margin from `team`'s view
@@ -1972,15 +1985,25 @@ function _legConstraintNet(ticker, buyerSide) {
       if (team === "TIE" || team === "DRAW") {
         return { varKey: "winner", vtype: "cat", op: yes ? "in" : "notin", set: [team] };
       }
-      // SPREAD "TEAMn" => team covers by n <=> margin_team >= n <=> > n-0.5.
-      // ML (no number) => win <=> margin_team >= 1 <=> > 0.5.
-      const n = gl.kind === "spread" ? gl.threshold : 1;
-      if (n == null) return null;
-      return { varKey: "margin", vtype: "num", op: yes ? "gt" : "le", line: n - 0.5, team };
+      // SPREAD => team covers <=> margin_team > floor_strike (Kalshi strike_type
+      // "greater"). Use the market's real floor_strike (e.g. NHL CAR1 = 1.5),
+      // NOT n−0.5 — that league-specific guess collapsed the margin candidate
+      // grid and produced phantom "100% hedged" cards. ML has no line: win <=>
+      // margin_team >= 1 <=> > 0.5 (no floor_strike on the moneyline market).
+      const fs = _floorStrikeByTicker[ticker];
+      const line = gl.kind === "spread"
+        ? (typeof fs === "number" ? fs : (gl.threshold == null ? null : gl.threshold - 0.5))
+        : 0.5;
+      if (line == null) return null;
+      return { varKey: "margin", vtype: "num", op: yes ? "gt" : "le", line, team };
     }
     if (gl.kind === "total") {
-      if (gl.threshold == null) return null;
-      return { varKey: "total", vtype: "num", op: yes ? "gt" : "le", line: gl.threshold };
+      // total over <=> total > floor_strike (e.g. NHL "5" = over 5.5). Use the
+      // real floor_strike; fall back to the ticker integer only if unloaded.
+      const fs = _floorStrikeByTicker[ticker];
+      const line = typeof fs === "number" ? fs : gl.threshold;
+      if (line == null) return null;
+      return { varKey: "total", vtype: "num", op: yes ? "gt" : "le", line };
     }
     if (gl.kind === "btts") {
       return { varKey: "btts", vtype: "cat", op: "in", set: [yes ? "yes" : "no"] };
@@ -2504,7 +2527,7 @@ function renderGameCards() {
 
     // Per-leg row HTML used by both game and player sections.
     const legRowHtml = (r, prop) => {
-      const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx);
+      const desc = legLabel(r.ticker, r.ourSide, state.athleteIdx, _floorStrikeByTicker[r.ticker]);
       const pUsPct = r.pUs != null ? `${(r.pUs * 100).toFixed(0)}%` : "—";
       let liveStat = "";
       if (prop) {
@@ -2601,15 +2624,16 @@ function renderGameCards() {
         // i.e., "win" regardless of original buyer side.
         chipLabel = "win";
       } else if (parsed.kind === "spread") {
-        // Chip displays our cheering perspective. Ticker N is the "by N+"
-        // market, line = N − 0.5 (= floor_strike). Buyer-YES on TEAM-N: we
-        // cheer the OPPOSING dog at +(N−0.5); Buyer-NO: TEAM at −(N−0.5).
+        // Chip displays our cheering perspective at the market's REAL line
+        // (floor_strike), not a ticker-integer guess. Buyer-YES on TEAM: we
+        // cheer the OPPOSING dog at +line; Buyer-NO: TEAM at −line.
         const sign = buyerSide === "yes" ? "+" : "-";
-        chipLabel = `${sign}${parsed.threshold - 0.5}`;
+        const line = _floorStrikeByTicker[row.ticker] ?? (parsed.threshold - 0.5);
+        chipLabel = `${sign}${line}`;
       } else if (parsed.kind === "total") {
-        // Same rule for total: show OUR side, not buyer's. Ticker N => Over
-        // N−0.5 market. Buyer-YES (over) -> we cheer under; buyer-NO -> over.
-        const line = parsed.threshold - 0.5;
+        // Same rule for total: show OUR side at the real line (floor_strike).
+        // Buyer-YES (over) -> we cheer under; buyer-NO -> over.
+        const line = _floorStrikeByTicker[row.ticker] ?? (parsed.threshold - 0.5);
         chipLabel = buyerSide === "yes" ? `u${line}` : `o${line}`;
       } else if (parsed.kind === "rfi") {
         // RFI is binary "any run in 1st". Buyer-YES (a run scored) -> we
@@ -3431,7 +3455,7 @@ function renderParlayCard(p, n, probs) {
   const legHtml = p.legs.map((leg, i) => {
     const res = legResolutionForUs(leg, state.scoreboards, state.boxscores);
     const ourSide = flipSide(leg.side);
-    const desc = legLabel(leg.ticker, ourSide, state.athleteIdx);
+    const desc = legLabel(leg.ticker, ourSide, state.athleteIdx, _floorStrikeByTicker[leg.ticker]);
     const lm = p.legMids[leg.ticker] || {};
     const eff = probs.breakdown[i]?.eff || res.status;
     const pUsThisLeg = probs.breakdown[i]?.p_us;

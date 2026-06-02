@@ -92,18 +92,21 @@ function ymdHumanFromTicker(date /* "26APR28" */) {
 // Kalshi markets are "N+" (yes ⟺ value ≥ N), so the actual sportsbook line is
 // N − 0.5 (= the market's floor_strike). e.g. ticker total "12" is the
 // "12+ runs" market, i.e. Over 11.5. So the displayed half-line is N − 0.5.
-function totalLine(v) {
+// `fs` (the market's floor_strike) is the AUTHORITATIVE line and is used when
+// provided — the ticker-integer fallback (N − 0.5) is league-specific and wrong
+// for NBA/NHL (which are N + 0.5), so always prefer the real floor_strike.
+function totalLine(v, fs) {
+  if (typeof fs === "number") return String(fs);
   const x = Number(v);
   return Number.isFinite(x) ? String(x - 0.5) : v;
 }
-// Same convention for spreads: ticker integer N is "wins by N+", i.e. by over
-// N − 0.5. Displayed line is N − 0.5.
-function spreadLine(v) {
+function spreadLine(v, fs) {
+  if (typeof fs === "number") return String(fs);
   const x = Number(v);
   return Number.isFinite(x) ? String(x - 0.5) : v;
 }
 
-export function legLabel(ticker, side, athleteIdx) {
+export function legLabel(ticker, side, athleteIdx, floorStrike) {
   side = (side || "yes").toLowerCase();
 
   // ---------- NHL ----------
@@ -124,15 +127,15 @@ export function legLabel(ticker, side, athleteIdx) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NHL_TEAMS);
     const matchup = `${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)}`;
-    if (side === "yes") return `NHL: ${matchup} OVER ${totalLine(n)} goals`;
-    return `NHL: ${matchup} UNDER ${totalLine(n)} goals`;
+    if (side === "yes") return `NHL: ${matchup} OVER ${totalLine(n, floorStrike)} goals`;
+    return `NHL: ${matchup} UNDER ${totalLine(n, floorStrike)} goals`;
   }
   if (ticker.startsWith("KXNHLSPREAD-")) {
     const rest = ticker.slice("KXNHLSPREAD-".length);
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NHL_TEAMS);
-    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} spread ${spreadLine(line)}` + (side === "yes" ? "" : " (no)");
+    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} spread ${spreadLine(line, floorStrike)}` + (side === "yes" ? "" : " (no)");
   }
 
   // ---------- MLB ----------
@@ -153,15 +156,15 @@ export function legLabel(ticker, side, athleteIdx) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, MLB_TEAMS);
     const matchup = `${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)}`;
-    if (side === "yes") return `MLB: ${matchup} OVER ${totalLine(n)} runs`;
-    return `MLB: ${matchup} UNDER ${totalLine(n)} runs`;
+    if (side === "yes") return `MLB: ${matchup} OVER ${totalLine(n, floorStrike)} runs`;
+    return `MLB: ${matchup} UNDER ${totalLine(n, floorStrike)} runs`;
   }
   if (ticker.startsWith("KXMLBSPREAD-")) {
     const rest = ticker.slice("KXMLBSPREAD-".length);
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, MLB_TEAMS);
-    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} spread ${spreadLine(line)}` + (side === "yes" ? "" : " (no)");
+    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} spread ${spreadLine(line, floorStrike)}` + (side === "yes" ? "" : " (no)");
   }
 
   // MLB player props
@@ -206,15 +209,15 @@ export function legLabel(ticker, side, athleteIdx) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NBA_TEAMS);
     const matchup = `${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)}`;
-    if (side === "yes") return `NBA: ${matchup} OVER ${totalLine(n)} points`;
-    return `NBA: ${matchup} UNDER ${totalLine(n)} points`;
+    if (side === "yes") return `NBA: ${matchup} OVER ${totalLine(n, floorStrike)} points`;
+    return `NBA: ${matchup} UNDER ${totalLine(n, floorStrike)} points`;
   }
   if (ticker.startsWith("KXNBASPREAD-")) {
     const rest = ticker.slice("KXNBASPREAD-".length);
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NBA_TEAMS);
-    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} spread ${spreadLine(line)}` + (side === "yes" ? "" : " (no)");
+    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} spread ${spreadLine(line, floorStrike)}` + (side === "yes" ? "" : " (no)");
   }
 
   // NBA player props
@@ -282,8 +285,8 @@ export function legLabel(ticker, side, athleteIdx) {
     const [a, b] = splitTeams(teams, IPL_TEAMS);
     const matchup = `${teamName(IPL_TEAMS, a)} vs ${teamName(IPL_TEAMS, b)}`;
     const label = prefix === "KXIPLTEAMTOTAL-" ? "team total" : "match total";
-    if (side === "yes") return `IPL: ${matchup} OVER ${totalLine(n)} runs (${label})`;
-    return `IPL: ${matchup} UNDER ${totalLine(n)} runs (${label})`;
+    if (side === "yes") return `IPL: ${matchup} OVER ${totalLine(n, floorStrike)} runs (${label})`;
+    return `IPL: ${matchup} UNDER ${totalLine(n, floorStrike)} runs (${label})`;
   }
   if (ticker.startsWith("KXIPLFIRST10-")) {
     const rest = ticker.slice("KXIPLFIRST10-".length);
@@ -336,12 +339,12 @@ export function legLabel(ticker, side, athleteIdx) {
       // Suffix is the team abbrev + handicap (e.g. "RMA1" = RMA -1.5).
       // We can't always cleanly parse the handicap; render the matchup and
       // direction at minimum.
-      if (side === "yes") return `${label}: ${aName} vs ${bName} spread ${spreadLine(suffix)}`;
+      if (side === "yes") return `${label}: ${aName} vs ${bName} spread ${spreadLine(suffix, floorStrike)}`;
       return `${label}: ${aName} vs ${bName} spread NOT ${suffix}`;
     }
     if (pref.endsWith("TOTAL")) {
-      if (side === "yes") return `${label}: ${aName} vs ${bName} OVER ${totalLine(suffix)} goals`;
-      return `${label}: ${aName} vs ${bName} UNDER ${totalLine(suffix)} goals`;
+      if (side === "yes") return `${label}: ${aName} vs ${bName} OVER ${totalLine(suffix, floorStrike)} goals`;
+      return `${label}: ${aName} vs ${bName} UNDER ${totalLine(suffix, floorStrike)} goals`;
     }
     if (pref.endsWith("BTTS")) {
       if (side === "yes") return `${label}: Both teams score (${aName} vs ${bName})`;
