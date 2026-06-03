@@ -942,7 +942,10 @@ function parseGameLevelLeg(ticker) {
     const threshold = parseInt(mSpread[3], 10);
     const teams = parseTeamsFromChunk(dt, sport);
     if (!teams) return null;
-    return { kind: "spread", sport, teams, pick, threshold };
+    // `line` = the market's REAL signed cover line (floor_strike; league-aware
+    // fallback). Resolution/tree use this, NOT the raw ticker integer, which is
+    // a full unit off for NHL/NBA (covers iff margin > line, e.g. NHL 1.5 => ≥2).
+    return { kind: "spread", sport, teams, pick, threshold, line: _lineForTicker(ticker, threshold) };
   }
   const mTotal = ticker.match(/^KX[A-Z0-9]+TOTAL-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-(\d+)$/);
   if (mTotal) {
@@ -950,7 +953,9 @@ function parseGameLevelLeg(ticker) {
     const threshold = parseInt(mTotal[2], 10);
     const teams = parseTeamsFromChunk(dt, sport);
     if (!teams) return null;
-    return { kind: "total", sport, teams, threshold };
+    // `line` = the market's REAL total line (floor_strike; league-aware fallback).
+    // Over iff total > line (e.g. NHL "5" => 5.5 => total ≥ 6), NOT total ≥ N.
+    return { kind: "total", sport, teams, threshold, line: _lineForTicker(ticker, threshold) };
   }
   // MLB Run-in-First-Inning. Binary market — yes = a run scored. The team
   // suffix is optional (game-level "any team" is most common).
@@ -1062,19 +1067,20 @@ function evalGameLegInScenario(parsed, buyerSide, scenario) {
   }
   if (parsed.kind === "spread") {
     if (margin == null) return "unknown";
-    // Ticker N is the "wins by N+" market (floor_strike N − 0.5), so yes ⟺
-    // margin ≥ N. e.g. N=2 ("by over 1.5") hits on a 2-run win.
+    // Covers iff the pick's signed margin exceeds the REAL line (floor_strike),
+    // e.g. NHL 1.5 => margin ≥ 2. NOT margin ≥ ticker-int N (off by a unit for
+    // NHL/NBA).
     const [away, home] = parsed.teams;
     let yesHits;
-    if (parsed.pick === home) yesHits = margin >= parsed.threshold;
-    else if (parsed.pick === away) yesHits = -margin >= parsed.threshold;
+    if (parsed.pick === home) yesHits = margin > parsed.line;
+    else if (parsed.pick === away) yesHits = -margin > parsed.line;
     else return "unknown";
     return resolveLeg(yesHits, buyerSide);
   }
   if (parsed.kind === "total") {
     if (scenario.total == null) return "unknown";
-    // Ticker N is the "N+" market (Over N − 0.5), so yes ⟺ total ≥ N.
-    const yesHits = scenario.total >= parsed.threshold;
+    // Over iff total > the REAL line (floor_strike), e.g. NHL 5.5 => total ≥ 6.
+    const yesHits = scenario.total > parsed.line;
     return resolveLeg(yesHits, buyerSide);
   }
   if (parsed.kind === "btts") {
@@ -1237,13 +1243,16 @@ function _treeEvalLeg(ticker, side, asg) {
         if (asg.winner == null) return "unknown";
         return _treeResolveBuyer(asg.winner === "__DRAW__", side);
       }
-      // Margin-aware (matches the netting margin var): team covers by n iff its
-      // signed margin >= n. asg.margin is home-positive. ML => n = 1 (win).
+      // Margin-aware (matches the netting margin var): SPREAD covers iff signed
+      // margin > the REAL line (floor_strike, e.g. NHL 1.5 => ≥2); ML wins iff
+      // margin >= 1. asg.margin is home-positive.
       if (asg.margin != null && gl.teams) {
         const [away, home] = gl.teams;
-        const n = gl.kind === "spread" ? gl.threshold : 1;
         const tm = team === home ? asg.margin : team === away ? -asg.margin : null;
-        if (tm != null) return _treeResolveBuyer(tm >= n, side);
+        if (tm != null) {
+          const hit = gl.kind === "spread" ? tm > gl.line : tm >= 1;
+          return _treeResolveBuyer(hit, side);
+        }
       }
       // Fallback (soccer/draw branches still use the winner category).
       if (asg.winner == null) return "unknown";
@@ -1251,7 +1260,7 @@ function _treeEvalLeg(ticker, side, asg) {
     }
     if (gl.kind === "total") {
       if (asg.total == null) return "unknown";
-      return _treeResolveBuyer(asg.total >= gl.threshold, side); // ticker N => Over N−0.5
+      return _treeResolveBuyer(asg.total > gl.line, side); // over iff total > real line
     }
     if (gl.kind === "rfi") {
       if (asg.rfi == null) return "unknown";
@@ -1364,13 +1373,18 @@ function gameBranchVars(g, parlays, live) {
           if (gl.pick === "TIE" || gl.pick === "DRAW") hasDrawPick = true;
           else if (gl.teams) {
             const [away, home] = gl.teams;
-            const n = gl.kind === "spread" ? gl.threshold : 1;
+            // Integer cover breakpoint = ceil(real line) so the margin reps line
+            // up with the `margin > line` resolver: NHL 1.5 => 2, MLB N−0.5 => N.
+            // ML has no line => win breakpoint 1.
+            const nc = gl.kind === "spread" ? Math.ceil(gl.line) : 1;
             if (gl.kind === "spread") hasSpread = true;
-            if (gl.pick === home) marginCuts.add(n);
-            else if (gl.pick === away) marginCuts.add(-n + 1);
+            if (gl.pick === home) marginCuts.add(nc);
+            else if (gl.pick === away) marginCuts.add(-nc + 1);
           }
         }
-        else if (gl.kind === "total") { totalLines.add(gl.threshold); exp.total += p.cost; }
+        // Total branch point = ceil(real line) so the "over" band's rep total
+        // (= this value) resolves as over under `total > line`. NHL "5" => 6.
+        else if (gl.kind === "total") { totalLines.add(Math.ceil(gl.line)); exp.total += p.cost; }
         else if (gl.kind === "rfi") { hasRfi = true; exp.rfi += p.cost; }
         else if (gl.kind === "btts") { hasBtts = true; exp.btts += p.cost; }
         continue;
@@ -1962,11 +1976,25 @@ const _NET_GRID_BUDGET = 200_000;
 const _NET_OTHER = "__OTHER__";
 
 // Authoritative line per ticker = the market's `floor_strike` (yes ⟺ value >
-// floor_strike). NEVER derive the line from the ticker integer ±0.5: that
-// offset is league-specific (MLB total/spread = N−0.5, but NBA & NHL = N+0.5),
-// so a hardcoded rule silently mis-prints NBA/NHL by a full unit and corrupts
-// the netting candidate grid. Populated in the markets-fetch loop on refresh.
+// floor_strike). Populated in the markets-fetch loop on refresh. Always prefer
+// it; the ticker-integer offset is league-specific (MLB total/spread = N−0.5,
+// but NBA & NHL = N+0.5), so a UNIFORM ±0.5 rule silently mis-prints NBA/NHL by
+// a full unit. _lineForTicker() encapsulates "floor_strike first, league-aware
+// offset only as a fallback" — use it everywhere instead of a bare n±0.5.
 const _floorStrikeByTicker = {};
+
+// Real line for a ticker: prefer the market's floor_strike; otherwise fall back
+// to the ticker integer with the LEAGUE-SPECIFIC offset (verified vs Kalshi
+// 2026-06-02: NHL/NBA tickers are N+0.5, e.g. KXNHLTOTAL ...-5 = 5.5; MLB &
+// everything else are N−0.5). A uniform N−0.5 silently printed NBA/NHL a full
+// unit low. Used for DISPLAY fallbacks only — netting prefers floor_strike.
+function _lineForTicker(ticker, n) {
+  const fs = _floorStrikeByTicker[ticker];
+  if (typeof fs === "number") return fs;
+  if (n == null) return null;
+  const off = (ticker.startsWith("KXNHL") || ticker.startsWith("KXNBA")) ? 0.5 : -0.5;
+  return n + off;
+}
 
 // One leg -> {varKey, vtype:'num'|'cat', op, line|set, team?} or null (not
 // modelled => auto-satisfiable, conservative). Polarity matches the runner:
@@ -1986,22 +2014,23 @@ function _legConstraintNet(ticker, buyerSide) {
         return { varKey: "winner", vtype: "cat", op: yes ? "in" : "notin", set: [team] };
       }
       // SPREAD => team covers <=> margin_team > floor_strike (Kalshi strike_type
-      // "greater"). Use the market's real floor_strike (e.g. NHL CAR1 = 1.5),
-      // NOT n−0.5 — that league-specific guess collapsed the margin candidate
+      // "greater"). Use the market's real floor_strike (e.g. NHL CAR1 = 1.5)
+      // via _lineForTicker, which falls back to the LEAGUE-SPECIFIC offset
+      // (NHL/NBA = N+0.5, MLB & others = N−0.5) only when floor_strike is
+      // unloaded — never a uniform n−0.5, which collapsed the margin candidate
       // grid and produced phantom "100% hedged" cards. ML has no line: win <=>
       // margin_team >= 1 <=> > 0.5 (no floor_strike on the moneyline market).
-      const fs = _floorStrikeByTicker[ticker];
       const line = gl.kind === "spread"
-        ? (typeof fs === "number" ? fs : (gl.threshold == null ? null : gl.threshold - 0.5))
+        ? _lineForTicker(ticker, gl.threshold)
         : 0.5;
       if (line == null) return null;
       return { varKey: "margin", vtype: "num", op: yes ? "gt" : "le", line, team };
     }
     if (gl.kind === "total") {
-      // total over <=> total > floor_strike (e.g. NHL "5" = over 5.5). Use the
-      // real floor_strike; fall back to the ticker integer only if unloaded.
-      const fs = _floorStrikeByTicker[ticker];
-      const line = typeof fs === "number" ? fs : gl.threshold;
+      // total over <=> total > floor_strike (e.g. NHL "5" = over 5.5). Prefer
+      // the real floor_strike; _lineForTicker falls back to the league-aware
+      // ticker offset (NHL/NBA = N+0.5, MLB & others = N−0.5) only if unloaded.
+      const line = _lineForTicker(ticker, gl.threshold);
       if (line == null) return null;
       return { varKey: "total", vtype: "num", op: yes ? "gt" : "le", line };
     }
@@ -2628,12 +2657,12 @@ function renderGameCards() {
         // (floor_strike), not a ticker-integer guess. Buyer-YES on TEAM: we
         // cheer the OPPOSING dog at +line; Buyer-NO: TEAM at −line.
         const sign = buyerSide === "yes" ? "+" : "-";
-        const line = _floorStrikeByTicker[row.ticker] ?? (parsed.threshold - 0.5);
+        const line = _lineForTicker(row.ticker, parsed.threshold);
         chipLabel = `${sign}${line}`;
       } else if (parsed.kind === "total") {
         // Same rule for total: show OUR side at the real line (floor_strike).
         // Buyer-YES (over) -> we cheer under; buyer-NO -> over.
-        const line = _floorStrikeByTicker[row.ticker] ?? (parsed.threshold - 0.5);
+        const line = _lineForTicker(row.ticker, parsed.threshold);
         chipLabel = buyerSide === "yes" ? `u${line}` : `o${line}`;
       } else if (parsed.kind === "rfi") {
         // RFI is binary "any run in 1st". Buyer-YES (a run scored) -> we

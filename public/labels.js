@@ -89,21 +89,27 @@ function ymdHumanFromTicker(date /* "26APR28" */) {
 
 // ---------- main ----------
 
-// Kalshi markets are "N+" (yes ⟺ value ≥ N), so the actual sportsbook line is
-// N − 0.5 (= the market's floor_strike). e.g. ticker total "12" is the
-// "12+ runs" market, i.e. Over 11.5. So the displayed half-line is N − 0.5.
-// `fs` (the market's floor_strike) is the AUTHORITATIVE line and is used when
-// provided — the ticker-integer fallback (N − 0.5) is league-specific and wrong
-// for NBA/NHL (which are N + 0.5), so always prefer the real floor_strike.
-function totalLine(v, fs) {
-  if (typeof fs === "number") return String(fs);
+// The market's `floor_strike` (`fs`) is the AUTHORITATIVE line and is always
+// used when provided — it is the half-number the market resolves against
+// (e.g. NHL "5" => 5.5, MLB "12" => 11.5). The ticker-integer fallback only
+// fires when floor_strike is not loaded, and it is LEAGUE-SPECIFIC: verified
+// vs Kalshi 2026-06-02, NHL/NBA tickers are N + 0.5 (KXNHLTOTAL ...-5 has
+// floor_strike 5.5), while MLB and everything else are N − 0.5 (ticker "12" =
+// the "12+ runs" market = Over 11.5). A uniform N − 0.5 silently printed
+// NBA/NHL a full unit low, so the fallback must know the sport.
+function _fallbackHalfLine(v, sport) {
   const x = Number(v);
-  return Number.isFinite(x) ? String(x - 0.5) : v;
+  if (!Number.isFinite(x)) return v;
+  const off = (sport === "nhl" || sport === "nba") ? 0.5 : -0.5;
+  return String(x + off);
 }
-function spreadLine(v, fs) {
+function totalLine(v, fs, sport) {
   if (typeof fs === "number") return String(fs);
-  const x = Number(v);
-  return Number.isFinite(x) ? String(x - 0.5) : v;
+  return _fallbackHalfLine(v, sport);
+}
+function spreadLine(v, fs, sport) {
+  if (typeof fs === "number") return String(fs);
+  return _fallbackHalfLine(v, sport);
 }
 
 export function legLabel(ticker, side, athleteIdx, floorStrike) {
@@ -127,15 +133,15 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NHL_TEAMS);
     const matchup = `${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)}`;
-    if (side === "yes") return `NHL: ${matchup} OVER ${totalLine(n, floorStrike)} goals`;
-    return `NHL: ${matchup} UNDER ${totalLine(n, floorStrike)} goals`;
+    if (side === "yes") return `NHL: ${matchup} OVER ${totalLine(n, floorStrike, "nhl")} goals`;
+    return `NHL: ${matchup} UNDER ${totalLine(n, floorStrike, "nhl")} goals`;
   }
   if (ticker.startsWith("KXNHLSPREAD-")) {
     const rest = ticker.slice("KXNHLSPREAD-".length);
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NHL_TEAMS);
-    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} spread ${spreadLine(line, floorStrike)}` + (side === "yes" ? "" : " (no)");
+    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} spread ${spreadLine(line, floorStrike, "nhl")}` + (side === "yes" ? "" : " (no)");
   }
 
   // ---------- MLB ----------
@@ -156,15 +162,15 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, MLB_TEAMS);
     const matchup = `${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)}`;
-    if (side === "yes") return `MLB: ${matchup} OVER ${totalLine(n, floorStrike)} runs`;
-    return `MLB: ${matchup} UNDER ${totalLine(n, floorStrike)} runs`;
+    if (side === "yes") return `MLB: ${matchup} OVER ${totalLine(n, floorStrike, "mlb")} runs`;
+    return `MLB: ${matchup} UNDER ${totalLine(n, floorStrike, "mlb")} runs`;
   }
   if (ticker.startsWith("KXMLBSPREAD-")) {
     const rest = ticker.slice("KXMLBSPREAD-".length);
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, MLB_TEAMS);
-    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} spread ${spreadLine(line, floorStrike)}` + (side === "yes" ? "" : " (no)");
+    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} spread ${spreadLine(line, floorStrike, "mlb")}` + (side === "yes" ? "" : " (no)");
   }
 
   // MLB player props
@@ -209,15 +215,15 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NBA_TEAMS);
     const matchup = `${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)}`;
-    if (side === "yes") return `NBA: ${matchup} OVER ${totalLine(n, floorStrike)} points`;
-    return `NBA: ${matchup} UNDER ${totalLine(n, floorStrike)} points`;
+    if (side === "yes") return `NBA: ${matchup} OVER ${totalLine(n, floorStrike, "nba")} points`;
+    return `NBA: ${matchup} UNDER ${totalLine(n, floorStrike, "nba")} points`;
   }
   if (ticker.startsWith("KXNBASPREAD-")) {
     const rest = ticker.slice("KXNBASPREAD-".length);
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NBA_TEAMS);
-    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} spread ${spreadLine(line, floorStrike)}` + (side === "yes" ? "" : " (no)");
+    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} spread ${spreadLine(line, floorStrike, "nba")}` + (side === "yes" ? "" : " (no)");
   }
 
   // NBA player props
@@ -285,8 +291,8 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const [a, b] = splitTeams(teams, IPL_TEAMS);
     const matchup = `${teamName(IPL_TEAMS, a)} vs ${teamName(IPL_TEAMS, b)}`;
     const label = prefix === "KXIPLTEAMTOTAL-" ? "team total" : "match total";
-    if (side === "yes") return `IPL: ${matchup} OVER ${totalLine(n, floorStrike)} runs (${label})`;
-    return `IPL: ${matchup} UNDER ${totalLine(n, floorStrike)} runs (${label})`;
+    if (side === "yes") return `IPL: ${matchup} OVER ${totalLine(n, floorStrike, "ipl")} runs (${label})`;
+    return `IPL: ${matchup} UNDER ${totalLine(n, floorStrike, "ipl")} runs (${label})`;
   }
   if (ticker.startsWith("KXIPLFIRST10-")) {
     const rest = ticker.slice("KXIPLFIRST10-".length);
@@ -339,12 +345,12 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
       // Suffix is the team abbrev + handicap (e.g. "RMA1" = RMA -1.5).
       // We can't always cleanly parse the handicap; render the matchup and
       // direction at minimum.
-      if (side === "yes") return `${label}: ${aName} vs ${bName} spread ${spreadLine(suffix, floorStrike)}`;
+      if (side === "yes") return `${label}: ${aName} vs ${bName} spread ${spreadLine(suffix, floorStrike, "soccer")}`;
       return `${label}: ${aName} vs ${bName} spread NOT ${suffix}`;
     }
     if (pref.endsWith("TOTAL")) {
-      if (side === "yes") return `${label}: ${aName} vs ${bName} OVER ${totalLine(suffix, floorStrike)} goals`;
-      return `${label}: ${aName} vs ${bName} UNDER ${totalLine(suffix, floorStrike)} goals`;
+      if (side === "yes") return `${label}: ${aName} vs ${bName} OVER ${totalLine(suffix, floorStrike, "soccer")} goals`;
+      return `${label}: ${aName} vs ${bName} UNDER ${totalLine(suffix, floorStrike, "soccer")} goals`;
     }
     if (pref.endsWith("BTTS")) {
       if (side === "yes") return `${label}: Both teams score (${aName} vs ${bName})`;
