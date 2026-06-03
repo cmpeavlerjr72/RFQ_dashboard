@@ -1198,3 +1198,23 @@ html, body { overflow-x: hidden; }
   .kpi .value { font-size: 18px; }
   .kpi-split .kpi-half { padding: 12px; }
 }
+
+/* ============================================================
+   Global centering — center everything within its bucket
+   (user request 2026-06-02). Applies only to the content area
+   (<main> on every page); the sticky header + footer chrome keep
+   their own layout.
+   - text-align centers all text / inline / inline-block content.
+   - justify-content centers flex & grid GROUPS (chip ladders, leg
+     lists, stat rows, card headers, situations). It's a no-op on
+     non-flex/grid elements, so listing `main *` is safe; the tree
+     thermometer tick is absolutely positioned (uses `left`) and is
+     unaffected. Explicit table column alignments keep their own
+     text-align (more specific than `main`).
+   To exempt a component later, give it `justify-content: <x> !important`.
+   ============================================================ */
+main { text-align: center; }
+main * { justify-content: center !important; }
+/* Block-level / max-width widgets centre via auto margins (justify-content only
+   centres flex/grid main-axis; these sit as block items in column containers). */
+main .rink, main .pz { margin-left: auto; margin-right: auto; }
