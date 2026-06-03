@@ -1214,7 +1214,12 @@ html, body { overflow-x: hidden; }
    To exempt a component later, give it `justify-content: <x> !important`.
    ============================================================ */
 main { text-align: center; }
-main * { justify-content: center !important; }
+/* Centre every flex/grid group EXCEPT the expanded game-card body, which keeps
+   its original left-justified layout (user preference 2026-06-02). Excluding the
+   body subtree means its own (un-!important) rules apply unchanged = "like it was".
+   The score panel + rink live in the card HEAD, so they stay centred. */
+main *:not(.game-card-body):not(.game-card-body *) { justify-content: center !important; }
+main .game-card-body { text-align: left; }
 /* Block-level / max-width widgets centre via auto margins (justify-content only
    centres flex/grid main-axis; these sit as block items in column containers). */
 main .rink, main .pz { margin-left: auto; margin-right: auto; }
