@@ -212,7 +212,25 @@ export async function getPositions(account: string, force = false): Promise<any>
   if (force) positionsCache.set(key, undefined as any, 0);
   return positionsCache.getOrFetch(
     key,
-    () => getJson(account, "/portfolio/positions?limit=200"),
+    async () => {
+      const raw = await getJson(account, "/portfolio/positions?limit=200");
+      // EXCLUDE non-KXMVE positions: our runner ONLY ever holds the multi-game
+      // parlay products (KXMVE…). Anything else on the account is the OWNER's
+      // personal betting — e.g. a direct KXATPMATCH tennis taker (~$150) or a
+      // manually-held KXGAPRIMARY — which must NOT contaminate our positions /
+      // exposure / sport breakdowns. Mirrors the runner's hydration filter
+      // (run_netting_maker.py: positions startswith "KXMVE"). 2026-06-03.
+      const keep = (p: any) => (p?.ticker || "").startsWith("KXMVE");
+      if (raw && typeof raw === "object") {
+        if (Array.isArray(raw.market_positions))
+          raw.market_positions = raw.market_positions.filter(keep);
+        if (Array.isArray(raw.event_positions))
+          raw.event_positions = raw.event_positions.filter(
+            (e: any) => (e?.event_ticker || "").startsWith("KXMVE"),
+          );
+      }
+      return raw;
+    },
     30_000,
   );
 }
