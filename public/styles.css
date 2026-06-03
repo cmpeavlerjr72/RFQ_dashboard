@@ -505,6 +505,39 @@ h2 {
 }
 .bb-probables .sp-vs { color: var(--muted-2); font-size: 11px; }
 .bb-probables .sp-held { font-weight: 700; color: var(--accent); }
+.bb-probables .sp-conf { color: var(--pos); font-weight: 700; }
+
+/* ---- live hockey situation: goalies / penalties / rink shot plot ---- */
+.hk-situation {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.hk-goalies, .hk-pens { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; }
+.hk-goalie, .hk-pen { display: inline-flex; align-items: baseline; gap: 5px; color: var(--fg); white-space: nowrap; }
+.hk-role {
+  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent); background: var(--accent-bg);
+  padding: 1px 5px; border-radius: 3px;
+}
+.hk-line { font-size: 11px; color: var(--muted-2); }
+.hk-penlist { display: flex; flex-direction: column; gap: 2px; }
+.hk-penrow { font-size: 10px; color: var(--warn); line-height: 1.25; }
+.hk-lastplay { font-size: 11px; color: var(--muted); font-style: italic; line-height: 1.3; }
+/* Rink shot plot — NHL analog to the strike-zone plot */
+.rink {
+  display: block; margin-top: 2px; max-width: 320px;
+  background: var(--card-head); border-radius: 5px;
+}
+.rink .rink-board { fill: none; stroke: var(--muted-2); stroke-width: 0.8; }
+.rink .rink-blue { stroke: var(--accent); stroke-width: 0.7; opacity: .5; }
+.rink .rink-center { stroke: var(--neg); stroke-width: 0.8; opacity: .55; }
+.rink .rink-goal { stroke: var(--neg); stroke-width: 0.6; opacity: .35; }
+.rink .rink-faceoff { fill: none; stroke: var(--neg); stroke-width: 0.6; opacity: .35; }
+.rink .rink-dot { stroke: var(--card); stroke-width: 0.5; }
+.rink .rink-dot.goal { fill: var(--neg); }
+.rink .rink-dot.shot { fill: var(--accent); }
+.rink .rink-dot.miss { fill: var(--muted-2); opacity: .6; }
 .game-card-head .game-stats {
   display: flex; gap: 14px; flex-wrap: wrap;
 }

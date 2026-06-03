@@ -376,6 +376,18 @@ async function fetchNeededBoxscores() {
       need.set(`${prop.sport}:${eventId}`, { sport: prop.sport, eventId });
     }
   }
+  // NHL game cards need the /summary even when we hold only game-level legs
+  // (no player props): the goalie line, penalty/power-play stats, and rink
+  // shot plot all come from the boxscore + play-by-play.
+  for (const p of state.positions) {
+    for (const leg of p.legs) {
+      const gl = parseGameLevelLeg(leg.ticker);
+      if (!gl || gl.sport !== "nhl") continue;
+      const ev = findEspnEventForGameKey(legGameGroupKey(leg.ticker));
+      const eventId = String(ev?.id || "");
+      if (eventId) need.set(`nhl:${eventId}`, { sport: "nhl", eventId });
+    }
+  }
   await Promise.all([...need.values()].map(async ({ sport, eventId }) => {
     try {
       const r = await api(`/api/boxscore?sport=${sport}&eventId=${eventId}`);
@@ -1782,6 +1794,33 @@ function liveStateFor(ev, sport) {
       home: ph?.shortName || ph?.displayName || "",
     };
   }
+  // NHL probable starting goalies (pregame) — the hockey analog to probable
+  // pitchers; anchors any goalie/save props.
+  let probableGoalies = null;
+  if (sport === "nhl" && state === "pre") {
+    const gOf = (c) => {
+      const pr = (c?.probables || []).find((x) => x.name === "probableStartingGoalie") || (c?.probables || [])[0];
+      const a = pr?.athlete;
+      return a ? {
+        name: a.shortName || a.displayName || "",
+        confirmed: (pr?.status?.type === "confirmed"),
+      } : null;
+    };
+    const ga = gOf(away), gh = gOf(home);
+    if (ga || gh) probableGoalies = { away: ga, home: gh };
+  }
+  // NHL live situation: a minimal seed from the scoreboard (last play + abbrs);
+  // the card render enriches it from the /summary with goalie lines, penalty /
+  // power-play stats, and shot coordinates for the rink plot.
+  let hockey = null;
+  if (sport === "nhl" && (state === "in" || state === "post")) {
+    // Live or final: the summary-derived goalie lines, penalty stats, and shot
+    // plot are worth showing both in-game and for post-game review.
+    hockey = {
+      lastPlay: comp?.situation?.lastPlay?.text || "",
+      awayAbbr, homeAbbr,
+    };
+  }
   return {
     state, periodLabel,
     away: {
@@ -1799,6 +1838,8 @@ function liveStateFor(ev, sport) {
     firstInningRuns,
     baseball,
     probables,
+    probableGoalies,
+    hockey,
     raw: ev,
   };
 }
@@ -1857,6 +1898,66 @@ function bbSituationHtml(bb) {
       ${strikeZoneSvg(bb.abPitches)}
       </div>
       ${bb.lastPlay ? `<div class="bb-lastplay">${escapeHtml(bb.lastPlay)}${(bb.lastPitchMph || bb.lastPitchType) ? ` <span class="bb-pitch-detail">${bb.lastPitchMph ? `${bb.lastPitchMph} mph` : ""}${bb.lastPitchMph && bb.lastPitchType ? " · " : ""}${bb.lastPitchType ? escapeHtml(bb.lastPitchType) : ""}</span>` : ""}</div>` : ""}
+    </div>`;
+}
+
+// Rink shot plot — the NHL analog to the strike-zone plot. ESPN hockey play
+// coordinates are ~x∈[-100,100] (goal-to-goal long axis) and y∈[-42.5,42.5]
+// (width). We draw a horizontal rink (boards, blue lines, center red line, goal
+// lines, center faceoff) and plot each shot: goal = red (larger), shot-on-goal
+// = blue, missed = grey.
+function rinkShotPlot(shots) {
+  if (!shots || !shots.length) return "";
+  const W = 120, H = 51, R = 2.1;
+  const sx = (x) => Math.max(R, Math.min(W - R, ((x + 100) / 200) * W));
+  const sy = (y) => Math.max(R, Math.min(H - R, ((y + 42.5) / 85) * H));
+  const dots = shots.map((s) =>
+    `<circle class="rink-dot ${s.cls}" cx="${sx(s.x).toFixed(1)}" cy="${sy(s.y).toFixed(1)}" r="${(s.cls === "goal" ? R * 1.7 : R).toFixed(1)}"><title>${s.cls}</title></circle>`
+  ).join("");
+  const cx = W / 2;
+  return `
+    <svg class="rink" viewBox="0 0 ${W} ${H}" width="100%" aria-label="shot locations this game">
+      <rect class="rink-board" x="0.6" y="0.6" width="${W - 1.2}" height="${H - 1.2}" rx="${(H * 0.18).toFixed(1)}"/>
+      <line class="rink-blue" x1="${sx(-25).toFixed(1)}" y1="0" x2="${sx(-25).toFixed(1)}" y2="${H}"/>
+      <line class="rink-blue" x1="${sx(25).toFixed(1)}" y1="0" x2="${sx(25).toFixed(1)}" y2="${H}"/>
+      <line class="rink-center" x1="${cx}" y1="0" x2="${cx}" y2="${H}"/>
+      <line class="rink-goal" x1="${sx(-89).toFixed(1)}" y1="0" x2="${sx(-89).toFixed(1)}" y2="${H}"/>
+      <line class="rink-goal" x1="${sx(89).toFixed(1)}" y1="0" x2="${sx(89).toFixed(1)}" y2="${H}"/>
+      <circle class="rink-faceoff" cx="${cx}" cy="${(H / 2).toFixed(1)}" r="${(H * 0.16).toFixed(1)}"/>
+      ${dots}
+    </svg>`;
+}
+
+// Compact live-hockey widget: both goalies' live lines (saves / SV% / GA),
+// power-play + penalty info per team, recent penalties, last play, and a rink
+// shot plot of every shot/goal/miss. NHL in-progress only. Mirrors
+// bbSituationHtml's role for baseball.
+function hockeySituationHtml(hk) {
+  if (!hk) return "";
+  const g = hk.goalies || {};
+  const goalieLine = (lbl, gl) => gl
+    ? `<span class="hk-goalie"><span class="hk-role">G ${escapeHtml(lbl)}</span>${escapeHtml(gl.name)} <span class="hk-line">${gl.saves ?? "?"}/${gl.shotsAgainst ?? "?"} sv${gl.savePct ? ` · ${escapeHtml(String(gl.savePct))}` : ""}${gl.goalsAgainst != null ? ` · ${gl.goalsAgainst} GA` : ""}</span></span>`
+    : "";
+  const ts = hk.teamStats || {};
+  const ppLine = (lbl, m) => {
+    if (!m) return "";
+    const pp = (m.powerPlayGoals != null && m.powerPlayOpportunities != null) ? `PP ${m.powerPlayGoals}/${m.powerPlayOpportunities}` : "";
+    const pen = m.penalties != null ? `${m.penalties} pen` : "";
+    const pim = m.penaltyMinutes != null ? `${m.penaltyMinutes} PIM` : "";
+    const parts = [pp, pen, pim].filter(Boolean).join(" · ");
+    return parts ? `<span class="hk-pen"><span class="hk-role">${escapeHtml(lbl)}</span>${parts}</span>` : "";
+  };
+  const pensRecent = (hk.penalties || []).slice(-2).map((p) =>
+    `<div class="hk-penrow">⚑ P${p.period ?? "?"} ${escapeHtml(p.clock || "")} ${escapeHtml((p.text || "").slice(0, 60))}</div>`).join("");
+  const goalieHtml = (g.away || g.home) ? `<div class="hk-goalies">${goalieLine(hk.awayAbbr, g.away)}${goalieLine(hk.homeAbbr, g.home)}</div>` : "";
+  const penHtml = (ts.away || ts.home) ? `<div class="hk-pens">${ppLine(hk.awayAbbr, ts.away)}${ppLine(hk.homeAbbr, ts.home)}</div>` : "";
+  return `
+    <div class="hk-situation">
+      ${goalieHtml}
+      ${penHtml}
+      ${pensRecent ? `<div class="hk-penlist">${pensRecent}</div>` : ""}
+      ${hk.lastPlay ? `<div class="hk-lastplay">${escapeHtml(hk.lastPlay)}</div>` : ""}
+      ${rinkShotPlot(hk.shots)}
     </div>`;
 }
 
@@ -2452,12 +2553,85 @@ function renderGameCards() {
       }
     }
 
+    // Enrich the NHL live situation from the /summary: each goalie's live line
+    // (saves / SV% / GA), team penalty + power-play stats, recent penalties, and
+    // shot coordinates for the rink plot. Mirrors the MLB block above.
+    if (live && live.hockey) {
+      const summary = state.boxscores[`${g.sport}:${live.raw?.id}`];
+      const box = summary && summary.boxscore;
+      if (box) {
+        // The goalie with the most ice time on each team = the one who's played.
+        const toiSec = (s) => { const [m, ss] = String(s || "0:00").split(":").map(Number); return (m || 0) * 60 + (ss || 0); };
+        const goalieFor = (teamAbbr) => {
+          for (const tp of box.players || []) {
+            const ab = normAbbrForKalshi((tp.team?.abbreviation || "").toUpperCase(), "nhl");
+            if (ab !== teamAbbr) continue;
+            const grp = (tp.statistics || []).find((s) => s.name === "goalies");
+            if (!grp || !(grp.athletes || []).length) return null;
+            const keys = grp.keys || [];
+            const idx = (k) => keys.indexOf(k);
+            let best = null, bestToi = -1;
+            for (const ath of grp.athletes) {
+              const t = toiSec(ath.stats?.[idx("timeOnIce")]);
+              if (t > bestToi) { bestToi = t; best = ath; }
+            }
+            if (!best) return null;
+            const st = (k) => (idx(k) >= 0 ? best.stats?.[idx(k)] : null);
+            return {
+              name: best.athlete?.shortName || best.athlete?.displayName || "",
+              saves: st("saves"), shotsAgainst: st("shotsAgainst"),
+              savePct: st("savePct"), goalsAgainst: st("goalsAgainst"), toi: st("timeOnIce"),
+            };
+          }
+          return null;
+        };
+        const teamStat = (teamAbbr) => {
+          for (const t of box.teams || []) {
+            const ab = normAbbrForKalshi((t.team?.abbreviation || "").toUpperCase(), "nhl");
+            if (ab !== teamAbbr) continue;
+            const m = {};
+            for (const s of t.statistics || []) m[s.name] = s.displayValue;
+            return m;
+          }
+          return null;
+        };
+        live.hockey.goalies = { away: goalieFor(live.away.abbr), home: goalieFor(live.home.abbr) };
+        live.hockey.teamStats = { away: teamStat(live.away.abbr), home: teamStat(live.home.abbr) };
+      }
+      if (summary && Array.isArray(summary.plays)) {
+        const shots = [];
+        for (const pl of summary.plays) {
+          const c = pl.coordinate;
+          if (!c || typeof c.x !== "number") continue;
+          const t = (pl.type?.text || "").toLowerCase();
+          let cls = null;
+          if (pl.scoringPlay || t === "goal") cls = "goal";
+          else if (t === "shot") cls = "shot";          // on goal (saved)
+          else if (t === "missed" || t === "miss") cls = "miss";
+          if (!cls) continue;
+          shots.push({ x: c.x, y: c.y, cls });
+        }
+        live.hockey.shots = shots;
+        // Penalty plays are typed by infraction ("Hooking", "Cross checking"),
+        // not "Penalty" — the reliable marker is type.penaltyType / penaltyMinutes.
+        live.hockey.penalties = summary.plays
+          .filter((pl) => pl.type?.penaltyType || pl.type?.penaltyMinutes)
+          .slice(-4)
+          .map((pl) => ({ period: pl.period?.number, clock: pl.clock?.displayValue, text: pl.text || "" }));
+      }
+    }
+
     let scorePanel = "";
     if (live) {
       const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
       const probName = (n) => `<span class="${heldKPitchers.has(lastOf(n)) ? "sp-held" : ""}">${escapeHtml(n)}</span>`;
       const probablesHtml = live.probables
         ? `<div class="bb-probables"><span class="bb-role">SP</span>${probName(live.probables.away)}<span class="sp-vs">vs</span>${probName(live.probables.home)}</div>`
+        : "";
+      // NHL probable starting goalies (pregame), with a ✓ when confirmed.
+      const probGoalie = (gl) => gl ? `${escapeHtml(gl.name)}${gl.confirmed ? " <span class=\"sp-conf\" title=\"confirmed\">✓</span>" : ""}` : "TBD";
+      const goaliesHtml = live.probableGoalies
+        ? `<div class="bb-probables"><span class="bb-role">G</span>${probGoalie(live.probableGoalies.away)}<span class="sp-vs">vs</span>${probGoalie(live.probableGoalies.home)}</div>`
         : "";
       const awayLeading = live.state !== "pre" && live.away.score > live.home.score;
       const homeLeading = live.state !== "pre" && live.home.score > live.away.score;
@@ -2481,7 +2655,9 @@ function renderGameCards() {
           ${teamRow(live.away, awayLeading)}
           ${teamRow(live.home, homeLeading)}
           ${probablesHtml}
+          ${goaliesHtml}
           ${live.baseball ? bbSituationHtml(live.baseball) : ""}
+          ${live.hockey ? hockeySituationHtml(live.hockey) : ""}
         </div>`;
     }
 
