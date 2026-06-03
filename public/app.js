@@ -1911,9 +1911,16 @@ function rinkShotPlot(shots) {
   const W = 120, H = 51, R = 2.1;
   const sx = (x) => Math.max(R, Math.min(W - R, ((x + 100) / 200) * W));
   const sy = (y) => Math.max(R, Math.min(H - R, ((y + 42.5) / 85) * H));
-  const dots = shots.map((s) =>
-    `<circle class="rink-dot ${s.cls}" cx="${sx(s.x).toFixed(1)}" cy="${sy(s.y).toFixed(1)}" r="${(s.cls === "goal" ? R * 1.7 : R).toFixed(1)}"><title>${s.cls}</title></circle>`
-  ).join("");
+  const dots = shots.map((s) => {
+    const cx = sx(s.x), cy = sy(s.y);
+    // A goal shows the scoring team's logo at the shot location, sized to match
+    // the other dots; falls back to a coloured dot if the logo is unavailable.
+    if (s.cls === "goal" && s.logo) {
+      const d = (R * 2).toFixed(1);
+      return `<image class="rink-goal-logo" href="${s.logo}" x="${(cx - R).toFixed(1)}" y="${(cy - R).toFixed(1)}" width="${d}" height="${d}"><title>goal</title></image>`;
+    }
+    return `<circle class="rink-dot ${s.cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R.toFixed(1)}"><title>${s.cls}</title></circle>`;
+  }).join("");
   const cx = W / 2;
   return `
     <svg class="rink" viewBox="0 0 ${W} ${H}" width="100%" aria-label="shot locations this game">
@@ -1936,7 +1943,7 @@ function hockeySituationHtml(hk) {
   if (!hk) return "";
   const g = hk.goalies || {};
   const goalieLine = (lbl, gl) => gl
-    ? `<span class="hk-goalie"><span class="hk-role">G ${escapeHtml(lbl)}</span>${escapeHtml(gl.name)} <span class="hk-line">${gl.saves ?? "?"}/${gl.shotsAgainst ?? "?"} sv${gl.savePct ? ` · ${escapeHtml(String(gl.savePct))}` : ""}${gl.goalsAgainst != null ? ` · ${gl.goalsAgainst} GA` : ""}</span></span>`
+    ? `<span class="hk-goalie"><span class="hk-role">${escapeHtml(lbl)}</span>${escapeHtml(gl.name)} <span class="hk-line">${gl.saves ?? "?"}/${gl.shotsAgainst ?? "?"} sv${gl.savePct ? ` · ${escapeHtml(String(gl.savePct))}` : ""}${gl.goalsAgainst != null ? ` · ${gl.goalsAgainst} GA` : ""}</span></span>`
     : "";
   const ts = hk.teamStats || {};
   const ppLine = (lbl, m) => {
@@ -2599,6 +2606,13 @@ function renderGameCards() {
         live.hockey.teamStats = { away: teamStat(live.away.abbr), home: teamStat(live.home.abbr) };
       }
       if (summary && Array.isArray(summary.plays)) {
+        // Map ESPN team id -> our abbr so a goal can show the scoring team's logo
+        // (play.team is just {id}). Built from the scoreboard competitors.
+        const abbrById = {};
+        for (const c of (live.raw?.competitions?.[0]?.competitors || [])) {
+          const id = String(c?.team?.id || "");
+          if (id) abbrById[id] = normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase(), "nhl");
+        }
         const shots = [];
         for (const pl of summary.plays) {
           const c = pl.coordinate;
@@ -2609,7 +2623,12 @@ function renderGameCards() {
           else if (t === "shot") cls = "shot";          // on goal (saved)
           else if (t === "missed" || t === "miss") cls = "miss";
           if (!cls) continue;
-          shots.push({ x: c.x, y: c.y, cls });
+          const shot = { x: c.x, y: c.y, cls };
+          if (cls === "goal") {
+            const ab = abbrById[String(pl.team?.id || "")];
+            if (ab) shot.logo = teamLogoUrl(g.sportLogoKey, ab, { league: g.league });
+          }
+          shots.push(shot);
         }
         live.hockey.shots = shots;
         // Penalty plays are typed by infraction ("Hooking", "Cross checking"),
