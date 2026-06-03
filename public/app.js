@@ -376,16 +376,16 @@ async function fetchNeededBoxscores() {
       need.set(`${prop.sport}:${eventId}`, { sport: prop.sport, eventId });
     }
   }
-  // NHL game cards need the /summary even when we hold only game-level legs
-  // (no player props): the goalie line, penalty/power-play stats, and rink
-  // shot plot all come from the boxscore + play-by-play.
+  // NHL & NBA game cards need the /summary even when we hold only game-level
+  // legs (no player props): the goalie/shooting lines, penalty/team stats, and
+  // rink/court shot plot all come from the boxscore + play-by-play.
   for (const p of state.positions) {
     for (const leg of p.legs) {
       const gl = parseGameLevelLeg(leg.ticker);
-      if (!gl || gl.sport !== "nhl") continue;
+      if (!gl || (gl.sport !== "nhl" && gl.sport !== "nba")) continue;
       const ev = findEspnEventForGameKey(legGameGroupKey(leg.ticker));
       const eventId = String(ev?.id || "");
-      if (eventId) need.set(`nhl:${eventId}`, { sport: "nhl", eventId });
+      if (eventId) need.set(`${gl.sport}:${eventId}`, { sport: gl.sport, eventId });
     }
   }
   await Promise.all([...need.values()].map(async ({ sport, eventId }) => {
@@ -1821,6 +1821,13 @@ function liveStateFor(ev, sport) {
       awayAbbr, homeAbbr,
     };
   }
+  // NBA live situation: a minimal seed (abbrs only — the NBA scoreboard carries
+  // no `situation`, so last play + everything else is enriched from the
+  // /summary in the card render). The hoops analog to the `hockey` seed.
+  let basketball = null;
+  if (sport === "nba" && (state === "in" || state === "post")) {
+    basketball = { awayAbbr, homeAbbr };
+  }
   return {
     state, periodLabel,
     away: {
@@ -1840,6 +1847,7 @@ function liveStateFor(ev, sport) {
     probables,
     probableGoalies,
     hockey,
+    basketball,
     raw: ev,
   };
 }
@@ -1973,6 +1981,88 @@ function hockeySituationHtml(hk) {
       ${pensRecent ? `<div class="hk-penlist">${pensRecent}</div>` : ""}
       ${hk.lastPlay ? `<div class="hk-lastplay">${escapeHtml(hk.lastPlay)}</div>` : ""}
       ${rinkShotPlot(hk.shots)}
+    </div>`;
+}
+
+// Half-court shot chart — the NBA analog to the rink shot plot. ESPN basketball
+// play coordinates put the origin at the hoop: x∈[0,50] is court WIDTH (center
+// 25), y is feet from the hoop toward half-court (free throws + tip-offs carry a
+// sentinel ~-2.1e9 and are filtered upstream). Both teams' shots are normalised
+// onto one half, so we colour by team (away = accent, home = neg) and fill makes
+// vs leave misses hollow. We draw the key, free-throw circle, restricted-area
+// arc and three-point line so locations read against the floor.
+function courtShotPlot(shots) {
+  if (!shots || !shots.length) return "";
+  const R = 0.7;                              // dot radius (feet)
+  // feet -> svg: 1ft = 1 unit, x padded 1ft each side, y flipped (hoop at
+  // bottom). viewBox 0..52 wide, 0..47 tall; baseline ~yf=-4, top ~yf=42.
+  const px = (xf) => Math.max(R, Math.min(52 - R, xf + 1));
+  const py = (yf) => Math.max(R, Math.min(47 - R, 42 - yf));
+  const dots = shots.map((s) => {
+    const cls = `nba-shot ${s.team || "away"} ${s.make ? "make" : "miss"}${s.three ? " three" : ""}`;
+    return `<circle class="${cls}" cx="${px(s.x).toFixed(1)}" cy="${py(s.y).toFixed(1)}" r="${R}"><title>${s.make ? "make" : "miss"}</title></circle>`;
+  }).join("");
+  // Court furniture, all in feet through px/py. Hoop (25,0); backboard 1.25ft
+  // behind; key 16ft wide (x17..33) baseline→FT line (yf 13.75); FT circle r6;
+  // restricted arc r4; 3pt corners at x3/x47 up to the arc break (r23.75 from
+  // hoop → yf≈8.95), then the arc over the top.
+  const hx = px(25), hy = py(0);
+  const ftY = py(13.75), baseY = py(-4);
+  const arcL = `${px(3).toFixed(1)} ${py(8.95).toFixed(1)}`;
+  const arcR = `${px(47).toFixed(1)} ${py(8.95).toFixed(1)}`;
+  return `
+    <svg class="court" viewBox="0 0 52 47" width="100%" aria-label="shot locations this game">
+      <rect class="court-floor" x="1" y="${py(38).toFixed(1)}" width="50" height="${(baseY - py(38)).toFixed(1)}"/>
+      <line class="court-base" x1="1" y1="${baseY.toFixed(1)}" x2="51" y2="${baseY.toFixed(1)}"/>
+      <rect class="court-key" x="${px(17).toFixed(1)}" y="${ftY.toFixed(1)}" width="16" height="${(baseY - ftY).toFixed(1)}"/>
+      <circle class="court-line" cx="${hx}" cy="${ftY.toFixed(1)}" r="6"/>
+      <path class="court-line" d="M ${px(3).toFixed(1)} ${baseY.toFixed(1)} L ${arcL} A 23.75 23.75 0 0 1 ${arcR} L ${px(47).toFixed(1)} ${baseY.toFixed(1)}"/>
+      <path class="court-line" d="M ${px(21).toFixed(1)} ${hy.toFixed(1)} A 4 4 0 0 1 ${px(29).toFixed(1)} ${hy.toFixed(1)}"/>
+      <circle class="court-rim" cx="${hx}" cy="${hy.toFixed(1)}" r="0.75"/>
+      <line class="court-line" x1="${px(22).toFixed(1)}" y1="${py(-1.25).toFixed(1)}" x2="${px(28).toFixed(1)}" y2="${py(-1.25).toFixed(1)}"/>
+      ${dots}
+    </svg>`;
+}
+
+// Compact live-basketball widget: each team's shooting line (FG / 3PT / REB /
+// AST / TO), the scoring/rebound/assist leaders, players in foul trouble, the
+// last play, and a half-court shot chart. NBA in-progress or final. Mirrors
+// hockeySituationHtml's role for hockey.
+function nbaSituationHtml(bk) {
+  if (!bk) return "";
+  const ts = bk.teamStats || {};
+  const statLine = (lbl, m) => {
+    if (!m) return "";
+    const parts = [
+      m.fg ? `FG ${m.fg}${m.fgPct ? ` (${m.fgPct}%)` : ""}` : "",
+      m.tp ? `3PT ${m.tp}` : "",
+      m.reb != null ? `${m.reb} REB` : "",
+      m.ast != null ? `${m.ast} AST` : "",
+      m.to != null ? `${m.to} TO` : "",
+    ].filter(Boolean).join(" · ");
+    return parts ? `<span class="nba-team"><span class="nba-role">${escapeHtml(lbl)}</span>${parts}</span>` : "";
+  };
+  const ld = bk.leaders || {};
+  const leaderLine = (lbl, L) => {
+    if (!L) return "";
+    const bits = [
+      L.pts ? `${escapeHtml(L.pts)}` : "",
+      L.reb ? `${escapeHtml(L.reb)}` : "",
+      L.ast ? `${escapeHtml(L.ast)}` : "",
+    ].filter(Boolean).join(" · ");
+    return bits ? `<span class="nba-ldr"><span class="nba-role">${escapeHtml(lbl)}</span>${bits}</span>` : "";
+  };
+  const fouls = (bk.foulTrouble || []).map((p) =>
+    `<span class="nba-foul${p.held ? " held" : ""}">${escapeHtml(p.name)} <span class="nba-foul-n">${p.pf}PF</span></span>`).join("");
+  const tsHtml = (ts.away || ts.home) ? `<div class="nba-teams">${statLine(bk.awayAbbr, ts.away)}${statLine(bk.homeAbbr, ts.home)}</div>` : "";
+  const ldHtml = (ld.away || ld.home) ? `<div class="nba-ldrs">${leaderLine(bk.awayAbbr, ld.away)}${leaderLine(bk.homeAbbr, ld.home)}</div>` : "";
+  return `
+    <div class="nba-situation">
+      ${tsHtml}
+      ${ldHtml}
+      ${fouls ? `<div class="nba-fouls"><span class="nba-foul-lbl">⚠ foul trouble</span>${fouls}</div>` : ""}
+      ${bk.lastPlay ? `<div class="nba-lastplay">${escapeHtml(bk.lastPlay)}</div>` : ""}
+      ${courtShotPlot(bk.shots)}
     </div>`;
 }
 
@@ -2648,6 +2738,102 @@ function renderGameCards() {
       }
     }
 
+    // Enrich the NBA live situation from the /summary: each team's shooting line
+    // (FG / 3PT / REB / AST / TO), the scoring leaders, players in foul trouble,
+    // the last play, and shot coordinates for the court plot. Mirrors the NHL
+    // block above. The NBA scoreboard has no `situation`, so EVERYTHING here
+    // comes from the summary.
+    if (live && live.basketball) {
+      const summary = state.boxscores[`${g.sport}:${live.raw?.id}`];
+      const box = summary && summary.boxscore;
+      // Last names of players whose props we hold on THIS game — used to bold a
+      // foul-trouble name we have exposure on (the hoops analog to heldKPitchers).
+      const heldProps = new Set();
+      for (const r of (g.legs || [])) {
+        const pp = parsePlayerProp(r.ticker);
+        if (pp && pp.lastName) heldProps.add(pp.lastName.toUpperCase());
+      }
+      if (box) {
+        const teamStat = (teamAbbr) => {
+          for (const t of box.teams || []) {
+            const ab = normAbbrForKalshi((t.team?.abbreviation || "").toUpperCase(), "nba");
+            if (ab !== teamAbbr) continue;
+            const raw = {};
+            for (const s of t.statistics || []) raw[s.name] = s.displayValue;
+            return {
+              fg: raw["fieldGoalsMade-fieldGoalsAttempted"],
+              fgPct: raw.fieldGoalPct,
+              tp: raw["threePointFieldGoalsMade-threePointFieldGoalsAttempted"],
+              reb: raw.totalRebounds, ast: raw.assists, to: raw.totalTurnovers ?? raw.turnovers,
+            };
+          }
+          return null;
+        };
+        live.basketball.teamStats = { away: teamStat(live.away.abbr), home: teamStat(live.home.abbr) };
+        // Foul trouble: anyone with 4+ personal fouls who has played. Bold if we
+        // hold one of their props.
+        const fouls = [];
+        for (const tp of box.players || []) {
+          const grp = (tp.statistics || [])[0];
+          if (!grp || !(grp.athletes || []).length) continue;
+          const keys = grp.keys || [];
+          const pfI = keys.indexOf("fouls"), minI = keys.indexOf("minutes");
+          if (pfI < 0) continue;
+          for (const ath of grp.athletes) {
+            const pf = parseInt(ath.stats?.[pfI] ?? "", 10);
+            const min = parseInt(ath.stats?.[minI] ?? "", 10);
+            if (!Number.isFinite(pf) || pf < 4 || !(min > 0)) continue;
+            const name = ath.athlete?.shortName || ath.athlete?.displayName || "";
+            const last = (name.split(/\s+/).pop() || "").toUpperCase();
+            fouls.push({ name, pf, held: heldProps.has(last) });
+          }
+        }
+        live.basketball.foulTrouble = fouls.sort((a, b) => b.pf - a.pf).slice(0, 6);
+      }
+      // Scoring / rebound / assist leaders per team.
+      if (summary && Array.isArray(summary.leaders)) {
+        const fmt = (L, key, sfx) => {
+          const cat = (L.leaders || []).find((x) => x.name === key);
+          const top = cat?.leaders?.[0];
+          return top ? `${top.athlete?.shortName || ""} ${top.displayValue}${sfx}` : "";
+        };
+        const leadersFor = (teamAbbr) => {
+          for (const L of summary.leaders) {
+            const ab = normAbbrForKalshi((L.team?.abbreviation || "").toUpperCase(), "nba");
+            if (ab !== teamAbbr) continue;
+            return { pts: fmt(L, "points", "p"), reb: fmt(L, "rebounds", "r"), ast: fmt(L, "assists", "a") };
+          }
+          return null;
+        };
+        live.basketball.leaders = { away: leadersFor(live.away.abbr), home: leadersFor(live.home.abbr) };
+      }
+      if (summary && Array.isArray(summary.plays) && summary.plays.length) {
+        // Map ESPN team id -> our abbr so a shot can be coloured by team.
+        const sideById = {};
+        for (const c of (live.raw?.competitions?.[0]?.competitors || [])) {
+          const id = String(c?.team?.id || "");
+          if (!id) continue;
+          const ab = normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase(), "nba");
+          sideById[id] = ab === live.away.abbr ? "away" : "home";
+        }
+        const shots = [];
+        for (const pl of summary.plays) {
+          if (!pl.shootingPlay) continue;
+          const c = pl.coordinate;
+          // Free throws / tip-offs carry a sentinel coordinate (~-2.1e9); skip.
+          if (!c || typeof c.x !== "number" || Math.abs(c.x) > 1000) continue;
+          shots.push({
+            x: c.x, y: c.y,
+            make: !!pl.scoringPlay,
+            three: pl.pointsAttempted === 3,
+            team: sideById[String(pl.team?.id || "")] || "away",
+          });
+        }
+        live.basketball.shots = shots;
+        live.basketball.lastPlay = summary.plays[summary.plays.length - 1]?.text || "";
+      }
+    }
+
     let scorePanel = "";
     if (live) {
       const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
@@ -2685,6 +2871,7 @@ function renderGameCards() {
           ${goaliesHtml}
           ${live.baseball ? bbSituationHtml(live.baseball) : ""}
           ${live.hockey ? hockeySituationHtml(live.hockey) : ""}
+          ${live.basketball ? nbaSituationHtml(live.basketball) : ""}
         </div>`;
     }
 

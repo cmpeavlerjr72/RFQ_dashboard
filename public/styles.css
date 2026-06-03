@@ -540,6 +540,47 @@ h2 {
 .rink .rink-dot.goal { fill: var(--neg); }
 .rink .rink-dot.shot { fill: var(--accent); }
 .rink .rink-dot.miss { fill: var(--muted-2); opacity: .6; }
+
+/* ---- live basketball situation: shooting line / leaders / fouls / court ---- */
+.nba-situation {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.nba-teams, .nba-ldrs { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; }
+.nba-team, .nba-ldr { display: inline-flex; align-items: baseline; gap: 5px; color: var(--fg); white-space: nowrap; }
+.nba-ldr { color: var(--muted); }
+.nba-role {
+  font-size: 9px; font-weight: 700; letter-spacing: .04em;
+  color: var(--accent); background: var(--accent-bg);
+  padding: 1px 5px; border-radius: 3px;
+}
+.nba-fouls { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: 11px; }
+.nba-foul-lbl {
+  font-size: 10px; font-weight: 700; color: var(--warn);
+  background: var(--warn-bg); padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+}
+.nba-foul { color: var(--muted); white-space: nowrap; }
+.nba-foul.held { color: var(--fg); font-weight: 700; }
+.nba-foul-n { color: var(--warn); font-weight: 600; }
+.nba-lastplay { font-size: 11px; color: var(--muted); font-style: italic; line-height: 1.3; }
+/* Half-court shot chart — NBA analog to the rink shot plot */
+.court {
+  display: block; margin-top: 2px; max-width: 230px;
+  background: var(--card-head); border-radius: 5px;
+}
+.court .court-floor { fill: none; }
+.court .court-base { stroke: var(--muted-2); stroke-width: 0.7; }
+.court .court-key { fill: none; stroke: var(--muted-2); stroke-width: 0.6; opacity: .7; }
+.court .court-line { fill: none; stroke: var(--muted-2); stroke-width: 0.6; opacity: .55; }
+.court .court-rim { fill: none; stroke: var(--neg); stroke-width: 0.7; opacity: .8; }
+.court .nba-shot { stroke-width: 0.4; }
+.court .nba-shot.away { stroke: var(--accent); }
+.court .nba-shot.home { stroke: var(--neg); }
+.court .nba-shot.make.away { fill: var(--accent); }
+.court .nba-shot.make.home { fill: var(--neg); }
+.court .nba-shot.miss { fill: none; opacity: .75; }
+.court .nba-shot.three { stroke-width: 0.7; }
 .game-card-head .game-stats {
   display: flex; gap: 14px; flex-wrap: wrap;
 }
@@ -1222,4 +1263,4 @@ main *:not(.game-card-body):not(.game-card-body *) { justify-content: center !im
 main .game-card-body { text-align: left; }
 /* Block-level / max-width widgets centre via auto margins (justify-content only
    centres flex/grid main-axis; these sit as block items in column containers). */
-main .rink, main .pz { margin-left: auto; margin-right: auto; }
+main .rink, main .pz, main .court { margin-left: auto; margin-right: auto; }
