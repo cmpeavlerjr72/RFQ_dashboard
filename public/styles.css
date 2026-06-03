@@ -533,6 +533,8 @@ h2 {
 .rink .rink-blue { stroke: var(--accent); stroke-width: 0.7; opacity: .5; }
 .rink .rink-center { stroke: var(--neg); stroke-width: 0.8; opacity: .55; }
 .rink .rink-goal { stroke: var(--neg); stroke-width: 0.6; opacity: .35; }
+.rink .rink-crease { fill: var(--accent); opacity: .18; }
+.rink .rink-net { fill: var(--neg); opacity: .22; stroke: var(--neg); stroke-width: 0.4; }
 .rink .rink-faceoff { fill: none; stroke: var(--neg); stroke-width: 0.6; opacity: .35; }
 .rink .rink-dot { stroke: var(--card); stroke-width: 0.5; }
 .rink .rink-dot.goal { fill: var(--neg); }

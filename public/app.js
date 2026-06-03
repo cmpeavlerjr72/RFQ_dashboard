@@ -1908,29 +1908,37 @@ function bbSituationHtml(bb) {
 // = blue, missed = grey.
 function rinkShotPlot(shots) {
   if (!shots || !shots.length) return "";
-  const W = 120, H = 51, R = 2.1;
+  const W = 120, H = 51, R = 2.1, GLD = 9;   // R = shot/miss dot radius; GLD = goal-logo diameter
   const sx = (x) => Math.max(R, Math.min(W - R, ((x + 100) / 200) * W));
   const sy = (y) => Math.max(R, Math.min(H - R, ((y + 42.5) / 85) * H));
   const dots = shots.map((s) => {
     const cx = sx(s.x), cy = sy(s.y);
-    // A goal shows the scoring team's logo at the shot location, sized to match
-    // the other dots; falls back to a coloured dot if the logo is unavailable.
+    // A goal shows the scoring team's logo at the shot location; falls back to a
+    // coloured dot if the logo is unavailable.
     if (s.cls === "goal" && s.logo) {
-      const d = (R * 2).toFixed(1);
-      return `<image class="rink-goal-logo" href="${s.logo}" x="${(cx - R).toFixed(1)}" y="${(cy - R).toFixed(1)}" width="${d}" height="${d}"><title>goal</title></image>`;
+      return `<image class="rink-goal-logo" href="${s.logo}" x="${(cx - GLD / 2).toFixed(1)}" y="${(cy - GLD / 2).toFixed(1)}" width="${GLD}" height="${GLD}"><title>goal</title></image>`;
     }
     return `<circle class="rink-dot ${s.cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${R.toFixed(1)}"><title>${s.cls}</title></circle>`;
   }).join("");
-  const cx = W / 2;
+  const cx = W / 2, midY = H / 2;
+  const gxL = sx(-89), gxR = sx(89), creaseR = 3.6, goalH = 1.8, netD = 2.4;
+  // Goal nets (rectangles just behind each goal line) + creases (semicircles in
+  // front of each net) so shot locations read relative to where the goals are.
+  const goals = `
+      <path class="rink-crease" d="M ${gxL.toFixed(1)} ${(midY - creaseR).toFixed(1)} A ${creaseR} ${creaseR} 0 0 1 ${gxL.toFixed(1)} ${(midY + creaseR).toFixed(1)} Z"/>
+      <path class="rink-crease" d="M ${gxR.toFixed(1)} ${(midY - creaseR).toFixed(1)} A ${creaseR} ${creaseR} 0 0 0 ${gxR.toFixed(1)} ${(midY + creaseR).toFixed(1)} Z"/>
+      <rect class="rink-net" x="${(gxL - netD).toFixed(1)}" y="${(midY - goalH).toFixed(1)}" width="${netD.toFixed(1)}" height="${(goalH * 2).toFixed(1)}"/>
+      <rect class="rink-net" x="${gxR.toFixed(1)}" y="${(midY - goalH).toFixed(1)}" width="${netD.toFixed(1)}" height="${(goalH * 2).toFixed(1)}"/>`;
   return `
     <svg class="rink" viewBox="0 0 ${W} ${H}" width="100%" aria-label="shot locations this game">
       <rect class="rink-board" x="0.6" y="0.6" width="${W - 1.2}" height="${H - 1.2}" rx="${(H * 0.18).toFixed(1)}"/>
       <line class="rink-blue" x1="${sx(-25).toFixed(1)}" y1="0" x2="${sx(-25).toFixed(1)}" y2="${H}"/>
       <line class="rink-blue" x1="${sx(25).toFixed(1)}" y1="0" x2="${sx(25).toFixed(1)}" y2="${H}"/>
       <line class="rink-center" x1="${cx}" y1="0" x2="${cx}" y2="${H}"/>
-      <line class="rink-goal" x1="${sx(-89).toFixed(1)}" y1="0" x2="${sx(-89).toFixed(1)}" y2="${H}"/>
-      <line class="rink-goal" x1="${sx(89).toFixed(1)}" y1="0" x2="${sx(89).toFixed(1)}" y2="${H}"/>
-      <circle class="rink-faceoff" cx="${cx}" cy="${(H / 2).toFixed(1)}" r="${(H * 0.16).toFixed(1)}"/>
+      <line class="rink-goal" x1="${gxL.toFixed(1)}" y1="0" x2="${gxL.toFixed(1)}" y2="${H}"/>
+      <line class="rink-goal" x1="${gxR.toFixed(1)}" y1="0" x2="${gxR.toFixed(1)}" y2="${H}"/>
+      ${goals}
+      <circle class="rink-faceoff" cx="${cx}" cy="${midY.toFixed(1)}" r="${(H * 0.16).toFixed(1)}"/>
       ${dots}
     </svg>`;
 }
