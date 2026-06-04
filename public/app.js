@@ -2616,15 +2616,22 @@ function computeRiskGrid(g, parlays, live) {
   const NT = 13;  // total columns (odd => centered on the line)
   const NM = 12;  // margin rows (EVEN => no margin-0 / "tie" row; ties don't occur)
   const sportTotalDefault = { nba: 222, wnba: 162, nhl: 6, mlb: 9 }[g.sport] || 220;
+  // Integer-scoring sports (runs/goals): each grid step is ONE run/goal — a ±3
+  // step is nonsense for a 9-run / 6-goal game. High-scoring sports (NBA/WNBA)
+  // keep the auto-sized larger step. Add other low-scoring sports here as needed.
+  const unitStep = g.sport === "mlb" || g.sport === "nhl";
   const tCenter = totalLines.length
     ? (Math.min(...totalLines) + Math.max(...totalLines)) / 2
     : (live && live.total != null ? live.total : sportTotalDefault);
   const tHalf = Math.max(15, (totalLines.length ? (Math.max(...totalLines) - Math.min(...totalLines)) / 2 : 0) + 12);
   const mHalf = Math.max(15, Math.max(...marginCuts.map((m) => Math.abs(m))) + 12);
-  const tStep = Math.max(1, Math.round((2 * tHalf) / (NT - 1)));
-  const mStep = Math.max(1, Math.round(mHalf / (NM / 2)));
+  const tStep = unitStep ? 1 : Math.max(1, Math.round((2 * tHalf) / (NT - 1)));
+  const mStep = unitStep ? 1 : Math.max(1, Math.round(mHalf / (NM / 2)));
   const thalf = (NT - 1) / 2;
-  const totals = Array.from({ length: NT }, (_, i) => Math.round(tCenter - thalf * tStep + i * tStep));
+  // A game total can never be negative (or zero) — clamp the lowest column to 1
+  // and shift the window up so every column stays a realistic total.
+  const tStart = Math.max(1, Math.round(tCenter - thalf * tStep));
+  const totals = Array.from({ length: NT }, (_, i) => tStart + i * tStep);
   // margins straddle 0 without including it: +6..+1, -1..-6 (× mStep)
   const margins = Array.from({ length: NM }, (_, i) => {
     const k = i < NM / 2 ? (NM / 2 - i) : (NM / 2 - 1 - i);
