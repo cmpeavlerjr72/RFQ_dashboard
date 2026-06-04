@@ -2613,18 +2613,23 @@ function computeRiskGrid(g, parlays, live) {
   }
   if (!haveGameLeg) return null;
 
-  const N = 13; // cells per axis (odd => margin 0 sits on the center row)
+  const NT = 13;  // total columns (odd => centered on the line)
+  const NM = 12;  // margin rows (EVEN => no margin-0 / "tie" row; ties don't occur)
   const sportTotalDefault = { nba: 222, wnba: 162, nhl: 6, mlb: 9 }[g.sport] || 220;
   const tCenter = totalLines.length
     ? (Math.min(...totalLines) + Math.max(...totalLines)) / 2
     : (live && live.total != null ? live.total : sportTotalDefault);
   const tHalf = Math.max(15, (totalLines.length ? (Math.max(...totalLines) - Math.min(...totalLines)) / 2 : 0) + 12);
   const mHalf = Math.max(15, Math.max(...marginCuts.map((m) => Math.abs(m))) + 12);
-  const tStep = Math.max(1, Math.round((2 * tHalf) / (N - 1)));
-  const mStep = Math.max(1, Math.round((2 * mHalf) / (N - 1)));
-  const half = (N - 1) / 2;
-  const totals = Array.from({ length: N }, (_, i) => Math.round(tCenter - half * tStep + i * tStep));
-  const margins = Array.from({ length: N }, (_, i) => (half - i) * mStep); // top = home blowout, 0 in center
+  const tStep = Math.max(1, Math.round((2 * tHalf) / (NT - 1)));
+  const mStep = Math.max(1, Math.round(mHalf / (NM / 2)));
+  const thalf = (NT - 1) / 2;
+  const totals = Array.from({ length: NT }, (_, i) => Math.round(tCenter - thalf * tStep + i * tStep));
+  // margins straddle 0 without including it: +6..+1, -1..-6 (× mStep)
+  const margins = Array.from({ length: NM }, (_, i) => {
+    const k = i < NM / 2 ? (NM / 2 - i) : (NM / 2 - 1 - i);
+    return k * mStep;
+  });
   const home = teams ? teams[1] : null, away = teams ? teams[0] : null;
 
   let maxAbs = 0;
@@ -2645,12 +2650,13 @@ function computeRiskGrid(g, parlays, live) {
 function renderRiskGridHtml(grid) {
   if (!grid || grid.maxAbs < 0.01) return "";
   const { margins, totals, cells, maxAbs, mark, teams } = grid;
-  const N = margins.length;
+  const NR = margins.length, NC = totals.length;
   const color = (pnl) => {
     const a = Math.min(1, Math.abs(pnl) / maxAbs);
     const alpha = (0.08 + a * 0.64).toFixed(2);
     return `rgba(${pnl >= 0 ? "21,128,61" : "190,18,60"},${alpha})`;
   };
+  const dollar = (v) => { const r = Math.round(v); return r > 0 ? "+" + r : "" + r; };
   // nearest cell to the live/final mark
   let markR = -1, markC = -1;
   if (mark) {
@@ -2660,31 +2666,32 @@ function renderRiskGridHtml(grid) {
   }
   const home = teams[1] || "HOME", away = teams[0] || "AWAY";
   let rows = "";
-  for (let r = 0; r < N; r++) {
+  for (let r = 0; r < NR; r++) {
     const mv = margins[r];
-    const ylab = mv === 0 ? "tie" : `${home} ${mv > 0 ? "+" : ""}${mv}`;
+    // winner-flip seam: the first away-win row (prev row was a home win)
+    const flip = (r > 0 && margins[r - 1] > 0 && mv < 0) ? " rg-flip" : "";
+    const ylab = `${home} ${mv > 0 ? "+" : ""}${mv}`;
     let cellsHtml = `<div class="rg-ylab" title="home margin ${mv}">${escapeHtml(ylab)}</div>`;
-    for (let c = 0; c < N; c++) {
+    for (let c = 0; c < NC; c++) {
       const pnl = cells[r][c];
       const isMark = (r === markR && c === markC);
-      const zero = mv === 0 ? " rg-zero" : "";
-      cellsHtml += `<div class="rg-cell${zero}${isMark ? " rg-mark" : ""}" style="background:${color(pnl)}" `
+      cellsHtml += `<div class="rg-cell${flip}${isMark ? " rg-mark" : ""}" style="background:${color(pnl)}" `
         + `title="${escapeHtml(home)} margin ${mv > 0 ? "+" : ""}${mv}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}">`
-        + `${isMark ? (mark.final ? "●" : "✕") : ""}</div>`;
+        + `${isMark ? (mark.final ? "●" : "✕") : dollar(pnl)}</div>`;
     }
     rows += `<div class="rg-row">${cellsHtml}</div>`;
   }
   let xlabs = `<div class="rg-corner"></div>`;
-  for (let c = 0; c < N; c++) xlabs += `<div class="rg-xlab">${c % 3 === 1 ? totals[c] : ""}</div>`;
+  for (let c = 0; c < NC; c++) xlabs += `<div class="rg-xlab">${c % 3 === 1 ? totals[c] : ""}</div>`;
   rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
   return `
     <div class="risk-grid">
-      <div class="rg-head">Risk surface — expected P&L · ${escapeHtml(away)}↔${escapeHtml(home)} margin (rows) × total (cols)</div>
-      <div class="rg-grid" style="--rg-n:${N}">${rows}</div>
+      <div class="rg-head">Risk surface — expected $ P&L · ${escapeHtml(away)}↔${escapeHtml(home)} margin (rows) × total (cols)</div>
+      <div class="rg-grid" style="--rg-n:${NC}">${rows}</div>
       <div class="rg-legend">
-        <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit
-        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "live now"}` : ""}
-        · row <b>tie</b> = winner flips · color ∝ $ (max ±$${maxAbs.toFixed(0)})
+        <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
+        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "right now"}` : ""}
+        · line = winner flips · max ±$${maxAbs.toFixed(0)}
       </div>
     </div>`;
 }
