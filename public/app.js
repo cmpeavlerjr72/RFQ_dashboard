@@ -39,6 +39,10 @@ const state = {
   positions: [],          // each = full parlay record
   fillsByParlay: {},
   scoreboards: {},        // sport:date -> ESPN scoreboard payload
+  // gameGroupKey -> projected FINAL total from the Kalshi total ladder (the
+  // strike closest to 50/50 right now). Null when the live ladder isn't priced
+  // (risk-grid then falls back to a pace-blend projection). Live games only.
+  proj50ByGame: {},
   boxscores: {},          // sport:eventId -> ESPN summary payload
   rosters: {},            // sport:teamId -> ESPN /teams/{id}/roster payload
   // Flat index keyed by "{sport}:{kalshi-abbr}:{LASTNAME}" -> {displayName,
@@ -302,7 +306,10 @@ async function refresh() {
     // For player props, pull the boxscore for each game we have a prop on,
     // plus the team roster (boxscore is empty pregame; roster gives us
     // headshots/jerseys/positions so the player cards render before tipoff).
-    await Promise.all([fetchNeededBoxscores(), fetchNeededRosters()]);
+    // Live total-ladder projections run alongside (needs scoreboards above to
+    // know which games are live; never blocks the other two if it fails).
+    await Promise.all([fetchNeededBoxscores(), fetchNeededRosters(),
+      fetchLiveTotalProjections().catch((e) => console.warn("total proj fetch failed", e))]);
 
     state.lastRefreshAt = new Date();
     setStatus(`updated ${state.lastRefreshAt.toLocaleTimeString()}`, "live");
@@ -2580,6 +2587,116 @@ function aggregateGameCards() {
 }
 
 // ── 2D risk surface (home-margin × total) for hedged games ─────────────────
+// The KX sport prefix a ticker starts with (e.g. "KXNHL" for KXNHLGAME-...).
+function kxSportPrefix(ticker) {
+  for (const p of Object.keys(SPORT_PREFIXES)) if (ticker.startsWith(p)) return p;
+  return null;
+}
+
+// "12:34" -> 12.567 (minutes, as a float). null if unparseable.
+function parseClockMin(displayClock) {
+  const m = String(displayClock || "").match(/(\d+):(\d{2})/);
+  return m ? parseInt(m[1], 10) + parseInt(m[2], 10) / 60 : null;
+}
+
+// Fraction of the game still to be played (1 pregame, 0 final), from ESPN
+// game state. Used to weight the pregame total when projecting the finish:
+// the further along, the less unplayed game remains to add scoring.
+function gameFracRemaining(live, sport) {
+  if (!live || live.state === "pre") return 1;
+  if (live.state === "post") return 0;
+  const st = live.raw?.status || {};
+  const period = st.period || 0;
+  const clock = st.displayClock || "";
+  if (sport === "mlb") {
+    const inning = period || 1;
+    const d = (st.type?.shortDetail || st.type?.description || "").toLowerCase();
+    // top in progress .25, between halves (mid) .5, bottom .75, inning done 1.0
+    let half = 0.25;
+    if (d.startsWith("mid")) half = 0.5;
+    else if (d.startsWith("bot")) half = 0.75;
+    else if (d.startsWith("end")) half = 1.0;
+    const elapsed = (inning - 1 + half) / 9;
+    return Math.max(0, Math.min(1, 1 - elapsed));
+  }
+  const reg = { nhl: { p: 3, len: 20 }, nba: { p: 4, len: 12 }, wnba: { p: 4, len: 10 } }[sport];
+  if (reg) {
+    if (period > reg.p) return 0.03;  // overtime: essentially over
+    const total = reg.p * reg.len;
+    const rem = parseClockMin(clock);
+    if (rem == null) return Math.max(0, Math.min(1, 1 - ((period - 0.5) * reg.len) / total));
+    const elapsedMin = (period - 1) * reg.len + (reg.len - rem);
+    return Math.max(0, Math.min(1, 1 - elapsedMin / total));
+  }
+  if (["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"].includes(sport)) {
+    const m = String(clock).match(/(\d+)/);  // ESPN soccer clock e.g. "67'"
+    return m ? Math.max(0, Math.min(1, 1 - parseInt(m[1], 10) / 90)) : 0.5;
+  }
+  return 0.5;  // unknown sport: neutral
+}
+
+// Market-implied projected total = the strike whose P(over) is closest to 50/50
+// right now, interpolated between the two strikes that bracket 0.5. P(over) is
+// the YES mid. Needs >=2 strikes with a real two-sided quote; null otherwise so
+// the caller falls back to the pace-blend. P(over) decreases as the line rises.
+function fiftyFiftyTotalFromLadder(markets) {
+  const pts = [];
+  for (const m of markets || []) {
+    const line = typeof m.floor_strike === "number" ? m.floor_strike : null;
+    if (line == null) continue;
+    // Kalshi populates the *_dollars strings here (the cent fields can be null);
+    // fall back to the cent fields just in case.
+    const yb = m.yes_bid_dollars != null ? dollarsToC(m.yes_bid_dollars)
+      : (typeof m.yes_bid === "number" ? m.yes_bid : null);
+    const ya = m.yes_ask_dollars != null ? dollarsToC(m.yes_ask_dollars)
+      : (typeof m.yes_ask === "number" ? m.yes_ask : null);
+    if (yb == null || ya == null || yb <= 0 || ya >= 100) continue;  // need a real two-sided quote
+    pts.push({ line, pOver: (yb + ya) / 200 });
+  }
+  if (pts.length < 2) return null;
+  pts.sort((a, b) => a.line - b.line);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    if (a.pOver >= 0.5 && b.pOver <= 0.5) {
+      const t = (a.pOver - 0.5) / ((a.pOver - b.pOver) || 1e-9);
+      return a.line + t * (b.line - a.line);
+    }
+  }
+  // No 0.5 crossing on the priced rungs: clamp to the ladder edge. If even the
+  // lowest line is already under-ish (pOver<0.5) the game projects below it;
+  // if even the highest is over-ish, above it.
+  return pts[0].pOver < 0.5 ? pts[0].line : pts[pts.length - 1].line;
+}
+
+// For each LIVE game we hold a game-level leg on, fetch its Kalshi total ladder
+// and store the 50/50 line -> state.proj50ByGame[gameKey]. Best-effort: a thin/
+// unpriced ladder leaves null (risk-grid falls back to the pace-blend).
+async function fetchLiveTotalProjections() {
+  state.proj50ByGame = {};
+  const targets = new Map();  // gameKey -> total event ticker
+  for (const p of state.positions) {
+    for (const leg of p.legs) {
+      const gl = parseGameLevelLeg(leg.ticker);
+      if (!gl) continue;                      // only game-level legs define a total event
+      const gk = legGameGroupKey(leg.ticker);
+      if (!gk || targets.has(gk)) continue;
+      const ev = findEspnEventForGameKey(gk);
+      const ls = ev ? liveStateFor(ev, gl.sport) : null;
+      if (!ls || ls.state !== "in") continue;  // projection only matters live
+      const prefix = kxSportPrefix(leg.ticker);
+      const seg = leg.ticker.split("-")[1];
+      if (prefix && seg) targets.set(gk, `${prefix}TOTAL-${seg}`);
+    }
+  }
+  await Promise.all([...targets.entries()].map(async ([gk, evt]) => {
+    try {
+      const resp = await api(`/api/kalshi/event-markets/${encodeURIComponent(evt)}`);
+      const k50 = fiftyFiftyTotalFromLadder(resp?.markets || []);
+      state.proj50ByGame[gk] = k50 != null && isFinite(k50) ? k50 : null;
+    } catch (e) { state.proj50ByGame[gk] = null; }
+  }));
+}
+
 // A heatmap of EXPECTED $ P&L across game outcomes: each cell is the book's
 // expected P&L if the game lands at that (home margin, combined total), with
 // player-prop / RFI / BTTS legs marginalized at their market-implied prob —
@@ -2647,9 +2764,23 @@ function computeRiskGrid(g, parlays, live) {
     return pnl;
   }));
 
+  // The ✕ marks where the game is HEADING, not where it is. Margin stays the
+  // live margin (who's winning now); the total is PROJECTED to the finish:
+  //   1. Kalshi 50/50 line (market-implied final total) when the ladder's priced
+  //   2. else pace-blend: current total + pregame total × fraction of game left
+  //      (trusts the line early, the actual score late). tCenter is our pregame
+  //      total estimate. Once final, just use the actual total.
   let mark = null;
   if (live && live.margin != null && live.total != null) {
-    mark = { margin: live.margin, total: live.total, final: !!live.final };
+    let total = live.total, projected = false;
+    if (!live.final) {
+      if (live.proj50 != null && isFinite(live.proj50)) {
+        total = live.proj50; projected = true;
+      } else if (live.fracRemaining != null) {
+        total = live.total + tCenter * live.fracRemaining; projected = true;
+      }
+    }
+    mark = { margin: live.margin, total, final: !!live.final, projected };
   }
   return { margins, totals, cells, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep };
 }
@@ -2682,8 +2813,13 @@ function renderRiskGridHtml(grid) {
     for (let c = 0; c < NC; c++) {
       const pnl = cells[r][c];
       const isMark = (r === markR && c === markC);
+      const base = `${home} margin ${mv > 0 ? "+" : ""}${mv}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
+      const title = isMark
+        ? (mark.final ? `FINAL — ${base}`
+          : `projected finish${mark.projected ? ` (total ~${mark.total.toFixed(1)})` : ""} — ${base}`)
+        : base;
       cellsHtml += `<div class="rg-cell${flip}${isMark ? " rg-mark" : ""}" style="background:${color(pnl)}" `
-        + `title="${escapeHtml(home)} margin ${mv > 0 ? "+" : ""}${mv}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}">`
+        + `title="${escapeHtml(title)}">`
         + `${isMark ? (mark.final ? "●" : "✕") : dollar(pnl)}</div>`;
     }
     rows += `<div class="rg-row">${cellsHtml}</div>`;
@@ -2697,7 +2833,7 @@ function renderRiskGridHtml(grid) {
       <div class="rg-grid" style="--rg-n:${NC}">${rows}</div>
       <div class="rg-legend">
         <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
-        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "right now"}` : ""}
+        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : `projected finish${mark.projected ? ` · total ~${mark.total.toFixed(1)}` : ""}`}` : ""}
         · line = winner flips · max ±$${maxAbs.toFixed(0)}
       </div>
     </div>`;
@@ -3481,6 +3617,11 @@ function renderGameCards() {
       firstInningRuns: liveSc.firstInningRuns,
       bothScored: liveSc.awayScore > 0 && liveSc.homeScore > 0,
       propResolve: (pr) => resolvePlayerProp(pr, state.scoreboards, state.boxscores),
+      // Projected-finish inputs for the risk-grid ✕ marker (NOT used by the
+      // tree, which keys off the CURRENT total). proj50 = Kalshi 50/50 line
+      // (preferred); fracRemaining drives the pace-blend fallback.
+      proj50: state.proj50ByGame[g.key] != null ? state.proj50ByGame[g.key] : null,
+      fracRemaining: gameFracRemaining(live, g.sport),
     } : null;
     const tree = buildGameTree(g, state.positions, treeLive);
     // 2D risk surface (margin × total) — only for hedged games (opposing

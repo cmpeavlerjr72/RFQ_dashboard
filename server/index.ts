@@ -15,6 +15,7 @@ import {
   getPositions,
   getMarket,
   getMarketsBatch,
+  getEventMarkets,
   getRfqLegs,
   recoverParlay,
   cacheStats as kalshiCacheStats,
@@ -113,6 +114,14 @@ app.post("/api/kalshi/markets", async (req, res, next) => {
     }
     upstreamCallCount++;
     res.json(await getMarketsBatch(acct(req), tickers));
+  } catch (e) { next(e); }
+});
+
+// All strikes under one event ticker (e.g. a game's full total ladder).
+app.get("/api/kalshi/event-markets/:eventTicker", async (req, res, next) => {
+  try {
+    upstreamCallCount++;
+    res.json(await getEventMarkets(acct(req), req.params.eventTicker));
   } catch (e) { next(e); }
 });
 

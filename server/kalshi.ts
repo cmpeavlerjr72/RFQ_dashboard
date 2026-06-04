@@ -317,6 +317,20 @@ export async function getMarketsBatch(account: string, tickers: string[]): Promi
   return out;
 }
 
+// All markets (strikes) under one event ticker, e.g. KXNHLTOTAL-26JUN04VGKCAR
+// -> every total line for that game. Used by the dashboard to find the live
+// "50/50" total (the market-implied projected finish). Cached 30s — these move
+// during a game but we don't need sub-30s freshness for a projection marker.
+const eventMarketsCache = new TTLCache<any>();
+export async function getEventMarkets(account: string, eventTicker: string): Promise<any> {
+  const key = `${account}:${eventTicker}`;
+  return eventMarketsCache.getOrFetch(
+    key,
+    () => getJson(account, `/markets?event_ticker=${encodeURIComponent(eventTicker)}&limit=200`),
+    30_000,
+  );
+}
+
 export async function getRfqLegs(account: string, rfqId: string): Promise<any> {
   // RFQ legs are immutable + account-independent, but we namespace the cache
   // key/disk path by account anyway for uniformity.
