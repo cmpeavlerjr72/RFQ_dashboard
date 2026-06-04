@@ -3428,9 +3428,11 @@ function renderGameCards() {
             </div>
           </div>`;
         // ML doesn't take a "current" — the team head already shows the score
-        // and lead state. Spread row shows the team-perspective margin.
+        // and lead state. Spread row shows the team's live margin in VEGAS
+        // orientation (same as the spread chips beside it): leading => negative
+        // (laying points, e.g. up 6 = "-6"), trailing => positive ("+3"), tied 0.
         const spreadCurrent = teamMargin != null
-          ? `${teamMargin > 0 ? "+" : ""}${teamMargin}`
+          ? (teamMargin > 0 ? `-${teamMargin}` : teamMargin < 0 ? `+${-teamMargin}` : "0")
           : null;
         return `
           <div class="player-block">
