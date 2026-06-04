@@ -2808,12 +2808,17 @@ function renderRiskGridHtml(grid) {
     const mv = margins[r];
     // winner-flip seam: the first away-win row (prev row was a home win)
     const flip = (r > 0 && margins[r - 1] > 0 && mv < 0) ? " rg-flip" : "";
-    const ylab = `${home} ${mv > 0 ? "+" : ""}${mv}`;
-    let cellsHtml = `<div class="rg-ylab" title="home margin ${mv}">${escapeHtml(ylab)}</div>`;
+    // Vegas orientation: label by the WINNING team laying the line. mv = home
+    // margin (home−away), so mv>0 => home wins by mv => "HOME -mv"; mv<0 =>
+    // away wins by |mv| => "AWAY -|mv|". The reference team flips at the 0 seam,
+    // and a win is shown as a NEGATIVE spread (e.g. "CAR -1" = CAR by 1).
+    const winTeam = mv > 0 ? home : away;
+    const ylab = `${winTeam} -${Math.abs(mv)}`;
+    let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(winTeam)} wins by ${Math.abs(mv)}">${escapeHtml(ylab)}</div>`;
     for (let c = 0; c < NC; c++) {
       const pnl = cells[r][c];
       const isMark = (r === markR && c === markC);
-      const base = `${home} margin ${mv > 0 ? "+" : ""}${mv}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
+      const base = `${winTeam} -${Math.abs(mv)}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
       const title = isMark
         ? (mark.final ? `FINAL — ${base}`
           : `projected finish${mark.projected ? ` (total ~${mark.total.toFixed(1)})` : ""} — ${base}`)
