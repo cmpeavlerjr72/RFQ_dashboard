@@ -1275,3 +1275,31 @@ main .rink, main .pz, main .court { margin-left: auto; margin-right: auto; }
 main .breakdown-table .bk-sport-cell,
 main .breakdown-table .bk-sub-cell,
 main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
+
+/* 2D risk surface (home-margin × total heatmap) on hedged game cards */
+.risk-grid { margin-top: 12px; }
+.rg-head { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+.rg-grid { display: flex; flex-direction: column; gap: 2px; }
+.rg-row { display: grid; grid-template-columns: 54px repeat(var(--rg-n), 1fr); gap: 2px; align-items: stretch; }
+.rg-cell {
+  height: 17px; border-radius: 2px; display: flex; align-items: center;
+  justify-content: center; font-size: 10px; color: #fff; line-height: 1;
+}
+.rg-cell.rg-zero { box-shadow: 0 1px 0 0 rgba(148,163,184,.55), 0 -1px 0 0 rgba(148,163,184,.55); }
+.rg-cell.rg-mark { box-shadow: 0 0 0 2px #fff inset; font-weight: 700; }
+.rg-ylab {
+  font-size: 9px; color: var(--muted-2); display: flex; align-items: center;
+  justify-content: flex-end; padding-right: 5px; white-space: nowrap; overflow: hidden;
+}
+.rg-xrow .rg-xlab {
+  font-size: 9px; color: var(--muted-2); display: flex; align-items: center;
+  justify-content: center; height: 12px;
+}
+.rg-legend {
+  font-size: 10px; color: var(--muted); margin-top: 5px; display: flex;
+  align-items: center; gap: 4px; flex-wrap: wrap;
+}
+.rg-sw { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-left: 4px; }
+.rg-sw.pos { background: rgba(21,128,61,.72); }
+.rg-sw.neg { background: rgba(190,18,60,.72); }
+.rg-markk { font-weight: 700; color: var(--muted-2); }

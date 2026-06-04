@@ -2579,6 +2579,116 @@ function aggregateGameCards() {
   return Array.from(games.values()).sort((a, b) => b.exposure - a.exposure);
 }
 
+// ── 2D risk surface (home-margin × total) for hedged games ─────────────────
+// A heatmap of EXPECTED $ P&L across game outcomes: each cell is the book's
+// expected P&L if the game lands at that (home margin, combined total), with
+// player-prop / RFI / BTTS legs marginalized at their market-implied prob —
+// reuses _treeNodeExpected, so it reconciles with the tree + the card header.
+// Green = we profit there, red = we lose. Straight boundaries fall on the
+// spread/total lines we hold. Only built for games where we hold a game-level
+// leg (ML/spread/total); pure-prop games have no margin/total structure.
+function computeRiskGrid(g, parlays, live) {
+  const ours = parlays.filter((p) => p.legs.some((l) => legGameGroupKey(l.ticker) === g.key));
+  if (!ours.length) return null;
+  // Gather the game-level lines we actually hold, to center + size the grid.
+  const totalLines = [];
+  const marginCuts = [0];
+  let haveGameLeg = false, teams = null;
+  for (const p of ours) {
+    for (const l of p.legs) {
+      if (legGameGroupKey(l.ticker) !== g.key) continue;
+      const gl = parseGameLevelLeg(l.ticker);
+      if (!gl) continue;
+      if (gl.kind === "total") { totalLines.push(gl.line); haveGameLeg = true; }
+      else if (gl.kind === "ml" || gl.kind === "spread") {
+        haveGameLeg = true; teams = teams || gl.teams;
+        if (gl.teams && gl.pick !== "TIE" && gl.pick !== "DRAW") {
+          const [away, home] = gl.teams;
+          const cut = gl.kind === "spread" ? Math.ceil(gl.line) : 1;
+          if (gl.pick === home) marginCuts.push(cut);
+          else if (gl.pick === away) marginCuts.push(-cut + 1);
+        }
+      }
+    }
+  }
+  if (!haveGameLeg) return null;
+
+  const N = 13; // cells per axis (odd => margin 0 sits on the center row)
+  const sportTotalDefault = { nba: 222, wnba: 162, nhl: 6, mlb: 9 }[g.sport] || 220;
+  const tCenter = totalLines.length
+    ? (Math.min(...totalLines) + Math.max(...totalLines)) / 2
+    : (live && live.total != null ? live.total : sportTotalDefault);
+  const tHalf = Math.max(15, (totalLines.length ? (Math.max(...totalLines) - Math.min(...totalLines)) / 2 : 0) + 12);
+  const mHalf = Math.max(15, Math.max(...marginCuts.map((m) => Math.abs(m))) + 12);
+  const tStep = Math.max(1, Math.round((2 * tHalf) / (N - 1)));
+  const mStep = Math.max(1, Math.round((2 * mHalf) / (N - 1)));
+  const half = (N - 1) / 2;
+  const totals = Array.from({ length: N }, (_, i) => Math.round(tCenter - half * tStep + i * tStep));
+  const margins = Array.from({ length: N }, (_, i) => (half - i) * mStep); // top = home blowout, 0 in center
+  const home = teams ? teams[1] : null, away = teams ? teams[0] : null;
+
+  let maxAbs = 0;
+  const cells = margins.map((m) => totals.map((t) => {
+    const asg = { margin: m, total: t, winner: m > 0 ? home : m < 0 ? away : null };
+    const pnl = _treeNodeExpected(ours, g.key, asg);
+    if (Math.abs(pnl) > maxAbs) maxAbs = Math.abs(pnl);
+    return pnl;
+  }));
+
+  let mark = null;
+  if (live && live.margin != null && live.total != null) {
+    mark = { margin: live.margin, total: live.total, final: !!live.final };
+  }
+  return { margins, totals, cells, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep };
+}
+
+function renderRiskGridHtml(grid) {
+  if (!grid || grid.maxAbs < 0.01) return "";
+  const { margins, totals, cells, maxAbs, mark, teams } = grid;
+  const N = margins.length;
+  const color = (pnl) => {
+    const a = Math.min(1, Math.abs(pnl) / maxAbs);
+    const alpha = (0.08 + a * 0.64).toFixed(2);
+    return `rgba(${pnl >= 0 ? "21,128,61" : "190,18,60"},${alpha})`;
+  };
+  // nearest cell to the live/final mark
+  let markR = -1, markC = -1;
+  if (mark) {
+    let bd = 1e9, bm = 1e9;
+    margins.forEach((m, r) => { const d = Math.abs(m - mark.margin); if (d < bd) { bd = d; markR = r; } });
+    totals.forEach((t, c) => { const d = Math.abs(t - mark.total); if (d < bm) { bm = d; markC = c; } });
+  }
+  const home = teams[1] || "HOME", away = teams[0] || "AWAY";
+  let rows = "";
+  for (let r = 0; r < N; r++) {
+    const mv = margins[r];
+    const ylab = mv === 0 ? "tie" : `${home} ${mv > 0 ? "+" : ""}${mv}`;
+    let cellsHtml = `<div class="rg-ylab" title="home margin ${mv}">${escapeHtml(ylab)}</div>`;
+    for (let c = 0; c < N; c++) {
+      const pnl = cells[r][c];
+      const isMark = (r === markR && c === markC);
+      const zero = mv === 0 ? " rg-zero" : "";
+      cellsHtml += `<div class="rg-cell${zero}${isMark ? " rg-mark" : ""}" style="background:${color(pnl)}" `
+        + `title="${escapeHtml(home)} margin ${mv > 0 ? "+" : ""}${mv}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}">`
+        + `${isMark ? (mark.final ? "●" : "✕") : ""}</div>`;
+    }
+    rows += `<div class="rg-row">${cellsHtml}</div>`;
+  }
+  let xlabs = `<div class="rg-corner"></div>`;
+  for (let c = 0; c < N; c++) xlabs += `<div class="rg-xlab">${c % 3 === 1 ? totals[c] : ""}</div>`;
+  rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
+  return `
+    <div class="risk-grid">
+      <div class="rg-head">Risk surface — expected P&L · ${escapeHtml(away)}↔${escapeHtml(home)} margin (rows) × total (cols)</div>
+      <div class="rg-grid" style="--rg-n:${N}">${rows}</div>
+      <div class="rg-legend">
+        <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit
+        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "live now"}` : ""}
+        · row <b>tie</b> = winner flips · color ∝ $ (max ±$${maxAbs.toFixed(0)})
+      </div>
+    </div>`;
+}
+
 function renderGameCards() {
   const wrap = $("game-cards");
   const cards = aggregateGameCards();
@@ -3359,6 +3469,11 @@ function renderGameCards() {
       propResolve: (pr) => resolvePlayerProp(pr, state.scoreboards, state.boxscores),
     } : null;
     const tree = buildGameTree(g, state.positions, treeLive);
+    // 2D risk surface (margin × total) — only for hedged games (opposing
+    // positions create a non-trivial profit/loss shape worth seeing).
+    const riskGridHtml = g.hedged
+      ? renderRiskGridHtml(computeRiskGrid(g, state.positions, treeLive))
+      : "";
     let scenarioHtml = "";
     if (tree) {
       const money = (n) => `${n >= 0 ? "+" : "−"}$${Math.abs(n).toFixed(2)}`;
@@ -3472,6 +3587,7 @@ function renderGameCards() {
           ${bodyContent || `<div class="empty">no pending legs</div>`}
           ${resolvedNote}
           ${scenarioHtml}
+          ${riskGridHtml}
         </div>`}
       </div>
     `;
