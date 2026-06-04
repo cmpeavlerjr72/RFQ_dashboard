@@ -1984,49 +1984,64 @@ function hockeySituationHtml(hk) {
     </div>`;
 }
 
-// Half-court shot chart — the NBA analog to the rink shot plot. ESPN basketball
-// play coordinates put the origin at the hoop: x∈[0,50] is court WIDTH (center
-// 25), y is feet from the hoop toward half-court (free throws + tip-offs carry a
-// sentinel ~-2.1e9 and are filtered upstream). Both teams' shots are normalised
-// onto one half, so we colour by team (away = accent, home = neg) and fill makes
-// vs leave misses hollow. We draw the key, free-throw circle, restricted-area
-// arc and three-point line so locations read against the floor.
+// Full-court shot chart — the NBA analog to the rink shot plot. ESPN basketball
+// play coordinates are normalised onto a single half (origin at the hoop:
+// ex∈[0,50] is court WIDTH centred on the hoop, ey = feet from the hoop toward
+// half-court; free throws + tip-offs carry a sentinel ~-2.1e9 and are filtered
+// upstream). We un-normalise onto a FULL 94×50 court — the HOME team attacks the
+// left basket, the AWAY team the right (a 180° rotation of the away half). Made
+// shots show the shooting team's logo (like NHL goals); misses are translucent
+// team-coloured dots. We draw both keys (painted), free-throw + centre circles,
+// the restricted-area arc, three-point line, rim and backboard at each end.
 function courtShotPlot(shots) {
   if (!shots || !shots.length) return "";
-  const R = 0.7;                              // dot radius (feet)
-  // feet -> svg: 1ft = 1 unit, x padded 1ft each side, y flipped (hoop at
-  // bottom). viewBox 0..52 wide, 0..47 tall; baseline ~yf=-4, top ~yf=42.
-  const px = (xf) => Math.max(R, Math.min(52 - R, xf + 1));
-  const py = (yf) => Math.max(R, Math.min(47 - R, 42 - yf));
+  const L = 94, W = 50;                 // court dimensions (feet) = viewBox units
+  const R = 1.0;                        // miss-dot radius (feet)
+  const LOGO = 4.4;                     // made-shot logo size (feet)
+  // ESPN (ex, ey) -> full-court (X along length, Y across width). Home hoop at
+  // X=5.25, away hoop at X=88.75 (both at width-centre 25).
+  const cx = (s) => (s.team === "home" ? 5.25 + s.y : 88.75 - s.y);
+  const cy = (s) => (s.team === "home" ? s.x : 50 - s.x);
+  const clX = (v) => Math.max(R, Math.min(L - R, v));
+  const clY = (v) => Math.max(R, Math.min(W - R, v));
   const dots = shots.map((s) => {
-    const cls = `nba-shot ${s.team || "away"} ${s.make ? "make" : "miss"}${s.three ? " three" : ""}`;
-    return `<circle class="${cls}" cx="${px(s.x).toFixed(1)}" cy="${py(s.y).toFixed(1)}" r="${R}"><title>${s.make ? "make" : "miss"}</title></circle>`;
+    const X = clX(cx(s)), Y = clY(cy(s));
+    if (s.make && s.logo) {
+      return `<image class="court-logo" href="${s.logo}" x="${(X - LOGO / 2).toFixed(1)}" y="${(Y - LOGO / 2).toFixed(1)}" width="${LOGO}" height="${LOGO}" preserveAspectRatio="xMidYMid meet"><title>make</title></image>`;
+    }
+    return `<circle class="nba-shot ${s.team || "away"} ${s.make ? "make" : "miss"}" cx="${X.toFixed(1)}" cy="${Y.toFixed(1)}" r="${R}"><title>${s.make ? "make" : "miss"}</title></circle>`;
   }).join("");
-  // Court furniture, all in feet through px/py. Hoop (25,0); backboard 1.25ft
-  // behind; key 16ft wide (x17..33) baseline→FT line (yf 13.75); FT circle r6;
-  // restricted arc r4; 3pt corners at x3/x47 up to the arc break (r23.75 from
-  // hoop → yf≈8.95), then the arc over the top.
-  const hx = px(25), hy = py(0);
-  const ftY = py(13.75), baseY = py(-4);
-  const arcL = `${px(3).toFixed(1)} ${py(8.95).toFixed(1)}`;
-  const arcR = `${px(47).toFixed(1)} ${py(8.95).toFixed(1)}`;
+  // One basket end's furniture. baseX = the baseline (0 or 94); dir = +1 (left
+  // end, court extends +x) or −1 (right end). side tints the paint by team.
+  const end = (baseX, dir, side) => {
+    const hoopX = baseX + dir * 5.25, bbX = baseX + dir * 4, ftX = baseX + dir * 19;
+    const keyX = Math.min(baseX, ftX), keyW = Math.abs(ftX - baseX);
+    const brk = (hoopX + dir * 8.95).toFixed(1);         // 3pt arc break: √(23.75²−22²)≈8.95
+    const sweep = dir > 0 ? 1 : 0;                        // arc bulges toward centre court
+    return `
+      <rect class="court-paint ${side}" x="${keyX.toFixed(1)}" y="17" width="${keyW.toFixed(1)}" height="16"/>
+      <line class="court-line" x1="${ftX}" y1="17" x2="${ftX}" y2="33"/>
+      <circle class="court-line" cx="${ftX}" cy="25" r="6"/>
+      <path class="court-line" d="M ${baseX} 3 L ${brk} 3 A 23.75 23.75 0 0 ${sweep} ${brk} 47 L ${baseX} 47"/>
+      <path class="court-line" d="M ${hoopX.toFixed(1)} 21 A 4 4 0 0 ${sweep} ${hoopX.toFixed(1)} 29"/>
+      <line class="court-bb" x1="${bbX}" y1="22" x2="${bbX}" y2="28"/>
+      <line class="court-rim-neck" x1="${bbX}" y1="25" x2="${hoopX.toFixed(2)}" y2="25"/>
+      <circle class="court-rim" cx="${hoopX.toFixed(2)}" cy="25" r="0.9"/>`;
+  };
   return `
-    <svg class="court" viewBox="0 0 52 47" width="100%" aria-label="shot locations this game">
-      <rect class="court-floor" x="1" y="${py(38).toFixed(1)}" width="50" height="${(baseY - py(38)).toFixed(1)}"/>
-      <line class="court-base" x1="1" y1="${baseY.toFixed(1)}" x2="51" y2="${baseY.toFixed(1)}"/>
-      <rect class="court-key" x="${px(17).toFixed(1)}" y="${ftY.toFixed(1)}" width="16" height="${(baseY - ftY).toFixed(1)}"/>
-      <circle class="court-line" cx="${hx}" cy="${ftY.toFixed(1)}" r="6"/>
-      <path class="court-line" d="M ${px(3).toFixed(1)} ${baseY.toFixed(1)} L ${arcL} A 23.75 23.75 0 0 1 ${arcR} L ${px(47).toFixed(1)} ${baseY.toFixed(1)}"/>
-      <path class="court-line" d="M ${px(21).toFixed(1)} ${hy.toFixed(1)} A 4 4 0 0 1 ${px(29).toFixed(1)} ${hy.toFixed(1)}"/>
-      <circle class="court-rim" cx="${hx}" cy="${hy.toFixed(1)}" r="0.75"/>
-      <line class="court-line" x1="${px(22).toFixed(1)}" y1="${py(-1.25).toFixed(1)}" x2="${px(28).toFixed(1)}" y2="${py(-1.25).toFixed(1)}"/>
+    <svg class="court" viewBox="-1.5 -1.5 97 53" width="100%" aria-label="shot locations this game — home left, away right">
+      <rect class="court-floor" x="0" y="0" width="${L}" height="${W}" rx="1"/>
+      <line class="court-line" x1="47" y1="0" x2="47" y2="${W}"/>
+      <circle class="court-line" cx="47" cy="25" r="6"/>
+      ${end(0, 1, "home")}
+      ${end(L, -1, "away")}
       ${dots}
     </svg>`;
 }
 
 // Compact live-basketball widget: each team's shooting line (FG / 3PT / REB /
 // AST / TO), the scoring/rebound/assist leaders, players in foul trouble, the
-// last play, and a half-court shot chart. NBA in-progress or final. Mirrors
+// last play, and a full-court shot chart. NBA in-progress or final. Mirrors
 // hockeySituationHtml's role for hockey.
 function nbaSituationHtml(bk) {
   if (!bk) return "";
@@ -2808,12 +2823,14 @@ function renderGameCards() {
         live.basketball.leaders = { away: leadersFor(live.away.abbr), home: leadersFor(live.home.abbr) };
       }
       if (summary && Array.isArray(summary.plays) && summary.plays.length) {
-        // Map ESPN team id -> our abbr so a shot can be coloured by team.
-        const sideById = {};
+        // Map ESPN team id -> {side, abbr} so a shot lands on the right half of
+        // the court (home left / away right) and a make can show its team logo.
+        const sideById = {}, abbrById = {};
         for (const c of (live.raw?.competitions?.[0]?.competitors || [])) {
           const id = String(c?.team?.id || "");
           if (!id) continue;
           const ab = normAbbrForKalshi((c?.team?.abbreviation || "").toUpperCase(), "nba");
+          abbrById[id] = ab;
           sideById[id] = ab === live.away.abbr ? "away" : "home";
         }
         const shots = [];
@@ -2822,12 +2839,12 @@ function renderGameCards() {
           const c = pl.coordinate;
           // Free throws / tip-offs carry a sentinel coordinate (~-2.1e9); skip.
           if (!c || typeof c.x !== "number" || Math.abs(c.x) > 1000) continue;
-          shots.push({
-            x: c.x, y: c.y,
-            make: !!pl.scoringPlay,
-            three: pl.pointsAttempted === 3,
-            team: sideById[String(pl.team?.id || "")] || "away",
-          });
+          const id = String(pl.team?.id || "");
+          const make = !!pl.scoringPlay;
+          const shot = { x: c.x, y: c.y, make, three: pl.pointsAttempted === 3, team: sideById[id] || "away" };
+          // Made shots render as the shooting team's logo (NHL-goal style).
+          if (make && abbrById[id]) shot.logo = teamLogoUrl(g.sportLogoKey, abbrById[id], { league: g.league });
+          shots.push(shot);
         }
         live.basketball.shots = shots;
         live.basketball.lastPlay = summary.plays[summary.plays.length - 1]?.text || "";

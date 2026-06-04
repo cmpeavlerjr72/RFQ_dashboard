@@ -207,6 +207,36 @@ export async function getBalance(account: string, force = false): Promise<any> {
   );
 }
 
+/**
+ * Tickers on `account` whose CURRENT holding was acquired purely as a TAKER —
+ * i.e. the position has taker fills and no maker fills. On the secondary (TP)
+ * account that is the owner's own betting (he takes; our runner only ever makes
+ * via RFQ quotes), so these positions must be excluded from the live exposure
+ * view. Parlay market tickers are minted per RFQ accept, so a given ticker is
+ * effectively all-ours (maker) or all-his (taker) — the maker-fill guard just
+ * protects the rare case where he also took one of our own parlay markets.
+ */
+async function takerOnlyTickers(account: string, maxPages = 12): Promise<Set<string>> {
+  const makerTk = new Set<string>();
+  const takerTk = new Set<string>();
+  let cursor = "";
+  for (let i = 0; i < maxPages; i++) {
+    const q = "/portfolio/fills?limit=200" + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+    const body = await getJson(account, q);
+    const page: any[] = body?.fills || [];
+    for (const f of page) {
+      const tk = f?.market_ticker || f?.ticker || "";
+      if (!tk) continue;
+      if (f?.is_taker) takerTk.add(tk); else makerTk.add(tk);
+    }
+    cursor = body?.cursor || "";
+    if (!page.length || !cursor) break;
+  }
+  const out = new Set<string>();
+  for (const tk of takerTk) if (!makerTk.has(tk)) out.add(tk);
+  return out;
+}
+
 export async function getPositions(account: string, force = false): Promise<any> {
   const key = `${account}:positions`;
   if (force) positionsCache.set(key, undefined as any, 0);
@@ -228,6 +258,25 @@ export async function getPositions(account: string, force = false): Promise<any>
           raw.event_positions = raw.event_positions.filter(
             (e: any) => (e?.event_ticker || "").startsWith("KXMVE"),
           );
+      }
+      // On the secondary (TP) account, the owner also makes his OWN bets — which
+      // fill as TAKER orders, sometimes even on KXMVE parlay markets (so the
+      // KXMVE filter above doesn't catch them). Drop any position that was
+      // acquired purely as a taker so the live view shows only our maker book.
+      // MP (default) is our pure maker account, left untouched. 2026-06-03.
+      if (account !== DEFAULT_ACCOUNT && raw && Array.isArray(raw.market_positions)) {
+        try {
+          const takerTk = await takerOnlyTickers(account);
+          if (takerTk.size) {
+            raw.market_positions = raw.market_positions.filter(
+              (p: any) => !takerTk.has(p?.ticker || ""),
+            );
+          }
+        } catch (e) {
+          // Best-effort: if the fills lookup fails, fall back to the KXMVE-only
+          // filter rather than breaking the positions view.
+          console.warn("takerOnlyTickers failed for", account, e);
+        }
       }
       return raw;
     },

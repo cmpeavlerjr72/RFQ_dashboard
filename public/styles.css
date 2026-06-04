@@ -564,23 +564,28 @@ h2 {
 .nba-foul.held { color: var(--fg); font-weight: 700; }
 .nba-foul-n { color: var(--warn); font-weight: 600; }
 .nba-lastplay { font-size: 11px; color: var(--muted); font-style: italic; line-height: 1.3; }
-/* Half-court shot chart — NBA analog to the rink shot plot */
+/* Full-court shot chart — NBA analog to the rink shot plot (home left / away
+   right; makes = team logos, misses = translucent team-coloured dots) */
 .court {
-  display: block; margin-top: 2px; max-width: 230px;
+  display: block; margin-top: 2px; max-width: 340px;
   background: var(--card-head); border-radius: 5px;
 }
-.court .court-floor { fill: none; }
-.court .court-base { stroke: var(--muted-2); stroke-width: 0.7; }
-.court .court-key { fill: none; stroke: var(--muted-2); stroke-width: 0.6; opacity: .7; }
-.court .court-line { fill: none; stroke: var(--muted-2); stroke-width: 0.6; opacity: .55; }
-.court .court-rim { fill: none; stroke: var(--neg); stroke-width: 0.7; opacity: .8; }
+.court .court-floor { fill: var(--card); stroke: var(--muted-2); stroke-width: 0.5; }
+.court .court-line { fill: none; stroke: var(--muted-2); stroke-width: 0.5; opacity: .55; }
+.court .court-paint { stroke: var(--muted-2); stroke-width: 0.5; opacity: .9; }
+.court .court-paint.home { fill: var(--neg); fill-opacity: .1; }
+.court .court-paint.away { fill: var(--accent); fill-opacity: .1; }
+/* Basket: backboard, neck, rim — drawn in a hoop orange so it reads as a goal */
+.court .court-bb { stroke: var(--muted); stroke-width: 1; stroke-linecap: round; }
+.court .court-rim-neck { stroke: #e8833a; stroke-width: 0.5; }
+.court .court-rim { fill: none; stroke: #e8833a; stroke-width: 0.8; }
+.court .court-logo { opacity: .95; }
 .court .nba-shot { stroke-width: 0.4; }
-.court .nba-shot.away { stroke: var(--accent); }
-.court .nba-shot.home { stroke: var(--neg); }
-.court .nba-shot.make.away { fill: var(--accent); }
-.court .nba-shot.make.home { fill: var(--neg); }
-.court .nba-shot.miss { fill: none; opacity: .75; }
-.court .nba-shot.three { stroke-width: 0.7; }
+.court .nba-shot.miss.away { fill: var(--accent); stroke: var(--accent); fill-opacity: .35; }
+.court .nba-shot.miss.home { fill: var(--neg); stroke: var(--neg); fill-opacity: .35; }
+/* Made-shot fallback dot (only when a team logo is unavailable) */
+.court .nba-shot.make.away { fill: var(--accent); stroke: var(--accent); }
+.court .nba-shot.make.home { fill: var(--neg); stroke: var(--neg); }
 .game-card-head .game-stats {
   display: flex; gap: 14px; flex-wrap: wrap;
 }
