@@ -141,7 +141,7 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NHL_TEAMS);
-    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} spread ${spreadLine(line, floorStrike, "nhl")}` + (side === "yes" ? "" : " (no)");
+    return `NHL: ${teamName(NHL_TEAMS, a)} vs ${teamName(NHL_TEAMS, b)} · ${line.replace(/\d+$/, "")} -${spreadLine(line, floorStrike, "nhl")}` + (side === "yes" ? "" : " (no)");
   }
 
   // ---------- MLB ----------
@@ -170,7 +170,7 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, MLB_TEAMS);
-    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} spread ${spreadLine(line, floorStrike, "mlb")}` + (side === "yes" ? "" : " (no)");
+    return `MLB: ${teamName(MLB_TEAMS, a)} vs ${teamName(MLB_TEAMS, b)} · ${line.replace(/\d+$/, "")} -${spreadLine(line, floorStrike, "mlb")}` + (side === "yes" ? "" : " (no)");
   }
 
   // MLB player props
@@ -223,7 +223,7 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const [dt, line] = rest.split("-");
     const { teams } = parseDateTeams(dt);
     const [a, b] = splitTeams(teams, NBA_TEAMS);
-    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} spread ${spreadLine(line, floorStrike, "nba")}` + (side === "yes" ? "" : " (no)");
+    return `NBA: ${teamName(NBA_TEAMS, a)} vs ${teamName(NBA_TEAMS, b)} · ${line.replace(/\d+$/, "")} -${spreadLine(line, floorStrike, "nba")}` + (side === "yes" ? "" : " (no)");
   }
 
   // NBA player props
