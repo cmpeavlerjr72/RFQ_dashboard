@@ -2782,12 +2782,38 @@ function computeRiskGrid(g, parlays, live) {
     }
     mark = { margin: live.margin, total, final: !!live.final, projected };
   }
-  return { margins, totals, cells, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep };
+  // Net PROP-exposure lean. Props don't live on the margin×total axes, but each
+  // correlates with its own-team score (more scoring → that team's margin up +
+  // total up). We hold parlay-NO, so we benefit when a leg MISSES. Collapse every
+  // prop leg on this game into one $-weighted vector pointing at the (margin,
+  // total) corner our prop book ROOTS for, drawn as a single arrow on the grid.
+  let pM = 0, pT = 0, pW = 0, pN = 0;
+  for (const p of ours) {
+    const w = Math.max(0, p.cost || 0) || 1;   // $ at risk on the parlay
+    for (const l of p.legs) {
+      if (legGameGroupKey(l.ticker) !== g.key) continue;
+      if (parseGameLevelLeg(l.ticker)) continue;        // game-level: already in the grid
+      const prop = parsePlayerProp(l.ticker);
+      if (!prop || !prop.team) continue;
+      const tU = String(prop.team).toUpperCase();
+      const teamSign = tU === String(home).toUpperCase() ? 1
+        : (tU === String(away).toUpperCase() ? -1 : 0);
+      if (!teamSign) continue;
+      // buyer-yes = player OVER threshold. We hold NO → we cash when the leg
+      // misses → we benefit from the player scoring the OTHER way.
+      const dScore = (l.side || "yes").toLowerCase() === "yes" ? -1 : 1;
+      pM += w * dScore * teamSign;   // +  => roots for home margin up (home wins more)
+      pT += w * dScore;              // +  => roots for the over
+      pW += w; pN += 1;
+    }
+  }
+  const propLean = pN ? { mSum: pM, tSum: pT, W: pW, n: pN } : null;
+  return { margins, totals, cells, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep, propLean };
 }
 
 function renderRiskGridHtml(grid) {
   if (!grid || grid.maxAbs < 0.01) return "";
-  const { margins, totals, cells, maxAbs, mark, teams } = grid;
+  const { margins, totals, cells, maxAbs, mark, teams, propLean } = grid;
   const NR = margins.length, NC = totals.length;
   const color = (pnl) => {
     const a = Math.min(1, Math.abs(pnl) / maxAbs);
@@ -2831,14 +2857,44 @@ function renderRiskGridHtml(grid) {
   }
   let xlabs = `<div class="rg-corner"></div>`;
   for (let c = 0; c < NC; c++) xlabs += `<div class="rg-xlab">${c % 3 === 1 ? totals[c] : ""}</div>`;
-  rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
+  const xRow = `<div class="rg-row rg-xrow">${xlabs}</div>`;
+
+  // PROP-exposure lean arrow: one vector from the data-area center toward the
+  // (margin,total) corner our prop book roots for. viewBox is stretched to the
+  // cell area (preserveAspectRatio=none) so the arrow points at the right CORNER
+  // even though cells aren't square. Length scales with how aligned the props are.
+  let arrowSvg = "", propNote = "";
+  if (propLean && propLean.n && propLean.W > 0) {
+    const { mSum, tSum, W, n } = propLean;
+    const mag = Math.hypot(tSum, mSum);
+    if (mag > 1e-9) {
+      const ux = tSum / mag, uy = -mSum / mag;            // +total→right, +home-margin→up
+      const align = Math.min(1, mag / (W * Math.SQRT2));  // 0=props cancel, 1=fully aligned
+      const L = (0.18 + 0.82 * align) * 40;               // viewBox units from center
+      const tx = (50 + ux * L).toFixed(1), ty = (50 + uy * L).toFixed(1);
+      const mid = `rgpa-${escapeHtml(String(away) + String(home)).replace(/[^a-z0-9]/gi, "")}`;
+      arrowSvg = `<svg class="rg-prop-arrow" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">`
+        + `<defs><marker id="${mid}" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto">`
+        + `<path d="M0,0 L10,5 L0,10 z" fill="#0ea5e9"/></marker></defs>`
+        + `<circle cx="50" cy="50" r="2.2" fill="#0ea5e9" opacity="0.85"/>`
+        + `<line x1="50" y1="50" x2="${tx}" y2="${ty}" stroke="#0ea5e9" stroke-width="2.4" opacity="0.9" marker-end="url(#${mid})"/>`
+        + `</svg>`;
+    }
+    const team = mSum > 0 ? home : away;
+    const ou = tSum > 0 ? "over" : "under";
+    propNote = `· <span class="rg-propk">▲</span>props $${W.toFixed(0)} (${n}) lean ${escapeHtml(team)} + ${ou}`;
+  }
   return `
     <div class="risk-grid">
       <div class="rg-head">Risk surface — expected $ P&L · ${escapeHtml(away)}↔${escapeHtml(home)} margin (rows) × total (cols)</div>
-      <div class="rg-grid" style="--rg-n:${NC}">${rows}</div>
+      <div class="rg-grid" style="--rg-n:${NC}">
+        <div class="rg-cells">${rows}${arrowSvg}</div>
+        ${xRow}
+      </div>
       <div class="rg-legend">
         <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
         ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : `projected finish${mark.projected ? ` · total ~${mark.total.toFixed(1)}` : ""}`}` : ""}
+        ${propNote}
         · line = winner flips · max ±$${maxAbs.toFixed(0)}
       </div>
     </div>`;

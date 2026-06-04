@@ -1280,6 +1280,12 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .risk-grid { margin-top: 12px; }
 .rg-head { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
 .rg-grid { display: flex; flex-direction: column; gap: 2px; }
+/* cell area only (excludes the bottom x-label row); anchors the prop-lean arrow */
+.rg-cells { display: flex; flex-direction: column; gap: 2px; position: relative; }
+/* prop-lean arrow overlay: inset past the 54px y-label column (+2px gap) so its
+   viewBox maps to the data cells; corners point at the right margin/total corner */
+.rg-prop-arrow { position: absolute; left: 56px; top: 0; right: 0; bottom: 0; pointer-events: none; }
+.rg-propk { color: #0ea5e9; font-size: 11px; }
 .rg-row { display: grid; grid-template-columns: 54px repeat(var(--rg-n), 1fr); gap: 2px; align-items: stretch; }
 .rg-cell {
   height: 18px; border-radius: 2px; display: flex; align-items: center;
