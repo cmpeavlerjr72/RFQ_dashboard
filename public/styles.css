@@ -1269,3 +1269,9 @@ main .game-card-body { text-align: left; }
 /* Block-level / max-width widgets centre via auto margins (justify-content only
    centres flex/grid main-axis; these sit as block items in column containers). */
 main .rink, main .pz, main .court { margin-left: auto; margin-right: auto; }
+/* The by-sport bet tree (sport → player/game → stat) reads as an indented
+   hierarchy, so its label cells must stay LEFT-justified — exempt them from the
+   global content-centring above. (user preference 2026-06-03) */
+main .breakdown-table .bk-sport-cell,
+main .breakdown-table .bk-sub-cell,
+main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
