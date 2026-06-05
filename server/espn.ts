@@ -11,12 +11,15 @@ export type Sport =
   // Soccer leagues — each maps to its own ESPN slug. Game cards + live
   // score/clock tracking; no player props (no boxscore/roster use, but the
   // slug maps below carry entries so the Record<Sport,string> stays total).
-  | "epl" | "laliga" | "seriea" | "bundesliga" | "ligue1" | "ucl";
+  | "epl" | "laliga" | "seriea" | "bundesliga" | "ligue1" | "ucl"
+  // National-team soccer: 2026 World Cup + international friendlies.
+  | "wcup" | "intlfriendly";
 
 // ESPN soccer league slugs, shared by scoreboard/boxscore/roster URL builders.
 const SOCCER_SLUG: Record<string, string> = {
   epl: "eng.1", laliga: "esp.1", seriea: "ita.1",
   bundesliga: "ger.1", ligue1: "fra.1", ucl: "uefa.champions",
+  wcup: "fifa.world", intlfriendly: "fifa.friendly",
 };
 
 // Extra ESPN soccer slugs whose events get MERGED into a league's scoreboard.
@@ -129,6 +132,8 @@ function boxscoreUrl(sport: Sport, eventId: string): string {
     bundesliga: "soccer/ger.1",
     ligue1: "soccer/fra.1",
     ucl: "soccer/uefa.champions",
+    wcup: "soccer/fifa.world",
+    intlfriendly: "soccer/fifa.friendly",
   };
   const seg = segByLeague[sport];
   return `https://site.api.espn.com/apis/site/v2/sports/${seg}/summary?event=${encodeURIComponent(eventId)}`;
@@ -185,6 +190,8 @@ function rosterUrl(sport: Sport, teamId: string): string {
     bundesliga: "soccer/ger.1",
     ligue1: "soccer/fra.1",
     ucl: "soccer/uefa.champions",
+    wcup: "soccer/fifa.world",
+    intlfriendly: "soccer/fifa.friendly",
   };
   const seg = segByLeague[sport];
   return `https://site.api.espn.com/apis/site/v2/sports/${seg}/teams/${encodeURIComponent(teamId)}/roster`;

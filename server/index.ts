@@ -146,7 +146,8 @@ app.get("/api/kalshi/recover/:ticker", async (req, res, next) => {
 // ----------------------------------------------------------------------------
 
 const VALID_SPORTS: Sport[] = ["mlb", "nhl", "nba", "ufc", "atp", "wta",
-  "epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"];
+  "epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl",
+  "wcup", "intlfriendly"];
 
 app.get("/api/scoreboard", async (req, res, next) => {
   try {

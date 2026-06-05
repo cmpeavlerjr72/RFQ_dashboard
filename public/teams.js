@@ -127,6 +127,19 @@ export const SOCCER_LEAGUES = {
   KXUCLSPREAD:      "Champions League spread",
   KXUCLTOTAL:       "Champions League total",
   KXUCLBTTS:        "Champions League BTTS",
+  // 2026 World Cup (national teams — flags via national_teams.js)
+  KXWCGAME:         "World Cup",
+  KXWCSPREAD:       "World Cup spread",
+  KXWCTOTAL:        "World Cup total",
+  KXWCBTTS:         "World Cup BTTS",
+  KXWC1H:           "World Cup 1H",
+  KXWC1HSPREAD:     "World Cup 1H spread",
+  KXWC1HTOTAL:      "World Cup 1H total",
+  KXWC1HBTTS:       "World Cup 1H BTTS",
+  // International friendlies
+  KXINTLFRIENDLYGAME:   "Friendly",
+  KXINTLFRIENDLYSPREAD: "Friendly spread",
+  KXINTLFRIENDLYTOTAL:  "Friendly total",
 };
 
 export const NBA_TEAMS = {

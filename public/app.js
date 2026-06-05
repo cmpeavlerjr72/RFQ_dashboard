@@ -6,6 +6,7 @@ import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEven
 import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker,
          allCompetitions, athleteCodeCandidates,
          NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
+import { NATIONAL_TEAMS } from "/national_teams.js";
 import { initAccountPicker, withAccount } from "/account.js";
 
 const $ = (id) => document.getElementById(id);
@@ -126,6 +127,9 @@ const SPORT_PREFIXES = {
   // only (ML/spread/total/BTTS); soccer has no player props in our universe.
   KXEPL: "epl", KXLALIGA: "laliga", KXSERIEA: "seriea",
   KXBUNDESLIGA: "bundesliga", KXLIGUE1: "ligue1", KXUCL: "ucl",
+  // National-team soccer (flags, not crests). KXWC covers WC ML/spread/total/
+  // BTTS/1H; KXINTLFRIENDLY the friendlies. Added 2026-06-04.
+  KXWC: "wcup", KXINTLFRIENDLY: "intlfriendly",
 };
 const MONTHS = { JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12 };
 
@@ -1034,6 +1038,8 @@ const KNOWN_ABBRS = {
   bundesliga: new Set(Object.keys(SOCCER_TEAMS)),
   ligue1: new Set(Object.keys(SOCCER_TEAMS)),
   ucl: new Set(Object.keys(SOCCER_TEAMS)),
+  wcup: new Set(Object.keys(NATIONAL_TEAMS)),
+  intlfriendly: new Set(Object.keys(NATIONAL_TEAMS)),
 };
 function parseTeamsFromChunk(chunk, sport) {
   const m = chunk.match(/^\d{2}[A-Z]{3}\d{2}(?:\d{4})?([A-Z]+)$/);
@@ -2868,11 +2874,14 @@ function renderGameCards() {
     // (BER = Bertola OR Berrettini), so prefer the live-state names, then the
     // index, then the raw code.
     const isTennisCard = g.sport === "atp" || g.sport === "wta";
+    const isNationalCard = g.sport === "wcup" || g.sport === "intlfriendly";
     const title = isTennisCard
       ? (live
           ? [live.away.name, live.home.name].filter(Boolean).join(" vs ")
           : (g.teams || []).map((a) => state.athleteIdx[a] || a).join(" vs "))
-      : (g.teams || []).join(" @ ");
+      : isNationalCard
+        ? (g.teams || []).map((a) => NATIONAL_TEAMS[a] || a).join(" vs ")
+        : (g.teams || []).join(" @ ");
     const dateHtml = g.dateLabel ? `<span class="game-date">${escapeHtml(g.dateLabel)}</span>` : "";
     const collapsed = !state.gameExpanded.has(g.key);
     const chevron = collapsed ? "▸" : "▾";

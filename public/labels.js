@@ -11,6 +11,7 @@ import {
   NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
   MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl, soccerLogoUrl,
 } from "/teams.js";
+import { NATIONAL_TEAMS, countryFlagUrl } from "/national_teams.js";
 
 // Series-prefix → league key used to look up soccer logos.
 const SOCCER_LEAGUE_FROM_PREFIX = {
@@ -571,6 +572,18 @@ export function legTeams(ticker, side) {
     return { sport: tour, teams: [pickAbbr] };
   }
 
+  // National-team soccer (World Cup + international friendlies). Codes are
+  // 3-letter FIFA/IOC; teamLogoUrl resolves them to country flags. Same
+  // both-teams shape as club soccer, but a distinct sport + team table.
+  if (ticker.startsWith("KXWC") || ticker.startsWith("KXINTLFRIENDLY")) {
+    const sport = ticker.startsWith("KXWC") ? "wcup" : "intlfriendly";
+    const rest = ticker.slice(ticker.indexOf("-") + 1);
+    const [dt] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, NATIONAL_TEAMS);
+    return { sport, teams: [a, b] };
+  }
+
   // Soccer — return both teams + the league so teamLogoUrl can resolve
   // the correct logo (Kalshi abbrevs aren't unique across leagues).
   // KXEPLGAME isn't in SOCCER_LEAGUES (game-only labels), so check it
@@ -702,6 +715,7 @@ export function teamLogoUrl(sport, abbr, opts = {}) {
     return _logoCtx.playerFlagIdx?.[abbr] || tennisFlagUrl(abbr);
   }
   if (s === "ipl") return iplLogoUrl(abbr);
+  if (s === "wcup" || s === "intlfriendly") return countryFlagUrl(abbr);
   if (s === "soccer") {
     // League required for disambiguation (LEV is Levante in LaLiga AND
     // Leverkusen in Bundesliga; BRE is Brentford in EPL AND Bremen in
