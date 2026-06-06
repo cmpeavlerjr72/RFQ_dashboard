@@ -126,6 +126,18 @@ export const NATIONAL_TEAMS = {
   UZB: "Uzbekistan",
   VEN: "Venezuela",
   WAL: "Wales",
+  // Added 2026-06-06: codes seen in live friendlies/WC but absent from the
+  // 6/4 auto-gen (caused raw-code titles + missing flags on the first
+  // INTLFRIENDLY fill). Kept here so a regen doesn't lose them.
+  CAF: "Central African Republic",
+  CAM: "Cambodia",
+  ETH: "Ethiopia",
+  GEQ: "Equatorial Guinea",
+  KGZ: "Kyrgyzstan",
+  MAW: "Malawi",
+  PHI: "Philippines",
+  PSE: "Palestine",
+  TTO: "Trinidad and Tobago",
 };
 
 // 3-letter national code -> flagcdn ISO 3166-1 alpha-2 (UK home nations use
@@ -255,6 +267,16 @@ export const NATIONAL_FLAG = {
   UZB: "uz",
   VEN: "ve",
   WAL: "gb-wls",
+  // Added 2026-06-06 (see NATIONAL_TEAMS note above). ISO 3166-1 alpha-2.
+  CAF: "cf",
+  CAM: "kh",
+  ETH: "et",
+  GEQ: "gq",
+  KGZ: "kg",
+  MAW: "mw",
+  PHI: "ph",
+  PSE: "ps",
+  TTO: "tt",
 };
 
 /** Country flag URL for a national-team 3-letter code. Empty when unmapped. */
