@@ -18,6 +18,7 @@ import {
   getEventMarkets,
   getRfqLegs,
   recoverParlay,
+  getSoccerStartTimes,
   cacheStats as kalshiCacheStats,
   resolveAccount,
   listAccounts,
@@ -138,6 +139,17 @@ app.get("/api/kalshi/recover/:ticker", async (req, res, next) => {
   try {
     upstreamCallCount++;
     res.json(await recoverParlay(acct(req), req.params.ticker));
+  } catch (e) { next(e); }
+});
+
+// Soccer kickoff times from Kalshi's milestone feed, keyed by ML event ticker.
+// Lets the frontend show a kickoff time on soccer cards ESPN has no data for
+// (e.g. lower-tier international friendlies). Pulled from Kalshi, so it works on
+// the Render deploy (no local start_times file needed).
+app.get("/api/start-times", async (req, res, next) => {
+  try {
+    upstreamCallCount++;
+    res.json({ starts: await getSoccerStartTimes(acct(req)), source: "kalshi-milestone" });
   } catch (e) { next(e); }
 });
 

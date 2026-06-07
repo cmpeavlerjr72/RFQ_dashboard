@@ -189,6 +189,14 @@ const RFQ_DISK_DIR = path.join(CACHE_ROOT, "rfq_legs");
 const RFQ_DISK_OK = ensureDir(RFQ_DISK_DIR);
 const rfqMemCache = new TTLCache<any>();
 
+// Soccer kickoff times from Kalshi's OWN milestone feed — the authoritative
+// source build_start_times.py uses as primary (covers obscure international
+// friendlies ESPN omits). 10-min TTL. Keyed by the ML event ticker
+// (KXWCGAME-26JUN27JORARG, KXINTLFRIENDLYGAME-26JUN07AFGPAK). The dashboard uses
+// this to show a kickoff time on cards ESPN has no data for. Fetched from Kalshi
+// (not a local file) so it works on the Render deploy, which has no data/ dir.
+const soccerMilestoneCache = new TTLCache<Record<string, string>>();
+
 function rfqDiskPath(account: string, rfqId: string): string {
   return path.join(RFQ_DISK_DIR, `${account}__${rfqId}.json`);
 }
@@ -204,6 +212,45 @@ export async function getBalance(account: string, force = false): Promise<any> {
     key,
     () => getJson(account, "/portfolio/balance"),
     30_000,
+  );
+}
+
+/**
+ * Soccer kickoff times from Kalshi's milestone feed, keyed by the ML event
+ * ticker (e.g. KXWCGAME-26JUN27JORARG -> "2026-06-27T18:00:00Z"). Mirrors
+ * sandbox/build_start_times.py kalshi_soccer_milestone_starts: paginate
+ * /milestones?type=soccer_tournament_multi_leg and read details.main_game_event_ticker
+ * -> start_date. No team-name matching; covers matches ESPN doesn't.
+ */
+export async function getSoccerStartTimes(account: string): Promise<Record<string, string>> {
+  return soccerMilestoneCache.getOrFetch(
+    `${account}:soccer-milestones`,
+    async () => {
+      const min = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10) + "T00:00:00Z";
+      const out: Record<string, string> = {};
+      let cursor = "";
+      for (let i = 0; i < 20; i++) {
+        const p = `/milestones?limit=200&type=soccer_tournament_multi_leg`
+          + `&minimum_start_date=${encodeURIComponent(min)}`
+          + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+        let d: any;
+        try { d = await getJson(account, p); } catch { break; }
+        for (const m of (d?.milestones || [])) {
+          const sd = m?.start_date;
+          if (!sd) continue;
+          const det = m?.details || {};
+          let mt: string | undefined = det.main_game_event_ticker;
+          if (!(mt && mt.includes("GAME-"))) {
+            mt = (m?.primary_event_tickers || []).find((t: string) => t.includes("GAME-")) || mt;
+          }
+          if (mt) out[mt] = sd;
+        }
+        cursor = d?.cursor || "";
+        if (!cursor) break;
+      }
+      return out;
+    },
+    600_000, // 10 min
   );
 }
 

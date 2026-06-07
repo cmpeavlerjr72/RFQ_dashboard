@@ -40,6 +40,10 @@ const state = {
   positions: [],          // each = full parlay record
   fillsByParlay: {},
   scoreboards: {},        // sport:date -> ESPN scoreboard payload
+  // ML event ticker (KXWCGAME-…, KXINTLFRIENDLYGAME-…) -> ISO kickoff, from
+  // Kalshi's milestone feed (/api/start-times). Used to show a kickoff time on
+  // soccer cards ESPN doesn't cover (lower-tier international friendlies).
+  soccerStarts: {},
   // gameGroupKey -> projected FINAL total from the Kalshi total ladder (the
   // strike closest to 50/50 right now). Null when the live ladder isn't priced
   // (risk-grid then falls back to a pace-blend projection). Live games only.
@@ -155,12 +159,16 @@ async function refresh() {
   state.fetching = true;
   setStatus("fetching", "fetching");
   try {
-    const [bal, pos, fills] = await Promise.all([
+    const [bal, pos, fills, starts] = await Promise.all([
       api("/api/kalshi/balance"),
       api("/api/kalshi/positions"),
       api("/api/fills"),
+      // soccer kickoff times (Kalshi milestone feed) — defensive: a failure here
+      // must never break the dashboard, so fall back to an empty map.
+      api("/api/start-times").catch(() => ({ starts: {} })),
     ]);
 
+    state.soccerStarts = (starts && starts.starts) || {};
     state.balance = bal;
     state.fillsByParlay = {};
     for (const f of (fills.fills || [])) {
@@ -1677,6 +1685,34 @@ function buildGameTree(g, parlays, live) {
   };
 }
 
+// Dashboard sport code -> Kalshi ML (…GAME) series prefix. Used to join a game
+// card to state.soccerStarts (keyed by the ML event ticker) so we can show a
+// kickoff time on soccer games ESPN has no data for (lower-tier friendlies).
+const SOCCER_GAME_SERIES = {
+  epl: "KXEPLGAME", laliga: "KXLALIGAGAME", seriea: "KXSERIEAGAME",
+  bundesliga: "KXBUNDESLIGAGAME", ligue1: "KXLIGUE1GAME", ucl: "KXUCLGAME",
+  wcup: "KXWCGAME", intlfriendly: "KXINTLFRIENDLYGAME",
+};
+
+// Kickoff Date for a soccer game card from the Kalshi milestone map, or null.
+function kickoffForGame(g) {
+  const series = SOCCER_GAME_SERIES[g && g.sport];
+  if (!series || !g.key) return null;
+  const [, dateToken, matchup] = g.key.split("|");
+  if (!dateToken || !matchup) return null;
+  const iso = state.soccerStarts[`${series}-${dateToken}${matchup}`];
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// "Kickoff 2:00 PM" (viewer-local) for a soccer card, or null when unknown.
+function kickoffLabel(g) {
+  const d = kickoffForGame(g);
+  if (!d) return null;
+  return "Kickoff " + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 // Compact live-state summary for an ESPN event: { state, score, periodLabel }.
 // score is "AWAY n - n HOME" with the away team first (ESPN convention).
 // `sport` is required so team-abbr aliasing (e.g. ESPN "SA" -> Kalshi "SAS")
@@ -2868,6 +2904,12 @@ function renderGameCards() {
     ).join("");
     const sport = (g.sport || "").toUpperCase();
     const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
+    // Pregame soccer: prefer our actual kickoff time (Kalshi milestone feed)
+    // over ESPN's vague "Scheduled".
+    if (live && live.state === "pre") {
+      const ko = kickoffLabel(g);
+      if (ko) live.periodLabel = ko;
+    }
     // Tennis cards: show full athlete names ("Matteo Berrettini vs Francisco
     // Comesana") joined with "vs". The matched ESPN competition carries the
     // correct names; the global athlete index can collide on 3-letter codes
@@ -3126,6 +3168,18 @@ function renderGameCards() {
     }
 
     let scorePanel = "";
+    if (!live) {
+      // No ESPN data for this game (e.g. a lower-tier international friendly ESPN
+      // doesn't cover). Still show OUR kickoff time from the Kalshi milestone
+      // feed so the card carries a start time instead of nothing.
+      const ko = kickoffLabel(g);
+      if (ko) {
+        scorePanel = `
+        <div class="score-panel">
+          <div class="score-status"><span class="live-dot pre"></span><span>${escapeHtml(ko)}</span></div>
+        </div>`;
+      }
+    }
     if (live) {
       const dotCls = live.state === "in" ? "live-dot live" : live.state === "post" ? "live-dot post" : "live-dot pre";
       const probName = (n) => `<span class="${heldKPitchers.has(lastOf(n)) ? "sp-held" : ""}">${escapeHtml(n)}</span>`;
