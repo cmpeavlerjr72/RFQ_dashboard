@@ -386,6 +386,8 @@ function renderBreakdown(data) {
     const a = row.agg;
     const sportLabel = row.sport === "CROSS" ? "Cross-sport"
       : row.sport === "UNKNOWN" ? "Other"
+      : row.sport === "WC" ? "World Cup"
+      : row.sport === "INTLFRIENDLY" ? "Intl Friendly"
       : row.sport;
     const logoCell = logoStripForTickers(parlayMap, row.parlay_tickers, row.sport)
       || `<span class="logo-fallback">${row.parlay_tickers.length} parlays</span>`;

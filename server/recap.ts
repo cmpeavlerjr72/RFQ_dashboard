@@ -355,16 +355,18 @@ function aggregateParlay(parlayTicker: string, fills: KalshiFill[], settle?: Kal
 // Match the KX{SPORT}{STAT}- prefix. SPORT is the longest known league
 // token; STAT is what follows up to the first dash.
 // Tennis tour codes (ATPMATCH, WTAMATCH) are normalised to ATP/WTA below.
-// Soccer league codes (LALIGA, SERIEA, BUNDESLIGA, LIGUE1, EPL) are
-// normalised to SOCCER.
-const LEG_SPORT_RE = /^KX(NBA|MLB|NHL|NFL|WNBA|NCAA[A-Z]*|UFC|GOLF|F1|TENNIS|ATPMATCH|WTAMATCH|MLS|EPL|LALIGA|SERIEA|BUNDESLIGA|LIGUE1|SOCCER|IPL|CRICKET)([A-Z0-9]+)-/;
+// Club soccer league codes (LALIGA, SERIEA, BUNDESLIGA, LIGUE1, EPL, MLS) are
+// normalised to SOCCER. INTLFRIENDLY (international friendlies) and WC (World
+// Cup) are kept SEPARATE so the recap breaks them out into their own sections.
+// INTLFRIENDLY must precede WC; neither overlaps another token's prefix.
+const LEG_SPORT_RE = /^KX(NBA|MLB|NHL|NFL|WNBA|NCAA[A-Z]*|UFC|GOLF|F1|TENNIS|ATPMATCH|WTAMATCH|MLS|EPL|LALIGA|SERIEA|BUNDESLIGA|LIGUE1|INTLFRIENDLY|WC|SOCCER|IPL|CRICKET)([A-Z0-9]+)-/;
 const GAME_LEVEL_STATS = new Set([
   "GAME", "SPREAD", "TOTAL", "F5", "F5SPREAD", "F5TOTAL", "TEAMTOTAL",
   "RFI", "GOAL",
   // IPL game-level stats
   "FIRST10",
-  // Soccer game-level stats (full match, BTTS, first half)
-  "BTTS", "1H",
+  // Soccer game-level stats (full match, BTTS, first half + its variants)
+  "BTTS", "1H", "1HSPREAD", "1HTOTAL", "1HBTTS",
 ]);
 
 const SOCCER_LEAGUE_CODES = new Set(["LALIGA", "SERIEA", "BUNDESLIGA", "LIGUE1", "EPL", "MLS"]);
