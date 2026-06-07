@@ -44,6 +44,9 @@ const state = {
   // Kalshi's milestone feed (/api/start-times). Used to show a kickoff time on
   // soccer cards ESPN doesn't cover (lower-tier international friendlies).
   soccerStarts: {},
+  // ML event ticker -> {home, away, statusText, half, winner, matchStatus} from
+  // Kalshi /live_data. Live/final scores for soccer games ESPN doesn't cover.
+  soccerScores: {},
   // gameGroupKey -> projected FINAL total from the Kalshi total ladder (the
   // strike closest to 50/50 right now). Null when the live ladder isn't priced
   // (risk-grid then falls back to a pace-blend projection). Live games only.
@@ -169,6 +172,7 @@ async function refresh() {
     ]);
 
     state.soccerStarts = (starts && starts.starts) || {};
+    state.soccerScores = (starts && starts.scores) || {};
     state.balance = bal;
     state.fillsByParlay = {};
     for (const f of (fills.fills || [])) {
@@ -1694,16 +1698,32 @@ const SOCCER_GAME_SERIES = {
   wcup: "KXWCGAME", intlfriendly: "KXINTLFRIENDLYGAME",
 };
 
-// Kickoff Date for a soccer game card from the Kalshi milestone map, or null.
-function kickoffForGame(g) {
+// The Kalshi ML event ticker for a soccer game card (joins to the milestone
+// kickoff/score maps), or null for non-soccer / unparseable cards.
+function soccerEventTicker(g) {
   const series = SOCCER_GAME_SERIES[g && g.sport];
   if (!series || !g.key) return null;
   const [, dateToken, matchup] = g.key.split("|");
   if (!dateToken || !matchup) return null;
-  const iso = state.soccerStarts[`${series}-${dateToken}${matchup}`];
+  return `${series}-${dateToken}${matchup}`;
+}
+
+// Kickoff Date for a soccer game card from the Kalshi milestone map, or null.
+function kickoffForGame(g) {
+  const et = soccerEventTicker(g);
+  const iso = et && state.soccerStarts[et];
   if (!iso) return null;
   const d = new Date(iso);
   return isNaN(d.getTime()) ? null : d;
+}
+
+// Live/final score for a soccer card from Kalshi /live_data, or null. Shape:
+// {home, away, statusText, half, winner, matchStatus}. matchStatus "live"|"ended".
+function soccerScoreForGame(g) {
+  const et = soccerEventTicker(g);
+  const sc = et && state.soccerScores[et];
+  if (!sc || sc.home == null || sc.away == null) return null;
+  return sc;
 }
 
 // "Kickoff 2:00 PM" (viewer-local) for a soccer card, or null when unknown.
@@ -3170,14 +3190,30 @@ function renderGameCards() {
     let scorePanel = "";
     if (!live) {
       // No ESPN data for this game (e.g. a lower-tier international friendly ESPN
-      // doesn't cover). Still show OUR kickoff time from the Kalshi milestone
-      // feed so the card carries a start time instead of nothing.
-      const ko = kickoffLabel(g);
-      if (ko) {
+      // doesn't cover). Fall back to Kalshi's own data: show the live/final SCORE
+      // from /live_data when the match is underway/over, otherwise our kickoff
+      // time from the milestone feed. (g.teams is in title order = [home, away].)
+      const sc = soccerScoreForGame(g);
+      if (sc) {
+        const dot = sc.matchStatus === "live" ? "live-dot live" : "live-dot post";
+        const label = sc.statusText || sc.half || (sc.matchStatus === "live" ? "Live" : "Final");
+        const teams = g.teams || [];
+        const homeName = NATIONAL_TEAMS[teams[0]] || teams[0] || "Home";
+        const awayName = NATIONAL_TEAMS[teams[1]] || teams[1] || "Away";
         scorePanel = `
         <div class="score-panel">
-          <div class="score-status"><span class="live-dot pre"></span><span>${escapeHtml(ko)}</span></div>
+          <div class="score-status"><span class="${dot}"></span><span>${escapeHtml(label)}</span></div>
+          <div class="score-team ${sc.winner === "home" ? "leading" : ""}"><span class="score-name">${escapeHtml(homeName)}</span><span class="score-num">${sc.home}</span></div>
+          <div class="score-team ${sc.winner === "away" ? "leading" : ""}"><span class="score-name">${escapeHtml(awayName)}</span><span class="score-num">${sc.away}</span></div>
         </div>`;
+      } else {
+        const ko = kickoffLabel(g);
+        if (ko) {
+          scorePanel = `
+          <div class="score-panel">
+            <div class="score-status"><span class="live-dot pre"></span><span>${escapeHtml(ko)}</span></div>
+          </div>`;
+        }
       }
     }
     if (live) {

@@ -189,13 +189,17 @@ const RFQ_DISK_DIR = path.join(CACHE_ROOT, "rfq_legs");
 const RFQ_DISK_OK = ensureDir(RFQ_DISK_DIR);
 const rfqMemCache = new TTLCache<any>();
 
-// Soccer kickoff times from Kalshi's OWN milestone feed — the authoritative
-// source build_start_times.py uses as primary (covers obscure international
-// friendlies ESPN omits). 10-min TTL. Keyed by the ML event ticker
-// (KXWCGAME-26JUN27JORARG, KXINTLFRIENDLYGAME-26JUN07AFGPAK). The dashboard uses
-// this to show a kickoff time on cards ESPN has no data for. Fetched from Kalshi
-// (not a local file) so it works on the Render deploy, which has no data/ dir.
-const soccerMilestoneCache = new TTLCache<Record<string, string>>();
+// Soccer milestones from Kalshi's OWN feed — the authoritative source
+// build_start_times.py uses as primary (covers obscure international friendlies
+// ESPN omits). Each carries the ML event ticker (KXWCGAME-…, KXINTLFRIENDLYGAME-…),
+// the milestone id (for /live_data score lookups), and the kickoff. 10-min TTL.
+interface SoccerMilestone { ticker: string; id: string; start: string; }
+const soccerMilestoneCache = new TTLCache<SoccerMilestone[]>();
+// Combined kickoff + live-score map for the dashboard (25s TTL). Scores come
+// from /live_data/milestone/{id}, fetched only for games near "now" so the call
+// count stays bounded regardless of how many milestones the feed has. Works on
+// the Render deploy (pulled from Kalshi, not the local start_times file).
+const soccerDataCache = new TTLCache<{ starts: Record<string, string>; scores: Record<string, any> }>();
 
 function rfqDiskPath(account: string, rfqId: string): string {
   return path.join(RFQ_DISK_DIR, `${account}__${rfqId}.json`);
@@ -216,18 +220,17 @@ export async function getBalance(account: string, force = false): Promise<any> {
 }
 
 /**
- * Soccer kickoff times from Kalshi's milestone feed, keyed by the ML event
- * ticker (e.g. KXWCGAME-26JUN27JORARG -> "2026-06-27T18:00:00Z"). Mirrors
- * sandbox/build_start_times.py kalshi_soccer_milestone_starts: paginate
- * /milestones?type=soccer_tournament_multi_leg and read details.main_game_event_ticker
- * -> start_date. No team-name matching; covers matches ESPN doesn't.
+ * Soccer milestones from Kalshi's feed: {ticker (ML event ticker), id, start}.
+ * Mirrors sandbox/build_start_times.py kalshi_soccer_milestone_starts: paginate
+ * /milestones?type=soccer_tournament_multi_leg, read details.main_game_event_ticker
+ * + id + start_date. No team-name matching; covers matches ESPN doesn't.
  */
-export async function getSoccerStartTimes(account: string): Promise<Record<string, string>> {
+async function getSoccerMilestones(account: string): Promise<SoccerMilestone[]> {
   return soccerMilestoneCache.getOrFetch(
     `${account}:soccer-milestones`,
     async () => {
       const min = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10) + "T00:00:00Z";
-      const out: Record<string, string> = {};
+      const out: SoccerMilestone[] = [];
       let cursor = "";
       for (let i = 0; i < 20; i++) {
         const p = `/milestones?limit=200&type=soccer_tournament_multi_leg`
@@ -237,13 +240,14 @@ export async function getSoccerStartTimes(account: string): Promise<Record<strin
         try { d = await getJson(account, p); } catch { break; }
         for (const m of (d?.milestones || [])) {
           const sd = m?.start_date;
-          if (!sd) continue;
+          const id = m?.id;
+          if (!sd || !id) continue;
           const det = m?.details || {};
           let mt: string | undefined = det.main_game_event_ticker;
           if (!(mt && mt.includes("GAME-"))) {
             mt = (m?.primary_event_tickers || []).find((t: string) => t.includes("GAME-")) || mt;
           }
-          if (mt) out[mt] = sd;
+          if (mt) out.push({ ticker: mt, id, start: sd });
         }
         cursor = d?.cursor || "";
         if (!cursor) break;
@@ -251,6 +255,52 @@ export async function getSoccerStartTimes(account: string): Promise<Record<strin
       return out;
     },
     600_000, // 10 min
+  );
+}
+
+/**
+ * Kickoff times + live/final scores for soccer, keyed by ML event ticker.
+ *   { starts: {ticker: ISO kickoff}, scores: {ticker: {home, away, statusText, half, winner, matchStatus}} }
+ * Scores come from /live_data/milestone/{id} — Kalshi's own score feed, which
+ * covers EVERY game it makes markets on (including friendlies ESPN omits). To
+ * keep the call count bounded we only pull /live_data for games near "now"
+ * (started within the last 12h, up to 30min out) — finished-long-ago and
+ * far-future games don't need live polling. 25s TTL.
+ */
+export async function getSoccerStartData(
+  account: string,
+): Promise<{ starts: Record<string, string>; scores: Record<string, any> }> {
+  return soccerDataCache.getOrFetch(
+    `${account}:soccer-data`,
+    async () => {
+      const ms = await getSoccerMilestones(account);
+      const starts: Record<string, string> = {};
+      const scores: Record<string, any> = {};
+      const now = Date.now();
+      for (const m of ms) starts[m.ticker] = m.start;
+      const near = ms.filter((m) => {
+        const t = Date.parse(m.start);
+        return t && t >= now - 12 * 3600_000 && t <= now + 30 * 60_000;
+      });
+      await Promise.all(near.map(async (m) => {
+        try {
+          const ld = await getJson(account, `/live_data/milestone/${m.id}`);
+          const d = ld?.live_data?.details;
+          if (d && d.match_status && d.match_status !== "scheduled") {
+            scores[m.ticker] = {
+              home: d.home_same_game_score,
+              away: d.away_same_game_score,
+              statusText: d.status_text,
+              half: d.half,
+              winner: d.winner,
+              matchStatus: d.match_status,
+            };
+          }
+        } catch { /* a single game's live_data failing must not drop the rest */ }
+      }));
+      return { starts, scores };
+    },
+    25_000,
   );
 }
 
