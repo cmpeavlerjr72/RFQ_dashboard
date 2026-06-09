@@ -2423,7 +2423,13 @@ function computeGameNetting(positions, gameKey) {
   const candOf = (v) => {
     if (varType.get(v) !== "num") return [...varCats.get(v)].sort().concat([_NET_OTHER]);
     let cs = _numCandsNet([...varLines.get(v)]);
-    if (v === "margin" && !drawPossible) cs = cs.filter((x) => x !== 0); // no ties
+    // margin 0 is an impossible tie for a no-draw sport, but for a moneyline-only
+    // var (line 0.5 => cands {0,1}) the 0 is the SOLE representative of the "ref
+    // team loses" (margin<0) region. Deleting it blinds the worst-case to losses
+    // on that side (a shared buyer-NO ML reads worstCase 0). Remap 0 -> -1 (a real
+    // "ref loses by 1" outcome) instead — keeps losing-side coverage, only adds
+    // real scenarios. Mirrors run_netting_maker.worst_case_net_loss.
+    if (v === "margin" && !drawPossible) cs = [...new Set(cs.map((x) => x === 0 ? -1 : x))].sort((a, b) => a - b);
     return cs;
   };
 
