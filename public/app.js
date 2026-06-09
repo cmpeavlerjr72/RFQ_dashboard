@@ -3836,10 +3836,15 @@ function renderGameCards() {
                 <span class="label">expected</span>
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
               </span>
-              ${(g.hedged ? g.worstCase : g.exposure) > 0 ? `
-              <span class="stat" title="Game-level ROI = expected ÷ net at-risk (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.hedged ? g.worstCase : g.exposure)}).">
-                <span class="label">ROI</span>
-                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / (g.hedged ? g.worstCase : g.exposure) * 100).toFixed(0)}%</span>
+              ${g.exposure > 0 ? `
+              <span class="stat" title="ROI (gross) = expected ÷ total premium on this game (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.exposure)}) — return on capital deployed.">
+                <span class="label">ROI gross</span>
+                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.exposure * 100).toFixed(0)}%</span>
+              </span>` : ""}
+              ${g.worstCase > 0.005 ? `
+              <span class="stat" title="RoR (net) = expected ÷ worst-case net loss after dual-direction offsets (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.worstCase)}) — return on the risk actually carried. ${g.hedged ? `${g.offsetPct}% of gross is netted away, so RoR runs above ROI.` : "Nothing offsets here, so this equals ROI gross."}">
+                <span class="label">RoR net</span>
+                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.worstCase * 100).toFixed(0)}%</span>
               </span>` : ""}` : ""}
           </div>
         </div>
@@ -3924,8 +3929,15 @@ function renderSummary() {
   const net = computePortfolioNetting();
   const atRisk = net.worstCase;
   const hedgedPortfolio = net.offsetPct >= 1 && net.gross - net.worstCase > 0.005;
-  const roiDenom = atRisk > 0.005 ? atRisk : totalCost;
-  const roiPct = roiDenom > 0 ? (evTotal / roiDenom * 100) : null;
+  // Two distinct yardsticks (see also game-level cards):
+  //   ROI (gross) = expected ÷ total premium deployed — return on CAPITAL.
+  //   RoR  (net)  = expected ÷ worst-case net loss after offsets — return on
+  //                 the RISK we actually carry. Netting drives these apart: as
+  //                 offsetting flow cancels worst-case, RoR climbs while ROI on
+  //                 the capital tied up stays flat. When nothing is hedged the
+  //                 two converge (worst-case == cost).
+  const roiGrossPct = totalCost > 0.005 ? (evTotal / totalCost * 100) : null;
+  const rorNetPct   = atRisk   > 0.005 ? (evTotal / atRisk   * 100) : roiGrossPct;
   // Portfolio value = total account value we expect to walk away with: free
   // cash PLUS the open parlays' cost paid plus their summed expected P&L.
   // Inherits the same "missing odds" caveat as the EV line. Kalshi's
@@ -3947,7 +3959,10 @@ function renderSummary() {
       <div class="kpi-half"><div class="label">at risk (net)</div><div class="value ${hedgedPortfolio ? "pos" : ""}">${fmtMoney(atRisk)}</div></div>
     </div>
     <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
-    <div class="kpi" title="${escapeHtml(`Expected outcome ÷ amount truly at risk (${fmtMoney(evTotal)} / ${fmtMoney(roiDenom)}). The denominator is worst-case net loss after offsets, not gross cost — return on what we can actually lose.`)}"><div class="label">current ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
+    <div class="kpi kpi-split" title="${escapeHtml(`ROI (gross) = expected outcome ÷ total premium deployed (${fmtMoney(evTotal)} / ${fmtMoney(totalCost)}) — return on the capital tied up. RoR (net) = expected outcome ÷ worst-case net loss after offsets (${fmtMoney(evTotal)} / ${fmtMoney(atRisk)}) — return on the risk we actually carry. Netting pushes these apart: as offsetting flow cancels worst-case, RoR rises while ROI on capital stays flat. Equal when nothing is hedged.`)}">
+      <div class="kpi-half"><div class="label">ROI (gross)</div><div class="value ${pnlClass(roiGrossPct)}">${roiGrossPct != null ? roiGrossPct.toFixed(0) + "%" : "—"}</div></div>
+      <div class="kpi-half"><div class="label">RoR (net)</div><div class="value ${pnlClass(rorNetPct)}">${rorNetPct != null ? rorNetPct.toFixed(0) + "%" : "—"}</div></div>
+    </div>
     <div class="kpi kpi-split" title="${escapeHtml(`Max gross = un-netted sum of every parlay's max profit (if they all won). TO WIN (net) = the most we can actually net — offsetting positions can't all win in the same outcome.${winHedgedP ? ` ${net.winOffsetPct}% of the upside is unreachable due to offsets.` : " Nothing offsets, so they're equal."}`)}">
       <div class="kpi-half"><div class="label">max gross</div><div class="value pos">+${net.grossWin.toFixed(2)}</div></div>
       <div class="kpi-half"><div class="label">to win (net)</div><div class="value ${maxWinNet >= 0 ? "pos" : "neg"}">${maxWinNet >= 0 ? "+" : ""}${maxWinNet.toFixed(2)}</div></div>
