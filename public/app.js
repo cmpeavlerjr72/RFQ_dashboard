@@ -2293,6 +2293,9 @@ function _lineForTicker(ticker, n) {
 // draw/tie pick stays on the categorical winner axis; btts yes=both score.
 // Margin legs carry `team`; computeGameNetting re-orients them onto one
 // reference team per game (mirrors leg_constraint + worst_case_net_loss).
+const _SOCCER_NET_SPORTS = new Set(["wcup", "intlfriendly", "epl", "laliga",
+  "seriea", "bundesliga", "ligue1", "ucl"]);
+
 function _legConstraintNet(ticker, buyerSide) {
   const yes = (buyerSide || "yes").toLowerCase() !== "no";
   const gl = parseGameLevelLeg(ticker);
@@ -2301,6 +2304,13 @@ function _legConstraintNet(ticker, buyerSide) {
       const team = String(gl.pick || "").replace(/\d+$/, "") || gl.pick;
       if (!team) return null;
       if (team === "TIE" || team === "DRAW") {
+        return { varKey: "winner", vtype: "cat", op: yes ? "in" : "notin", set: [team] };
+      }
+      // Soccer ML is 3-way {home, TIE, away}: put team picks on the SAME winner
+      // axis as TIE so the three form one partition and NO positions across them
+      // net (you can lose at most one). SPREAD stays a margin threshold. Mirrors
+      // leg_constraint / worst_case_net_loss (2026-06-09 3-way fix).
+      if (gl.kind === "ml" && _SOCCER_NET_SPORTS.has(gl.sport)) {
         return { varKey: "winner", vtype: "cat", op: yes ? "in" : "notin", set: [team] };
       }
       // SPREAD => team covers <=> margin_team > floor_strike (Kalshi strike_type
