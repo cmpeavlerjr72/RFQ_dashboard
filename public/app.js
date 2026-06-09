@@ -1369,7 +1369,8 @@ function _treeNodeExpected(parlays, gameKey, asg) {
   return exp;
 }
 
-const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"]);
+const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl",
+  "wcup", "intlfriendly"]);   // intl comps were missing -> friendlies were treated no-draw/2-way
 
 // Did a settled outcome go our way? Compare the expected $ under the outcome
 // that actually happened vs the alternative outcomes for that variable (holding
