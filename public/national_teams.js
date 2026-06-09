@@ -138,6 +138,11 @@ export const NATIONAL_TEAMS = {
   PHI: "Philippines",
   PSE: "Palestine",
   TTO: "Trinidad and Tobago",
+  CRI: "Costa Rica",
+  ISL: "Iceland",
+  NGR: "Nigeria",
+  TAN: "Tanzania",
+  TOG: "Togo",
 };
 
 // 3-letter national code -> flagcdn ISO 3166-1 alpha-2 (UK home nations use
@@ -277,6 +282,11 @@ export const NATIONAL_FLAG = {
   PHI: "ph",
   PSE: "ps",
   TTO: "tt",
+  CRI: "cr",
+  ISL: "is",
+  NGR: "ng",
+  TAN: "tz",
+  TOG: "tg",
 };
 
 /** Country flag URL for a national-team 3-letter code. Empty when unmapped. */
