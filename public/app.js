@@ -2835,11 +2835,21 @@ function computeRiskGrid(g, parlays, live) {
   });
   const home = teams ? teams[1] : null, away = teams ? teams[0] : null;
 
+  // Live reachability: scores only INCREASE, so a final (margin m, total t) is
+  // reachable from the current (curMargin, curTotal) iff the remaining goals
+  // (t − curTotal) can cover the margin swing |m − curMargin|. Impossible cells
+  // are blanked + excluded from the color scale, so the heatmap shows only what
+  // can still happen (e.g. at 3-1 every total<4 column is dead).
+  const inProgress = !!(live && live.total != null && live.margin != null && !live.final);
+  const curTotal = inProgress ? live.total : null;
+  const curMargin = inProgress ? live.margin : null;
+  const reach = margins.map((m) =>
+    totals.map((t) => !inProgress || (t - curTotal) >= Math.abs(m - curMargin) - 1e-9));
   let maxAbs = 0;
-  const cells = margins.map((m) => totals.map((t) => {
+  const cells = margins.map((m, ri) => totals.map((t, ci) => {
     const asg = { margin: m, total: t, winner: m > 0 ? home : m < 0 ? away : null };
     const pnl = _treeNodeExpected(ours, g.key, asg);
-    if (Math.abs(pnl) > maxAbs) maxAbs = Math.abs(pnl);
+    if (reach[ri][ci] && Math.abs(pnl) > maxAbs) maxAbs = Math.abs(pnl);
     return pnl;
   }));
 
@@ -2861,7 +2871,7 @@ function computeRiskGrid(g, parlays, live) {
     }
     mark = { margin: live.margin, total, final: !!live.final, projected };
   }
-  return { margins, totals, cells, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep };
+  return { margins, totals, cells, reach, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep };
 }
 
 function renderRiskGridHtml(grid) {
@@ -2895,6 +2905,12 @@ function renderRiskGridHtml(grid) {
     const ylab = `${winTeam} -${Math.abs(mv)}`;
     let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(winTeam)} wins by ${Math.abs(mv)}">${escapeHtml(ylab)}</div>`;
     for (let c = 0; c < NC; c++) {
+      // Live-impossible cell (can't be reached from the current score): blank it.
+      if (grid.reach && !grid.reach[r][c]) {
+        cellsHtml += `<div class="rg-cell${flip} rg-dead" style="background:rgba(80,80,90,0.05);color:rgba(160,160,170,0.25)" `
+          + `title="impossible from current score (${totals[c]} total can't be reached)">·</div>`;
+        continue;
+      }
       const pnl = cells[r][c];
       const isMark = (r === markR && c === markC);
       const base = `${winTeam} -${Math.abs(mv)}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
