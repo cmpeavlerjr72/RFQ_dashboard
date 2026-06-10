@@ -2824,9 +2824,18 @@ function computeRiskGrid(g, parlays, live) {
   const tStep = unitStep ? 1 : Math.max(1, Math.round((2 * tHalf) / (NT - 1)));
   const mStep = unitStep ? 1 : Math.max(1, Math.round(mHalf / (NM / 2)));
   const thalf = (NT - 1) / 2;
-  // A game total can never be negative (or zero) — clamp the lowest column to 1
-  // and shift the window up so every column stays a realistic total.
-  const tStart = Math.max(1, Math.round(tCenter - thalf * tStep));
+  // Live state: scores only INCREASE, so curTotal is the lowest total still
+  // reachable and a final (margin m, total t) is reachable iff the remaining
+  // goals (t − curTotal) cover the margin swing |m − curMargin|.
+  const inProgress = !!(live && live.total != null && live.margin != null && !live.final);
+  const curTotal = inProgress ? live.total : null;
+  const curMargin = inProgress ? live.margin : null;
+  // A game total can never be negative (or zero) — clamp the lowest column to 1.
+  // Once in progress, START the axis at curTotal so the grid SHIFTS LEFT onto the
+  // still-reachable region: leftmost column = lowest total still possible, no
+  // columns wasted on dead low totals (e.g. at 3-1 the axis begins at 4).
+  let tStart = Math.max(1, Math.round(tCenter - thalf * tStep));
+  if (inProgress) tStart = Math.max(1, curTotal);
   const totals = Array.from({ length: NT }, (_, i) => tStart + i * tStep);
   // margins straddle 0 without including it: +6..+1, -1..-6 (× mStep)
   const margins = Array.from({ length: NM }, (_, i) => {
@@ -2835,14 +2844,8 @@ function computeRiskGrid(g, parlays, live) {
   });
   const home = teams ? teams[1] : null, away = teams ? teams[0] : null;
 
-  // Live reachability: scores only INCREASE, so a final (margin m, total t) is
-  // reachable from the current (curMargin, curTotal) iff the remaining goals
-  // (t − curTotal) can cover the margin swing |m − curMargin|. Impossible cells
-  // are blanked + excluded from the color scale, so the heatmap shows only what
-  // can still happen (e.g. at 3-1 every total<4 column is dead).
-  const inProgress = !!(live && live.total != null && live.margin != null && !live.final);
-  const curTotal = inProgress ? live.total : null;
-  const curMargin = inProgress ? live.margin : null;
+  // Per-cell reachability (off-diagonal cells within the window can still be
+  // impossible — they're blanked + dropped from the color scale below).
   const reach = margins.map((m) =>
     totals.map((t) => !inProgress || (t - curTotal) >= Math.abs(m - curMargin) - 1e-9));
   let maxAbs = 0;
