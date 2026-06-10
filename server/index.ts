@@ -35,6 +35,7 @@ import {
 } from "./espn.js";
 import { getRecap } from "./recap.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
+import { getLinesCatalog, getLinesSeries } from "./lines.js";
 
 // Load .env from dashboard/.env (next to package.json)
 const __filename = fileURLToPath(import.meta.url);
@@ -276,6 +277,25 @@ app.get("/api/partner-recap", async (req, res, next) => {
 
 app.get("/api/partner-recap/health", (_req, res) => {
   res.json(partnerCacheStats());
+});
+
+// ----------------------------------------------------------------------------
+// Lines tab — Pinnacle/Bovada snapshot archive (public HF dataset; see lines.ts)
+// ----------------------------------------------------------------------------
+
+app.get("/api/lines/catalog", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "");
+    res.json(await getLinesCatalog(date));
+  } catch (e) { next(e); }
+});
+
+app.get("/api/lines/series", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "");
+    const id = String(req.query.id || "");
+    res.json(await getLinesSeries(date, id));
+  } catch (e) { next(e); }
 });
 
 // ----------------------------------------------------------------------------

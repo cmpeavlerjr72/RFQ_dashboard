@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lines — Kalshi RFQ Dashboard</title>
+<link rel="stylesheet" href="/styles.css" />
+<style>
+  .lines-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin:14px 0; }
+  .lines-controls label { display:flex; flex-direction:column; font-size:12px; gap:4px; opacity:.85; }
+  .lines-controls select, .lines-controls input { min-width:130px; padding:5px 8px; }
+  .lines-controls select#market-select { min-width:320px; max-width:560px; }
+  #lines-meta { font-size:13px; opacity:.8; margin:4px 0 10px; }
+  #lines-chart-wrap { overflow-x:auto; }
+  #lines-chart { background:rgba(127,127,127,.06); border-radius:8px; }
+  .lines-legend { display:flex; gap:16px; font-size:12px; margin:6px 2px; }
+  .lines-legend span::before { content:"— "; font-weight:bold; }
+  #lines-table { font-size:12px; border-collapse:collapse; margin-top:14px; }
+  #lines-table th, #lines-table td { padding:3px 10px; text-align:right; border-bottom:1px solid rgba(127,127,127,.25); }
+  #lines-table th:first-child, #lines-table td:first-child { text-align:left; }
+  .src-badge { font-size:11px; padding:1px 6px; border-radius:8px; background:rgba(127,127,127,.25); margin-left:6px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Kalshi RFQ</h1>
+    <nav class="nav-links">
+      <a href="/">Live</a>
+      <a href="/recap.html">Recap</a>
+      <a href="/comparison.html">Comparison</a>
+      <a href="/lines.html" class="active">Lines</a>
+    </nav>
+    <div class="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">idle</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="row section-head">
+      <h2>Line Movement</h2>
+      <span class="hint">Pinnacle + Bovada snapshots archived every 10 minutes by the home box (de-vigged)</span>
+    </div>
+    <div class="lines-controls">
+      <label>Date <input type="date" id="date-input" /></label>
+      <label>Sport <select id="sport-select"></select></label>
+      <label>Game <select id="game-select"></select></label>
+      <label>Bet type <select id="bettype-select"></select></label>
+      <label>Market <select id="market-select"></select></label>
+    </div>
+    <div id="lines-meta"></div>
+    <div class="lines-legend" id="lines-legend"></div>
+    <div id="lines-chart-wrap"><svg id="lines-chart" width="1100" height="420"></svg></div>
+    <table id="lines-table"></table>
+  </section>
+</main>
+
+<footer><span id="footer-text"></span></footer>
+<script type="module" src="/lines.js"></script>
+</body>
+</html>
