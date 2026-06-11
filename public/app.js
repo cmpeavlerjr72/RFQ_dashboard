@@ -414,7 +414,8 @@ async function fetchNeededBoxscores() {
   for (const p of state.positions) {
     for (const leg of p.legs) {
       const gl = parseGameLevelLeg(leg.ticker);
-      if (!gl || (gl.sport !== "nhl" && gl.sport !== "nba")) continue;
+      if (!gl || (gl.sport !== "nhl" && gl.sport !== "nba"
+                  && !_SOCCER_TREE_SPORTS.has(gl.sport))) continue;
       const ev = findEspnEventForGameKey(legGameGroupKey(leg.ticker));
       const eventId = String(ev?.id || "");
       if (eventId) need.set(`${gl.sport}:${eventId}`, { sport: gl.sport, eventId });
@@ -1581,8 +1582,20 @@ function liveStateFor(ev, sport) {
   if (sport === "nba" && (state === "in" || state === "post")) {
     basketball = { awayAbbr, homeAbbr };
   }
+  // Soccer match events (2026-06-11): the scoreboard event carries
+  // competitions[0].details[] — goals (with scorer + clock), yellow/red
+  // cards, subs. We keep the raw entries + a teamId->abbr map so the card
+  // can render a match timeline. Stats (possession/shots) are enriched
+  // later from the /summary boxscore in renderGameCards.
+  let soccer = null;
+  if (_SOCCER_TREE_SPORTS.has(sport) && (state === "in" || state === "post")) {
+    const idAbbr = {};
+    if (away?.team?.id) idAbbr[String(away.team.id)] = awayAbbr;
+    if (home?.team?.id) idAbbr[String(home.team.id)] = homeAbbr;
+    soccer = { details: comp?.details || [], idAbbr, stats: null };
+  }
   return {
-    state, periodLabel,
+    state, periodLabel, soccer,
     away: {
       abbr: awayAbbr,
       name: away?.team?.shortDisplayName || away?.team?.name || awayAbbr,
@@ -1631,6 +1644,46 @@ function strikeZoneSvg(pitches) {
 // Compact live-baseball widget: bases diamond (occupied bags filled), outs
 // dots, count, the current AB (batter + pitcher), and a strike-zone plot of
 // this at-bat's pitches. MLB in-progress only.
+// Soccer live situation (2026-06-11): match timeline (goals w/ scorer +
+// minute, red/yellow cards) from the scoreboard details[] + a one-line team
+// stat strip (possession / shots / corners) from the summary boxscore. The
+// soccer analogue of the MLB bases diamond / NHL shot plot.
+function soccerSituationHtml(sc) {
+  const evts = [];
+  for (const d of sc.details || []) {
+    const txt = (d?.type?.text || "").toLowerCase();
+    const goal = !!d.scoringPlay;
+    const red = !!d.redCard || txt.includes("red card");
+    const yellow = !red && (!!d.yellowCard || txt.includes("yellow card"));
+    if (!goal && !red && !yellow) continue;          // skip subs etc.
+    const icon = goal
+      ? (txt.includes("own goal") ? "⚽(og)" : txt.includes("penalty") ? "⚽(p)" : "⚽")
+      : red ? "🟥" : "🟨";
+    const who = d?.athletesInvolved?.[0]?.shortName
+      || d?.athletesInvolved?.[0]?.displayName || "";
+    const team = sc.idAbbr[String(d?.team?.id)] || "";
+    const clock = d?.clock?.displayValue || "";
+    evts.push({ icon, who, team, clock, big: goal || red });
+  }
+  let timeline = "";
+  if (evts.length) {
+    const shown = evts.slice(-10);
+    const more = evts.length - shown.length;
+    timeline = `<div class="soc-timeline">${more > 0 ? `<span class="soc-evt">+${more} earlier</span>` : ""}${shown.map((e) =>
+      `<span class="soc-evt${e.big ? " big" : ""}">${e.icon} ${escapeHtml(e.clock)} ${escapeHtml(e.who)}${e.team ? ` <b>${escapeHtml(e.team)}</b>` : ""}</span>`).join("")}</div>`;
+  }
+  let stats = "";
+  if (sc.stats && sc.stats.length === 2) {
+    const [a, h] = sc.stats;
+    const cell = (t) =>
+      `<span class="soc-stat"><b>${escapeHtml(t.abbr)}</b> ${escapeHtml(t.poss || "–")}% poss · ${escapeHtml(t.shots || "0")}(${escapeHtml(t.sot || "0")}) shots · ${escapeHtml(t.corners || "0")} corn</span>`;
+    stats = `<div class="soc-stats">${cell(a)}${cell(h)}</div>`;
+  }
+  if (!timeline && !stats) return "";
+  return `<div class="soccer-situation">${timeline}${stats}</div>`;
+}
+
+
 function bbSituationHtml(bb) {
   if (!bb) return "";
   const onCls = (b) => (b ? " on" : "");
@@ -2828,6 +2881,24 @@ function renderGameCards() {
     }
     const lastOf = (n) => (n || "").replace(/^[A-Z]\.\s*/, "").toUpperCase();
 
+    // Enrich the live soccer situation with team stats from the summary
+    // boxscore (possession / shots / shots-on-target / corners).
+    if (live && live.soccer) {
+      const summary = state.boxscores[`${g.sport}:${live.raw?.id}`];
+      const teams = summary?.boxscore?.teams;
+      if (Array.isArray(teams) && teams.length === 2) {
+        const pick = (t, name) =>
+          (t?.statistics || []).find((s) => s?.name === name)?.displayValue;
+        live.soccer.stats = teams.map((t) => ({
+          abbr: t?.team?.abbreviation || "",
+          poss: pick(t, "possessionPct"),
+          shots: pick(t, "totalShots"),
+          sot: pick(t, "shotsOnTarget"),
+          corners: pick(t, "wonCorners"),
+        }));
+      }
+    }
+
     // Enrich the live baseball situation with the current pitcher's workload
     // (pitch count derived from the summary's play-by-play, IP from the box
     // line) + a pull-risk flag, and flag if it's a pitcher whose K-prop we hold.
@@ -3124,6 +3195,7 @@ function renderGameCards() {
           ${live.baseball ? bbSituationHtml(live.baseball) : ""}
           ${live.hockey ? hockeySituationHtml(live.hockey) : ""}
           ${live.basketball ? nbaSituationHtml(live.basketball) : ""}
+          ${live.soccer ? soccerSituationHtml(live.soccer) : ""}
         </div>`;
     }
 
