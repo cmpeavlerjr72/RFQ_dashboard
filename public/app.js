@@ -1662,11 +1662,13 @@ function strikeZoneSvg(pitches) {
 // stacked at the net they went into. Honest with the data we actually have.
 function soccerPitchHtml(sc) {
   if (!sc.stats || sc.stats.length !== 2) return "";
-  const [tA, tB] = sc.stats;                 // tA attacks RIGHT goal, tB LEFT
+  // tA owns the LEFT half (defends the left goal, attacks right); tB mirror.
+  const [tA, tB] = sc.stats;
   const pA = parseFloat(tA.poss) || 50, pB = parseFloat(tB.poss) || 50;
-  const oA = (0.06 + 0.30 * pA / 100).toFixed(2);
-  const oB = (0.06 + 0.30 * pB / 100).toFixed(2);
-  // goals per team (from scoreboard details), newest last
+  const oA = (0.05 + 0.25 * pA / 100).toFixed(2);
+  const oB = (0.05 + 0.25 * pB / 100).toFixed(2);
+  const H = 120, W = 260, TOP = 16, BOT = H - 10;
+  // goals per team (scoreboard details), shown in the net they went INTO
   const goals = { [tA.abbr]: [], [tB.abbr]: [] };
   for (const d of sc.details || []) {
     if (!d.scoringPlay) continue;
@@ -1675,25 +1677,62 @@ function soccerPitchHtml(sc) {
   }
   const ball = (x, y, min) =>
     `<circle cx="${x}" cy="${y}" r="4" fill="#fff" stroke="#333" stroke-width="1.2"/>` +
-    `<text x="${x}" y="${y - 7}" font-size="7" text-anchor="middle" fill="#555">${escapeHtml(min)}</text>`;
-  // tA scores into the RIGHT net, tB into the LEFT
-  const ballsA = goals[tA.abbr].map((m, i) => ball(232, 22 + i * 16, m)).join("");
-  const ballsB = goals[tB.abbr].map((m, i) => ball(28, 22 + i * 16, m)).join("");
+    `<text x="${x}" y="${y - 6.5}" font-size="6.5" text-anchor="middle" fill="#555">${escapeHtml(min)}</text>`;
+  const ballsA = goals[tA.abbr].map((m, i) => ball(W - 26, TOP + 10 + i * 15, m)).join("");
+  const ballsB = goals[tB.abbr].map((m, i) => ball(26, TOP + 10 + i * 15, m)).join("");
+
+  // Starting XI in formation. Rows from the formation string ("4-1-4-1" ->
+  // [GK,4,1,4,1]); players placed by formationPlace order within rows.
+  // Subbed-off players render dimmed. Hover a dot for the full name.
+  const lineupSvg = (lu, leftSide) => {
+    if (!lu || !lu.players || !lu.players.length) return "";
+    const rows = [1].concat((lu.formation || "").split("-").map((n) => parseInt(n, 10)).filter(Boolean));
+    if (rows.reduce((s, n) => s + n, 0) !== 11) {
+      // unknown formation -> simple 1-4-4-2-ish fallback by place order
+      rows.length = 0; rows.push(1, 4, 4, 2);
+    }
+    const players = lu.players.slice().sort((a, b) => a.place - b.place);
+    const out = [];
+    let idx = 0;
+    const halfW = 110, x0 = leftSide ? 12 : W - 12;
+    for (let ri = 0; ri < rows.length && idx < players.length; ri++) {
+      const depth = rows.length === 1 ? 0 : ri / (rows.length - 1);
+      const x = leftSide ? x0 + depth * halfW : x0 - depth * halfW;
+      const k = rows[ri];
+      for (let j = 0; j < k && idx < players.length; j++, idx++) {
+        const y = TOP + (BOT - TOP) * ((j + 1) / (k + 1));
+        const p = players[idx];
+        out.push(
+          `<g opacity="${p.off ? 0.35 : 1}">` +
+          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5.5" fill="${leftSide ? "#1d4ed8" : "#b91c1c"}" stroke="#fff" stroke-width="1"/>` +
+          `<text x="${x.toFixed(1)}" y="${(y + 2.4).toFixed(1)}" font-size="5.6" font-weight="700" text-anchor="middle" fill="#fff">${escapeHtml(p.jersey)}</text>` +
+          `<title>${escapeHtml(p.name)}${p.off ? " (subbed off)" : ""}</title>` +
+          `</g>`);
+      }
+    }
+    return out.join("");
+  };
+  const luA = sc.lineups ? sc.lineups[tA.abbr] : null;
+  const luB = sc.lineups ? sc.lineups[tB.abbr] : null;
+  const formA = luA?.formation ? ` ${luA.formation}` : "";
+  const formB = luB?.formation ? ` ${luB.formation}` : "";
+
   const stat = (t) => `${t.shots || 0}(${t.sot || 0}) shots · ${t.corners || 0} corn`;
   return `
-    <svg class="soc-pitch" viewBox="0 0 260 84" preserveAspectRatio="xMidYMid meet">
-      <rect x="6" y="4" width="248" height="76" rx="5" fill="none" stroke="#7aa67a" stroke-width="1.5"/>
-      <rect x="6" y="4" width="124" height="76" rx="5" fill="rgba(34,139,34,${oB})"/>
-      <rect x="130" y="4" width="124" height="76" rx="0" fill="rgba(34,139,34,${oA})"/>
-      <line x1="130" y1="4" x2="130" y2="80" stroke="#7aa67a" stroke-width="1.2"/>
-      <circle cx="130" cy="42" r="11" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
-      <rect x="6" y="26" width="20" height="32" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
-      <rect x="234" y="26" width="20" height="32" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
+    <svg class="soc-pitch" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <rect x="6" y="${TOP - 4}" width="124" height="${BOT - TOP + 8}" fill="rgba(34,139,34,${oA})"/>
+      <rect x="130" y="${TOP - 4}" width="124" height="${BOT - TOP + 8}" fill="rgba(34,139,34,${oB})"/>
+      <rect x="6" y="${TOP - 4}" width="248" height="${BOT - TOP + 8}" rx="5" fill="none" stroke="#7aa67a" stroke-width="1.5"/>
+      <line x1="130" y1="${TOP - 4}" x2="130" y2="${BOT + 4}" stroke="#7aa67a" stroke-width="1.2"/>
+      <circle cx="130" cy="${(TOP + BOT) / 2}" r="12" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
+      <rect x="6" y="${(TOP + BOT) / 2 - 18}" width="20" height="36" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
+      <rect x="234" y="${(TOP + BOT) / 2 - 18}" width="20" height="36" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
+      ${lineupSvg(luA, true)}${lineupSvg(luB, false)}
       ${ballsA}${ballsB}
-      <text x="36" y="14" font-size="8.5" font-weight="700" fill="#333">${escapeHtml(tB.abbr)} ${pB}%</text>
-      <text x="224" y="14" font-size="8.5" font-weight="700" fill="#333" text-anchor="end">${escapeHtml(tA.abbr)} ${pA}%</text>
-      <text x="36" y="76" font-size="7.5" fill="#555">${escapeHtml(stat(tB))} →</text>
-      <text x="224" y="76" font-size="7.5" fill="#555" text-anchor="end">← ${escapeHtml(stat(tA))}</text>
+      <text x="8" y="9" font-size="8.5" font-weight="700" fill="#333">${escapeHtml(tA.abbr)} ${pA}%${escapeHtml(formA)} →</text>
+      <text x="${W - 8}" y="9" font-size="8.5" font-weight="700" fill="#333" text-anchor="end">← ${escapeHtml(tB.abbr)} ${pB}%${escapeHtml(formB)}</text>
+      <text x="8" y="${H - 1}" font-size="7.5" fill="#555">${escapeHtml(stat(tA))}</text>
+      <text x="${W - 8}" y="${H - 1}" font-size="7.5" fill="#555" text-anchor="end">${escapeHtml(stat(tB))}</text>
     </svg>`;
 }
 
@@ -2940,7 +2979,9 @@ function renderGameCards() {
     const lastOf = (n) => (n || "").replace(/^[A-Z]\.\s*/, "").toUpperCase();
 
     // Enrich the live soccer situation with team stats from the summary
-    // boxscore (possession / shots / shots-on-target / corners).
+    // boxscore (possession / shots / shots-on-target / corners) + the
+    // starting XI in formation (rosters: formation string, formationPlace
+    // 1..11, jersey, sub flags) for the pitch panel.
     if (live && live.soccer) {
       const summary = state.boxscores[`${g.sport}:${live.raw?.id}`];
       const teams = summary?.boxscore?.teams;
@@ -2954,6 +2995,23 @@ function renderGameCards() {
           sot: pick(t, "shotsOnTarget"),
           corners: pick(t, "wonCorners"),
         }));
+      }
+      const rosters = summary?.rosters;
+      if (Array.isArray(rosters) && rosters.length === 2) {
+        live.soccer.lineups = {};
+        for (const r of rosters) {
+          const abbr = r?.team?.abbreviation || "";
+          const starters = (r?.roster || []).filter((e) => e?.starter);
+          live.soccer.lineups[abbr] = {
+            formation: r?.formation || "",
+            players: starters.map((e) => ({
+              place: parseInt(e?.formationPlace || "0", 10) || 0,
+              jersey: e?.jersey || "",
+              name: e?.athlete?.displayName || "",
+              off: !!e?.subbedOut,
+            })),
+          };
+        }
       }
     }
 

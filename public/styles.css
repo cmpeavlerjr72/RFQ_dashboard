@@ -1,4 +1,4 @@
-/* Light, clean, sportsbook-style. */
+﻿/* Light, clean, sportsbook-style. */
 :root {
   --bg: #f7f8fa;
   --fg: #0f172a;
@@ -81,7 +81,7 @@ h2 {
   grid-auto-flow: dense;   /* backfill so a span-2 tile never leaves a gap */
 }
 /* The two-metric split tiles (cost/at-risk, max/to-win) read better at double
-   width — one tile-width per metric. */
+   width â€” one tile-width per metric. */
 .summary .kpi-split { grid-column: span 2; }
 .kpi {
   background: var(--card); border: 1px solid var(--border); border-radius: 8px;
@@ -524,7 +524,7 @@ h2 {
 .hk-penlist { display: flex; flex-direction: column; gap: 2px; }
 .hk-penrow { font-size: 10px; color: var(--warn); line-height: 1.25; }
 .hk-lastplay { font-size: 11px; color: var(--muted); font-style: italic; line-height: 1.3; }
-/* Rink shot plot — NHL analog to the strike-zone plot */
+/* Rink shot plot â€” NHL analog to the strike-zone plot */
 .rink {
   display: block; margin-top: 2px; max-width: 320px;
   background: var(--card-head); border-radius: 5px;
@@ -564,10 +564,10 @@ h2 {
 .nba-foul.held { color: var(--fg); font-weight: 700; }
 .nba-foul-n { color: var(--warn); font-weight: 600; }
 .nba-lastplay { font-size: 11px; color: var(--muted); font-style: italic; line-height: 1.3; }
-/* Full-court shot chart — NBA analog to the rink shot plot (home left / away
+/* Full-court shot chart â€” NBA analog to the rink shot plot (home left / away
    right; makes = team logos, misses = translucent team-coloured dots) */
 .court {
-  display: block; margin-top: 2px; max-width: 340px;
+  display: block; margin-top: 2px; max-width: 420px;
   background: var(--card-head); border-radius: 5px;
 }
 .court .court-floor { fill: var(--card); stroke: var(--muted-2); stroke-width: 0.5; }
@@ -575,7 +575,7 @@ h2 {
 .court .court-paint { stroke: var(--muted-2); stroke-width: 0.5; opacity: .9; }
 .court .court-paint.home { fill: var(--neg); fill-opacity: .1; }
 .court .court-paint.away { fill: var(--accent); fill-opacity: .1; }
-/* Basket: backboard, neck, rim — drawn in a hoop orange so it reads as a goal */
+/* Basket: backboard, neck, rim â€” drawn in a hoop orange so it reads as a goal */
 .court .court-bb { stroke: var(--muted); stroke-width: 1; stroke-linecap: round; }
 .court .court-rim-neck { stroke: #e8833a; stroke-width: 0.5; }
 .court .court-rim { fill: none; stroke: #e8833a; stroke-width: 0.8; }
@@ -695,7 +695,7 @@ h2 {
 .game-card-body .player-block.shared-block .stat-ladder {
   padding-left: 4px;
 }
-/* Stat ladder — compact per-stat row inside a player block */
+/* Stat ladder â€” compact per-stat row inside a player block */
 .game-card-body .stat-ladder {
   display: flex; align-items: center; gap: 10px;
   padding: 3px 0;
@@ -734,7 +734,7 @@ h2 {
   display: inline-flex; align-items: center; gap: 3px;
   white-space: nowrap;
 }
-/* Chips with no threshold (ML) are single-line — bump the meta font so
+/* Chips with no threshold (ML) are single-line â€” bump the meta font so
    they read on par with the threshold-bearing ladder chips. */
 .game-card-body .ladder-chip.no-thresh {
   padding: 4px 8px;
@@ -745,7 +745,7 @@ h2 {
 .game-card-body .ladder-chip .ladder-chip-sep {
   display: inline-block; opacity: .55;
 }
-/* Sign class only sets text color — bg/border intensity comes from the
+/* Sign class only sets text color â€” bg/border intensity comes from the
    inline style on the chip (chipShadeStyle, scaled by |pUs - 50%|).
    Strikethrough is reserved for permanently-lost legs (locked-loss). */
 .game-card-body .ladder-chip.pos { color: var(--pos); }
@@ -762,7 +762,7 @@ h2 {
   border-top: 1px solid var(--border);
 }
 
-/* ---- "If the game goes…" decision tree ---- */
+/* ---- "If the game goesâ€¦" decision tree ---- */
 .game-tree .tree-extremes {
   display: flex; flex-direction: column; gap: 4px;
   margin: 6px 0 10px; padding: 8px 10px;
@@ -785,7 +785,7 @@ h2 {
 .game-tree .tree-extreme b.pos { color: var(--pos); }
 .game-tree .tree-extreme b.neg { color: var(--neg); }
 
-/* "So far" — facts live play has already settled (these pin the tree). */
+/* "So far" â€” facts live play has already settled (these pin the tree). */
 .game-tree .tree-resolved {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   margin: 4px 0 10px;
@@ -820,7 +820,7 @@ h2 {
 .game-tree .tree-lean.good { color: var(--pos); }
 .game-tree .tree-lean.bad { color: var(--neg); }
 
-/* Thermometer: worst $ — gradient bar with an expected-outcome tick — best $ */
+/* Thermometer: worst $ â€” gradient bar with an expected-outcome tick â€” best $ */
 .game-tree .tree-meter {
   display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto;
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px;
@@ -856,7 +856,7 @@ footer {
 .nav-links a:hover { background: var(--card-head); color: var(--fg); }
 .nav-links a.active { color: var(--fg); background: var(--accent-bg); }
 
-/* Account switcher in the header — sits between nav and the (right-pushed) status. */
+/* Account switcher in the header â€” sits between nav and the (right-pushed) status. */
 .account-picker {
   display: flex; align-items: center; gap: 6px;
   margin-left: 16px;
@@ -1083,13 +1083,13 @@ footer {
 }
 
 /* Fill-time correlation chip (runner's joint/independent ratio). corr-neg =
-   <1 (negatively-correlated legs — parlay harder to lose than the leg
+   <1 (negatively-correlated legs â€” parlay harder to lose than the leg
    product implies; green). corr-pos = >1 (correlated-chalk premium; amber). */
 /* Soccer scoreline grid: the diagonal (a === h) is the draw band. */
 .rg-cell.rg-draw { box-shadow: inset 0 0 0 1.5px rgba(100, 116, 139, 0.55); }
 
 /* Soccer live situation: schematic pitch + match timeline + stat strip. */
-.soc-pitch { width: 100%; max-width: 340px; height: auto; display: block; }
+.soc-pitch { width: 100%; max-width: 420px; height: auto; display: block; }
 .soccer-situation { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .soc-timeline { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 .soc-evt { font-size: 11px; color: var(--muted); white-space: nowrap; }
@@ -1227,7 +1227,7 @@ footer {
 .link-btn:hover { background: rgba(25, 118, 210, 0.08); }
 
 /* ============================================================
-   Responsive / mobile — no page-level horizontal scrolling.
+   Responsive / mobile â€” no page-level horizontal scrolling.
    Strategy:
      1. Card grids never demand a track wider than the viewport
         (min(px, 100%) caps each track at the container width).
@@ -1239,7 +1239,7 @@ footer {
 
 /* (1) Card grids: cap the min track at 100% so a phone narrower than
    the design min-width just gets a single full-width column. Applies at
-   every width — harmless on desktop (380px min is unchanged there). */
+   every width â€” harmless on desktop (380px min is unchanged there). */
 .parlays   { grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); }
 .game-cards { grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); }
 .summary   { grid-template-columns: repeat(auto-fit,  minmax(min(160px, 100%), 1fr)); }
@@ -1288,7 +1288,7 @@ html, body { overflow-x: hidden; }
   .recap-table .t-logos { min-width: 0; }
   .breakdown-table .bk-sport { min-width: 0; }
 
-  /* Summary KPIs read fine two-up on a phone — tighten padding/value size and
+  /* Summary KPIs read fine two-up on a phone â€” tighten padding/value size and
      let them shrink so they fit the width instead of clipping off the right. */
   .summary { grid-template-columns: 1fr 1fr; gap: 8px; }
   .kpi { padding: 12px; }
@@ -1297,7 +1297,7 @@ html, body { overflow-x: hidden; }
 }
 
 /* ============================================================
-   Global centering — center everything within its bucket
+   Global centering â€” center everything within its bucket
    (user request 2026-06-02). Applies only to the content area
    (<main> on every page); the sticky header + footer chrome keep
    their own layout.
@@ -1320,14 +1320,14 @@ main .game-card-body { text-align: left; }
 /* Block-level / max-width widgets centre via auto margins (justify-content only
    centres flex/grid main-axis; these sit as block items in column containers). */
 main .rink, main .pz, main .court { margin-left: auto; margin-right: auto; }
-/* The by-sport bet tree (sport → player/game → stat) reads as an indented
-   hierarchy, so its label cells must stay LEFT-justified — exempt them from the
+/* The by-sport bet tree (sport â†’ player/game â†’ stat) reads as an indented
+   hierarchy, so its label cells must stay LEFT-justified â€” exempt them from the
    global content-centring above. (user preference 2026-06-03) */
 main .breakdown-table .bk-sport-cell,
 main .breakdown-table .bk-sub-cell,
 main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 
-/* 2D risk surface (home-margin × total heatmap) on hedged game cards */
+/* 2D risk surface (home-margin Ã— total heatmap) on hedged game cards */
 .risk-grid { margin-top: 12px; }
 .rg-head { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
 .rg-grid { display: flex; flex-direction: column; gap: 2px; }
@@ -1337,9 +1337,9 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
   justify-content: center; font-size: 8.5px; font-weight: 600; line-height: 1;
   color: #000; text-shadow: 0 0 2px rgba(255,255,255,.85), 0 0 2px rgba(255,255,255,.85);
 }
-/* winner-flip seam (home win above → away win below); ties don't occur */
+/* winner-flip seam (home win above â†’ away win below); ties don't occur */
 .rg-cell.rg-flip { border-top: 2px solid var(--muted-2); }
-/* "right now" marker: black ✕ + black ring so it pops against any cell shade */
+/* "right now" marker: black âœ• + black ring so it pops against any cell shade */
 .rg-cell.rg-mark { box-shadow: 0 0 0 2px #000 inset; font-weight: 800; font-size: 11px; color: #000; }
 .rg-ylab {
   font-size: 9px; color: var(--muted-2); display: flex; align-items: center;
