@@ -238,9 +238,54 @@ function fillsPathFor(account: string): string {
   return path.resolve(__dirname, "..", "..", "data", `fills_${account.toLowerCase()}.jsonl`);
 }
 
-app.get("/api/fills", (req, res) => {
-  const fillsPath = fillsPathFor(acct(req));
-  if (!fs.existsSync(fillsPath)) return res.json({ fills: [] });
+// Deployed (Render) fallback: the home box mirrors both fill logs, gzipped,
+// to the PRIVATE HF dataset mvpeav/kalshi-rfq-fills every 5 min
+// (sandbox/fills_hf_sync.py — KalshiRFQ_FillsHFSync). Private because fills
+// are the live trading book; Render authenticates with the HF_TOKEN env var.
+// This is what lets the deployed dashboard show fill-enriched parlay cards
+// (fill timestamps + the corr-adjusted win%/EV chip, 2026-06-11). No token
+// or missing repo file -> {fills: []}, the pre-existing deployed behavior.
+const HF_FILLS_BASE =
+  "https://huggingface.co/datasets/mvpeav/kalshi-rfq-fills/resolve/main";
+const HF_FILLS_NAME: Record<string, string> = {
+  MVPeav: "fills_mvpeav.jsonl.gz",
+  GPeavT: "fills_gpeavt.jsonl.gz",
+};
+const HF_FILLS_TTL_MS = 60 * 1000;
+const hfFillsCache = new Map<string, { fetchedAt: number; fills: any[] }>();
+
+async function hfFills(account: string): Promise<any[]> {
+  const name = HF_FILLS_NAME[account];
+  const token = process.env.HF_TOKEN;
+  if (!name || !token) return [];
+  const cached = hfFillsCache.get(account);
+  if (cached && Date.now() - cached.fetchedAt < HF_FILLS_TTL_MS) return cached.fills;
+  try {
+    const resp = await fetch(`${HF_FILLS_BASE}/${name}`, {
+      redirect: "follow",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!resp.ok) return cached ? cached.fills : []; // keep stale on HF error
+    const { gunzipSync } = await import("node:zlib");
+    const text = gunzipSync(Buffer.from(await resp.arrayBuffer())).toString("utf-8");
+    const fills = text.split("\n").filter(Boolean).map((l) => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).filter(Boolean);
+    hfFillsCache.set(account, { fetchedAt: Date.now(), fills });
+    return fills;
+  } catch {
+    return cached ? cached.fills : [];
+  }
+}
+
+app.get("/api/fills", async (req, res) => {
+  const account = acct(req);
+  const fillsPath = fillsPathFor(account);
+  if (!fs.existsSync(fillsPath)) {
+    // Deployed instance: no local fill logs — serve the HF mirror.
+    const fills = await hfFills(account);
+    return res.json({ fills, count: fills.length, source: "hf" });
+  }
   try {
     const text = fs.readFileSync(fillsPath, "utf-8");
     const lines = text.split("\n").filter(Boolean);
