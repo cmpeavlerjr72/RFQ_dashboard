@@ -1101,14 +1101,19 @@ function evalGameLegInScenario(parsed, buyerSide, scenario) {
   const margin = scenario.margin;
   if (parsed.kind === "ml") {
     if (margin == null) return "unknown";
-    // ML for the pick hits iff the pick is the winner.
+    // Soccer 3-way TIE pick: YES hits iff the game is level (2026-06-11).
+    if (parsed.pick === "TIE") {
+      return resolveLeg(margin === 0, buyerSide);
+    }
+    // ML for the pick hits iff the pick is the winner. A level score
+    // (margin 0 — possible in soccer, transient elsewhere) means the pick
+    // is NOT currently winning, which is exactly what the chips/tree need
+    // (a drawn soccer final = team-ML miss; was "unknown" => grey forever).
     const [away, home] = parsed.teams;
-    let pickWins;
-    if (parsed.pick === home) pickWins = margin > 0;
-    else if (parsed.pick === away) pickWins = margin < 0;
+    let yesHits;
+    if (parsed.pick === home) yesHits = margin > 0;
+    else if (parsed.pick === away) yesHits = margin < 0;
     else return "unknown";
-    if (margin === 0) return "unknown";  // can't happen in NBA but soccer can
-    const yesHits = pickWins;
     return resolveLeg(yesHits, buyerSide);
   }
   if (parsed.kind === "spread") {
@@ -2824,13 +2829,20 @@ function computeRiskGrid(g, parlays, live) {
   }
   if (!haveGameLeg) return null;
 
-  const NT = 13;  // total columns (odd => centered on the line)
-  const NM = 12;  // margin rows (EVEN => no margin-0 / "tie" row; ties don't occur)
-  const sportTotalDefault = { nba: 222, wnba: 162, nhl: 6, mlb: 9 }[g.sport] || 220;
+  // SOCCER (3-way, 2026-06-11): a compact unit grid. Margins +3..-3 with an
+  // explicit DRAW row (margin 0 is a first-class outcome, not a "can't
+  // happen"), totals 0..7 one goal per column. The generic auto-sizing put a
+  // WC game on a -3..-18 margin axis with 3-goal steps — meaningless cells.
+  const isSoccer = _SOCCER_TREE_SPORTS.has(g.sport) ||
+    (g.legs && g.legs.length ? _SOCCER_TREE_SPORTS.has(legSport(g.legs[0].ticker)) : false);
+  const NT = isSoccer ? 8 : 13;  // total columns (odd => centered on the line)
+  const NM = isSoccer ? 7 : 12;  // margin rows (EVEN => no margin-0 row; soccer ODD => draw row)
+  const sportTotalDefault = { nba: 222, wnba: 162, nhl: 6, mlb: 9,
+                              wcup: 3, intlfriendly: 3 }[g.sport] || (isSoccer ? 3 : 220);
   // Integer-scoring sports (runs/goals): each grid step is ONE run/goal — a ±3
   // step is nonsense for a 9-run / 6-goal game. High-scoring sports (NBA/WNBA)
   // keep the auto-sized larger step. Add other low-scoring sports here as needed.
-  const unitStep = g.sport === "mlb" || g.sport === "nhl";
+  const unitStep = g.sport === "mlb" || g.sport === "nhl" || isSoccer;
   const tCenter = totalLines.length
     ? (Math.min(...totalLines) + Math.max(...totalLines)) / 2
     : (live && live.total != null ? live.total : sportTotalDefault);
@@ -2849,23 +2861,44 @@ function computeRiskGrid(g, parlays, live) {
   // Once in progress, START the axis at curTotal so the grid SHIFTS LEFT onto the
   // still-reachable region: leftmost column = lowest total still possible, no
   // columns wasted on dead low totals (e.g. at 3-1 the axis begins at 4).
-  let tStart = Math.max(1, Math.round(tCenter - thalf * tStep));
-  if (inProgress) tStart = Math.max(1, curTotal);
+  // Soccer starts at 0-0 (a 0 total is a real, common final); others clamp to 1.
+  let tStart = isSoccer ? 0 : Math.max(1, Math.round(tCenter - thalf * tStep));
+  if (inProgress) tStart = Math.max(isSoccer ? 0 : 1, curTotal);
   const totals = Array.from({ length: NT }, (_, i) => tStart + i * tStep);
-  // margins straddle 0 without including it: +6..+1, -1..-6 (× mStep)
-  const margins = Array.from({ length: NM }, (_, i) => {
-    const k = i < NM / 2 ? (NM / 2 - i) : (NM / 2 - 1 - i);
-    return k * mStep;
-  });
+  // Soccer: +3..0..-3 (draw row in the middle). Others straddle 0 without
+  // including it: +6..+1, -1..-6 (× mStep).
+  const margins = isSoccer
+    ? Array.from({ length: NM }, (_, i) => (NM - 1) / 2 - i)
+    : Array.from({ length: NM }, (_, i) => {
+        const k = i < NM / 2 ? (NM / 2 - i) : (NM / 2 - 1 - i);
+        return k * mStep;
+      });
   const home = teams ? teams[1] : null, away = teams ? teams[0] : null;
 
   // Per-cell reachability (off-diagonal cells within the window can still be
   // impossible — they're blanked + dropped from the color scale below).
   const reach = margins.map((m) =>
-    totals.map((t) => !inProgress || (t - curTotal) >= Math.abs(m - curMargin) - 1e-9));
+    totals.map((t) => {
+      // Soccer unit grid: (margin, total) must form a real scoreline —
+      // total >= |margin| and the same parity (h=(t+m)/2 integer). 2-1 with
+      // total 2 doesn't exist; blank those instead of pricing nonsense.
+      if (isSoccer && (t < Math.abs(m) || (t - Math.abs(m)) % 2 !== 0)) return false;
+      return !inProgress || (t - curTotal) >= Math.abs(m - curMargin) - 1e-9;
+    }));
   let maxAbs = 0;
   const cells = margins.map((m, ri) => totals.map((t, ci) => {
-    const asg = { margin: m, total: t, winner: m > 0 ? home : m < 0 ? away : null };
+    let asg;
+    if (isSoccer) {
+      // Unit soccer cell pins the EXACT scoreline: h=(t+m)/2, a=(t-m)/2.
+      // That resolves the draw (winner __DRAW__ for TIE legs) AND BTTS
+      // exactly — no 50/50 fallbacks inside the grid.
+      const h = (t + m) / 2, a = (t - m) / 2;
+      asg = { margin: m, total: t,
+              winner: m > 0 ? home : m < 0 ? away : "__DRAW__",
+              btts: h > 0 && a > 0 };
+    } else {
+      asg = { margin: m, total: t, winner: m > 0 ? home : m < 0 ? away : null };
+    }
     const pnl = _treeNodeExpected(ours, g.key, asg);
     if (reach[ri][ci] && Math.abs(pnl) > maxAbs) maxAbs = Math.abs(pnl);
     return pnl;
@@ -2913,25 +2946,31 @@ function renderRiskGridHtml(grid) {
   let rows = "";
   for (let r = 0; r < NR; r++) {
     const mv = margins[r];
-    // winner-flip seam: the first away-win row (prev row was a home win)
-    const flip = (r > 0 && margins[r - 1] > 0 && mv < 0) ? " rg-flip" : "";
+    // winner-flip seam: the first away-win row (prev row was a home win).
+    // Soccer grids carry a margin-0 DRAW row — bracket it with seams on both
+    // sides so the three outcome bands (home / draw / away) read at a glance.
+    const flip = (r > 0 && ((margins[r - 1] > 0 && mv <= 0) ||
+                            (margins[r - 1] === 0 && mv < 0))) ? " rg-flip" : "";
     // Vegas orientation: label by the WINNING team laying the line. mv = home
     // margin (home−away), so mv>0 => home wins by mv => "HOME -mv"; mv<0 =>
     // away wins by |mv| => "AWAY -|mv|". The reference team flips at the 0 seam,
     // and a win is shown as a NEGATIVE spread (e.g. "CAR -1" = CAR by 1).
+    // mv === 0 (soccer only) is the DRAW row.
     const winTeam = mv > 0 ? home : away;
-    const ylab = `${winTeam} -${Math.abs(mv)}`;
-    let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(winTeam)} wins by ${Math.abs(mv)}">${escapeHtml(ylab)}</div>`;
+    const ylab = mv === 0 ? "DRAW" : `${winTeam} -${Math.abs(mv)}`;
+    const ytitle = mv === 0 ? "draw (level at full time)" : `${winTeam} wins by ${Math.abs(mv)}`;
+    let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(ytitle)}">${escapeHtml(ylab)}</div>`;
     for (let c = 0; c < NC; c++) {
       // Live-impossible cell (can't be reached from the current score): blank it.
       if (grid.reach && !grid.reach[r][c]) {
         cellsHtml += `<div class="rg-cell${flip} rg-dead" style="background:rgba(80,80,90,0.05);color:rgba(160,160,170,0.25)" `
-          + `title="impossible from current score (${totals[c]} total can't be reached)">·</div>`;
+          + `title="impossible scoreline (margin ${mv} with total ${totals[c]})">·</div>`;
         continue;
       }
       const pnl = cells[r][c];
       const isMark = (r === markR && c === markC);
-      const base = `${winTeam} -${Math.abs(mv)}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
+      const outcome = mv === 0 ? "DRAW" : `${winTeam} -${Math.abs(mv)}`;
+      const base = `${outcome}, total ${totals[c]} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
       const title = isMark
         ? (mark.final ? `FINAL — ${base}`
           : `projected finish${mark.projected ? ` (total ~${mark.total.toFixed(1)})` : ""} — ${base}`)
@@ -2943,7 +2982,8 @@ function renderRiskGridHtml(grid) {
     rows += `<div class="rg-row">${cellsHtml}</div>`;
   }
   let xlabs = `<div class="rg-corner"></div>`;
-  for (let c = 0; c < NC; c++) xlabs += `<div class="rg-xlab">${c % 3 === 1 ? totals[c] : ""}</div>`;
+  // Small (soccer) grids label every total column; big grids every third.
+  for (let c = 0; c < NC; c++) xlabs += `<div class="rg-xlab">${NC <= 9 || c % 3 === 1 ? totals[c] : ""}</div>`;
   rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
   return `
     <div class="risk-grid">
@@ -3318,6 +3358,7 @@ function renderGameCards() {
     const sharedTotal = [];           // [{row, parsed}]
     const sharedRfi = [];             // [{row, parsed}] — MLB Run-in-First-Inning
     const sharedBtts = [];            // [{row, parsed}] — soccer Both-Teams-To-Score
+    const sharedDraw = [];            // [{row, parsed}] — soccer 3-way TIE legs
     const sharedOther = new Map();    // groupName -> [row]
     const playerGroups = new Map();
     const otherLegs = [];
@@ -3330,9 +3371,26 @@ function renderGameCards() {
           // cheer for (= opposite of buyer's effective pick, since we hold
           // parlay-NO). So a buyer-YES on DET ML and a buyer-NO on LAA ML
           // both land under LAA (we win either when LAA wins).
-          const ab = ourCheeredTeam(parsed, r.buyerSide);
-          if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
-          teamBuckets.get(ab).ml.push({ row: r, parsed });
+          //
+          // SOCCER (3-way, 2026-06-11): "not X" is NOT "Y wins" — the draw
+          // also goes our way. So buyer-YES on X buckets under Y but in a
+          // separate "Win or draw" ladder (the old bare "ML" chip silently
+          // dropped the draw half of our cheer). TIE legs get their own
+          // shared Draw row — bucketing them under a team was just wrong.
+          const isSoccer3Way = _SOCCER_TREE_SPORTS.has(parsed.sport);
+          const buyerYes = (r.buyerSide || "yes").toLowerCase() === "yes";
+          if (isSoccer3Way && parsed.pick === "TIE") {
+            sharedDraw.push({ row: r, parsed });
+          } else {
+            const ab = ourCheeredTeam(parsed, r.buyerSide);
+            if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], mlOrDraw: [], spread: [] });
+            if (isSoccer3Way && buyerYes) {
+              // Buyer needs PICK to win; we cheer the other team OR a draw.
+              teamBuckets.get(ab).mlOrDraw.push({ row: r, parsed });
+            } else {
+              teamBuckets.get(ab).ml.push({ row: r, parsed });
+            }
+          }
         } else if (parsed?.kind === "spread") {
           // Bucket under the team WE (long-NO) cheer for to cover the
           // line. Same convention as ML — chip always describes what we
@@ -3341,7 +3399,7 @@ function renderGameCards() {
           // favorite. The chip-label code signs the spread accordingly
           // (+ if our team is the dog, - if our team is the favorite).
           const ab = ourCheeredTeam(parsed, r.buyerSide);
-          if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], spread: [] });
+          if (!teamBuckets.has(ab)) teamBuckets.set(ab, { ml: [], mlOrDraw: [], spread: [] });
           teamBuckets.get(ab).spread.push({ row: r, parsed });
         } else if (parsed?.kind === "total") {
           sharedTotal.push({ row: r, parsed });
@@ -3472,8 +3530,12 @@ function renderGameCards() {
       if (parsed.kind === "ml") {
         // Chip is rendered under the effective-pick team (after buyer-side
         // flip), so the chip itself is always "the displayed team wins" -—
-        // i.e., "win" regardless of original buyer side.
-        chipLabel = "win";
+        // i.e., "win" regardless of original buyer side. Soccer TIE legs
+        // live in the shared Draw ladder: chip text states OUR cheer
+        // explicitly (buyer-YES on TIE => we want anything but a draw).
+        chipLabel = parsed.pick === "TIE"
+          ? (buyerSide === "yes" ? "no draw" : "draw")
+          : "win";
       } else if (parsed.kind === "spread") {
         // Chip displays our cheering perspective at the market's REAL line
         // (floor_strike), not a ticker-integer guess. Buyer-YES on TEAM: we
@@ -3504,8 +3566,10 @@ function renderGameCards() {
           : res === "buyer_miss" ? " · currently FOR us"
           : "");
       // ML is a binary "team wins" — no threshold to label since the
-      // bucket team already tells you who. Render just the meta.
-      const showThresh = parsed.kind !== "ml";
+      // bucket team already tells you who. Render just the meta. Soccer
+      // TIE chips DO show their text (draw / no draw) — there's no team
+      // head to carry the meaning.
+      const showThresh = parsed.kind !== "ml" || parsed.pick === "TIE";
       return `
         <span class="ladder-chip ${cls}${showThresh ? "" : " no-thresh"}" style="${style}" title="${escapeHtml(tip)}">
           ${showThresh ? `<span class="ladder-chip-thresh">${escapeHtml(chipLabel)}</span>` : ""}
@@ -3541,7 +3605,11 @@ function renderGameCards() {
     };
 
     let gameSection = "";
-    if (teamBuckets.size > 0 || sharedTotal.length > 0 || sharedBtts.length > 0 || sharedRfi.length > 0 || sharedOther.size > 0 || otherLegs.length > 0) {
+    // Soccer game => 3-way wording on the ML ladders ("To win" / "Win or
+    // draw") instead of the 2-way "ML".
+    const isSoccerGame = g.legs.length > 0 &&
+      _SOCCER_TREE_SPORTS.has(legSport(g.legs[0].ticker));
+    if (teamBuckets.size > 0 || sharedTotal.length > 0 || sharedBtts.length > 0 || sharedDraw.length > 0 || sharedRfi.length > 0 || sharedOther.size > 0 || otherLegs.length > 0) {
       // Team display order: away then home (matches the score panel). Falls
       // back to insertion order when there's no ESPN match.
       const orderedTeams = live
@@ -3587,7 +3655,8 @@ function renderGameCards() {
         return `
           <div class="player-block">
             ${teamHead}
-            ${gameLadderHtml("ML", b.ml, null)}
+            ${gameLadderHtml(isSoccerGame ? "To win" : "ML", b.ml, null)}
+            ${gameLadderHtml("Win or draw", b.mlOrDraw || [], null)}
             ${gameLadderHtml("Spread", b.spread, spreadCurrent)}
           </div>`;
       }).join("");
@@ -3609,6 +3678,14 @@ function renderGameCards() {
       const bttsBlock = sharedBtts.length
         ? `<div class="player-block shared-block">${gameLadderHtml("Both teams score", sharedBtts, bttsCurrent)}</div>`
         : "";
+      // Shared DRAW row (soccer 3-way TIE legs) — chips say "draw"/"no draw"
+      // from OUR cheering POV; counter shows tied-or-not while live.
+      const drawCurrent = liveSc
+        ? (liveSc.margin === 0 ? "tied" : `${liveSc.margin > 0 ? "+" : ""}${liveSc.margin}`)
+        : null;
+      const drawBlock = sharedDraw.length
+        ? `<div class="player-block shared-block">${gameLadderHtml("Draw", sharedDraw, drawCurrent)}</div>`
+        : "";
 
       // Remaining game-level legs we don't parse (F5/RFI/BTTS/1H/etc.) — flat
       // group list until we add predicate evaluators for them.
@@ -3626,7 +3703,7 @@ function renderGameCards() {
       gameSection = `
         <div class="card-section">
           <div class="section-title">Game</div>
-          ${teamBlocks}${totalBlock}${bttsBlock}${rfiBlock}${otherBlocks}${otherTickers}
+          ${teamBlocks}${drawBlock}${totalBlock}${bttsBlock}${rfiBlock}${otherBlocks}${otherTickers}
         </div>`;
     }
 
@@ -4417,11 +4494,12 @@ function renderParlayCard(p, n, probs) {
   const pWinHtml = probs.pWin != null
     ? `<div class="col"><div class="lbl">Win chance</div><div class="val">${(probs.pWin*100).toFixed(0)}%</div></div>`
     : "";
-  // Fill-time correlation the runner priced (joint / independent product).
-  // <1 = negatively-correlated legs (the parlay is HARDER to lose than the
-  // leg product implies); >1 = positively-correlated chalk.
-  const corrHtml = (p.corrRatio != null && Math.abs(p.corrRatio - 1) >= 0.005)
-    ? `<div class="col"><div class="lbl">Corr</div><div class="val" title="Runner's fill-time correlation: joint probability vs independent leg product. Baked into Win chance / EV / ROI.">×${p.corrRatio.toFixed(2)}</div></div>`
+  // Fill-time correlation the runner priced (joint / independent product),
+  // rendered as a top-row chip. <1 = negatively-correlated legs (the parlay
+  // is HARDER to lose than the leg product implies; green); >1 = positively-
+  // correlated chalk premium (amber).
+  const corrBadge = (p.corrRatio != null && Math.abs(p.corrRatio - 1) >= 0.005)
+    ? `<span class="corr-badge ${p.corrRatio < 1 ? "corr-neg" : "corr-pos"}" title="Runner's fill-time correlation: joint probability = ×${p.corrRatio.toFixed(3)} the independent leg product. Baked into Win chance / EV / ROI.">⛓ corr ×${p.corrRatio.toFixed(2)}</span>`
     : "";
   const evHtml = probs.expectedPnl != null
     ? `<div class="col"><div class="lbl">Expected current outcome</div><div class="val ${pnlClass(probs.expectedPnl)}">${fmtMoney(probs.expectedPnl)}</div></div>`
@@ -4445,6 +4523,7 @@ function renderParlayCard(p, n, probs) {
       <div class="top">
         <span class="badge ${cardBadgeCls}">#${n} · ${cardBadge}</span>
         ${parlayLegLogosHtml(p)}
+        ${corrBadge}
         ${mergedHtml}
         ${fillTsHtml}
         <span class="chev" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
@@ -4453,7 +4532,6 @@ function renderParlayCard(p, n, probs) {
         <div class="col"><div class="lbl">Risk</div><div class="val">${fmtMoney(p.cost)}</div></div>
         <div class="col"><div class="lbl">To win</div><div class="val pos">+${p.max_profit.toFixed(2)}</div></div>
         ${pWinHtml}
-        ${corrHtml}
         ${evHtml}
         ${roiHtml}
       </div>

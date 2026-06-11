@@ -1082,6 +1082,23 @@ footer {
   padding: 1px 5px; border-radius: 3px; white-space: nowrap;
 }
 
+/* Fill-time correlation chip (runner's joint/independent ratio). corr-neg =
+   <1 (negatively-correlated legs — parlay harder to lose than the leg
+   product implies; green). corr-pos = >1 (correlated-chalk premium; amber). */
+.parlay .top .corr-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: .02em;
+  cursor: help; padding: 1px 6px; border-radius: 9px; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.parlay .top .corr-badge.corr-neg {
+  color: var(--pos); background: rgba(21, 128, 61, .10);
+  border-color: rgba(21, 128, 61, .25);
+}
+.parlay .top .corr-badge.corr-pos {
+  color: #92400e; background: rgba(217, 119, 6, .12);
+  border-color: rgba(217, 119, 6, .28);
+}
+
 /* ---------- comparison page ---------- */
 .compare-card {
   background: var(--card); border: 1px solid var(--border); border-radius: 8px;
