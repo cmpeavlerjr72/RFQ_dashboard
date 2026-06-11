@@ -1655,6 +1655,49 @@ function strikeZoneSvg(pitches) {
 // Compact live-baseball widget: bases diamond (occupied bags filled), outs
 // dots, count, the current AB (batter + pitcher), and a strike-zone plot of
 // this at-bat's pitches. MLB in-progress only.
+// Stylized pitch panel (2026-06-11). ESPN's public soccer feed exposes NO
+// shot coordinates (verified live), so unlike the NHL rink / NBA court this
+// is SCHEMATIC: halves tinted by possession share, each team's shots(on)/
+// corners posted at the goal it attacks, and goal markers (with minute)
+// stacked at the net they went into. Honest with the data we actually have.
+function soccerPitchHtml(sc) {
+  if (!sc.stats || sc.stats.length !== 2) return "";
+  const [tA, tB] = sc.stats;                 // tA attacks RIGHT goal, tB LEFT
+  const pA = parseFloat(tA.poss) || 50, pB = parseFloat(tB.poss) || 50;
+  const oA = (0.06 + 0.30 * pA / 100).toFixed(2);
+  const oB = (0.06 + 0.30 * pB / 100).toFixed(2);
+  // goals per team (from scoreboard details), newest last
+  const goals = { [tA.abbr]: [], [tB.abbr]: [] };
+  for (const d of sc.details || []) {
+    if (!d.scoringPlay) continue;
+    const ab = sc.idAbbr[String(d?.team?.id)];
+    if (goals[ab]) goals[ab].push(d?.clock?.displayValue || "");
+  }
+  const ball = (x, y, min) =>
+    `<circle cx="${x}" cy="${y}" r="4" fill="#fff" stroke="#333" stroke-width="1.2"/>` +
+    `<text x="${x}" y="${y - 7}" font-size="7" text-anchor="middle" fill="#555">${escapeHtml(min)}</text>`;
+  // tA scores into the RIGHT net, tB into the LEFT
+  const ballsA = goals[tA.abbr].map((m, i) => ball(232, 22 + i * 16, m)).join("");
+  const ballsB = goals[tB.abbr].map((m, i) => ball(28, 22 + i * 16, m)).join("");
+  const stat = (t) => `${t.shots || 0}(${t.sot || 0}) shots · ${t.corners || 0} corn`;
+  return `
+    <svg class="soc-pitch" viewBox="0 0 260 84" preserveAspectRatio="xMidYMid meet">
+      <rect x="6" y="4" width="248" height="76" rx="5" fill="none" stroke="#7aa67a" stroke-width="1.5"/>
+      <rect x="6" y="4" width="124" height="76" rx="5" fill="rgba(34,139,34,${oB})"/>
+      <rect x="130" y="4" width="124" height="76" rx="0" fill="rgba(34,139,34,${oA})"/>
+      <line x1="130" y1="4" x2="130" y2="80" stroke="#7aa67a" stroke-width="1.2"/>
+      <circle cx="130" cy="42" r="11" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
+      <rect x="6" y="26" width="20" height="32" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
+      <rect x="234" y="26" width="20" height="32" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
+      ${ballsA}${ballsB}
+      <text x="36" y="14" font-size="8.5" font-weight="700" fill="#333">${escapeHtml(tB.abbr)} ${pB}%</text>
+      <text x="224" y="14" font-size="8.5" font-weight="700" fill="#333" text-anchor="end">${escapeHtml(tA.abbr)} ${pA}%</text>
+      <text x="36" y="76" font-size="7.5" fill="#555">${escapeHtml(stat(tB))} →</text>
+      <text x="224" y="76" font-size="7.5" fill="#555" text-anchor="end">← ${escapeHtml(stat(tA))}</text>
+    </svg>`;
+}
+
+
 // Soccer live situation (2026-06-11): match timeline (goals w/ scorer +
 // minute, red/yellow cards) from the scoreboard details[] + a one-line team
 // stat strip (possession / shots / corners) from the summary boxscore. The
@@ -1690,8 +1733,11 @@ function soccerSituationHtml(sc) {
       `<span class="soc-stat"><b>${escapeHtml(t.abbr)}</b> ${escapeHtml(t.poss || "–")}% poss · ${escapeHtml(t.shots || "0")}(${escapeHtml(t.sot || "0")}) shots · ${escapeHtml(t.corners || "0")} corn</span>`;
     stats = `<div class="soc-stats">${cell(a)}${cell(h)}</div>`;
   }
-  if (!timeline && !stats) return "";
-  return `<div class="soccer-situation">${timeline}${stats}</div>`;
+  const pitch = soccerPitchHtml(sc);
+  if (!timeline && !stats && !pitch) return "";
+  // The pitch panel carries possession/shots/corners itself — the text strip
+  // is the fallback for when the boxscore hasn't loaded into a pitch yet.
+  return `<div class="soccer-situation">${pitch}${timeline}${pitch ? "" : stats}</div>`;
 }
 
 
