@@ -1716,14 +1716,21 @@ function soccerPitchHtml(sc) {
         const p = players[idx];
         const cid = `${_cidp}_${++_clipSeq}`;
         clips.push(`<clipPath id="${cid}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}"/></clipPath>`);
+        const subMark = p.on
+          ? `<text x="${(x + R - 1).toFixed(1)}" y="${(y - R + 2).toFixed(1)}" font-size="6.5" fill="#15803d" font-weight="700">▲</text>`
+          : "";
+        const tip = p.on
+          ? `#${p.jersey} ${p.name} (on ${p.on.min} for ${p.on.forName})`
+          : `#${p.jersey} ${p.name}${p.off ? " (subbed off)" : ""}`;
         out.push(
           `<g opacity="${p.off ? 0.35 : 1}">` +
           (flagUrl
             ? `<image href="${flagUrl}" x="${(x - R - 2).toFixed(1)}" y="${(y - R).toFixed(1)}" width="${2 * R + 4}" height="${2 * R}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${cid})"/>`
             : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="${leftSide ? "#1d4ed8" : "#b91c1c"}"/>`) +
           `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="none" stroke="${leftSide ? "#1d4ed8" : "#b91c1c"}" stroke-width="1.3"/>` +
+          subMark +
           `<text x="${x.toFixed(1)}" y="${(y + R + 6.5).toFixed(1)}" font-size="5.4" text-anchor="middle" fill="#333">${escapeHtml(shortName(p.name))}</text>` +
-          `<title>#${escapeHtml(p.jersey)} ${escapeHtml(p.name)}${p.off ? " (subbed off)" : ""}</title>` +
+          `<title>${escapeHtml(tip)}</title>` +
           `</g>`);
       }
     }
@@ -1776,6 +1783,18 @@ function soccerSituationHtml(sc) {
     const clock = d?.clock?.displayValue || "";
     evts.push({ icon, who, team, clock, big: goal || red });
   }
+  // Substitutions (from the roster pairs — scoreboard details don't carry
+  // them): "🔁 66' Mora ⟵ Fidalgo". Merge chronologically with goals/cards.
+  for (const s of sc.subs || []) {
+    const short = (n) => {
+      const parts = String(n || "").trim().split(/\s+/);
+      return parts.length < 2 ? (parts[0] || "") : `${parts[0][0]}. ${parts[parts.length - 1]}`;
+    };
+    evts.push({ icon: "🔁", who: `${short(s.inName)} ⟵ ${short(s.outName)}`,
+                team: s.team, clock: s.min, big: false });
+  }
+  const minOf = (c) => parseInt(String(c || "").replace(/[^\d]/g, ""), 10) || 0;
+  evts.sort((a, b) => minOf(a.clock) - minOf(b.clock));
   let timeline = "";
   if (evts.length) {
     const shown = evts.slice(-10);
@@ -3026,18 +3045,52 @@ function renderGameCards() {
       const rosters = summary?.rosters;
       if (Array.isArray(rosters) && rosters.length === 2) {
         live.soccer.lineups = {};
+        live.soccer.subs = [];
+        const subMin = (e) => {
+          const pl = (e?.plays || []).find((p) => p?.substitution);
+          return pl?.clock?.displayValue || "";
+        };
         for (const r of rosters) {
           const abbr = r?.team?.abbreviation || "";
-          const starters = (r?.roster || []).filter((e) => e?.starter);
+          const all = r?.roster || [];
+          const byId = new Map(all.map((e) => [String(e?.athlete?.id || ""), e]));
+          const byJersey = new Map(all.map((e) => [String(e?.jersey || ""), e]));
+          const starters = all.filter((e) => e?.starter);
+          // Resolve each formation spot to the player CURRENTLY in it: follow
+          // the subbedOutFor chain (ESPN links pairs both ways) so a sub who
+          // is later subbed off himself resolves to the latest man on.
+          const resolve = (e, depth = 0) => {
+            if (!e?.subbedOut || depth > 4) return e;
+            const rep = e?.subbedOutFor;
+            const repEntry = byId.get(String(rep?.athlete?.id || ""))
+              || byJersey.get(String(rep?.jersey || ""));
+            return repEntry ? resolve(repEntry, depth + 1) : e;
+          };
           live.soccer.lineups[abbr] = {
             formation: r?.formation || "",
-            players: starters.map((e) => ({
-              place: parseInt(e?.formationPlace || "0", 10) || 0,
-              jersey: e?.jersey || "",
-              name: e?.athlete?.displayName || "",
-              off: !!e?.subbedOut,
-            })),
+            players: starters.map((e) => {
+              const cur = resolve(e);
+              const swapped = cur !== e;
+              return {
+                place: parseInt(e?.formationPlace || "0", 10) || 0,
+                jersey: cur?.jersey || "",
+                name: cur?.athlete?.displayName || "",
+                off: !swapped && !!e?.subbedOut,   // off w/ no known replacement
+                on: swapped ? { min: subMin(cur), forName: e?.athlete?.displayName || "" } : null,
+              };
+            }),
           };
+          // Timeline sub events from the roster pairs (the scoreboard
+          // details[] feed doesn't carry substitutions).
+          for (const e of all) {
+            if (e?.subbedIn && e?.subbedInFor) {
+              live.soccer.subs.push({
+                team: abbr, min: subMin(e),
+                inName: e?.athlete?.displayName || "",
+                outName: e?.subbedInFor?.athlete?.displayName || "",
+              });
+            }
+          }
         }
       }
     }
