@@ -1667,7 +1667,7 @@ function soccerPitchHtml(sc) {
   const pA = parseFloat(tA.poss) || 50, pB = parseFloat(tB.poss) || 50;
   const oA = (0.05 + 0.25 * pA / 100).toFixed(2);
   const oB = (0.05 + 0.25 * pB / 100).toFixed(2);
-  const H = 120, W = 260, TOP = 16, BOT = H - 10;
+  const H = 134, W = 260, TOP = 16, BOT = H - 14;
   // goals per team (scoreboard details), shown in the net they went INTO
   const goals = { [tA.abbr]: [], [tB.abbr]: [] };
   for (const d of sc.details || []) {
@@ -1683,8 +1683,19 @@ function soccerPitchHtml(sc) {
 
   // Starting XI in formation. Rows from the formation string ("4-1-4-1" ->
   // [GK,4,1,4,1]); players placed by formationPlace order within rows.
-  // Subbed-off players render dimmed. Hover a dot for the full name.
-  const lineupSvg = (lu, leftSide) => {
+  // Dots are CIRCULAR FLAGS (ESPN has headshots for ~1/22 WC starters, so
+  // flags are the deterministic choice) with "F. Lastname" beneath. Subbed-
+  // off players dim; hover keeps the full name + shirt number.
+  const shortName = (n) => {
+    const parts = String(n || "").trim().split(/\s+/);
+    if (parts.length < 2) return parts[0] || "";
+    return `${parts[0][0]}. ${parts[parts.length - 1]}`;
+  };
+  let _clipSeq = 0;
+  const clips = [];
+  // clip ids must be unique across ALL soccer cards on the page
+  const _cidp = `socp${Math.random().toString(36).slice(2, 7)}`;
+  const lineupSvg = (lu, leftSide, flagUrl) => {
     if (!lu || !lu.players || !lu.players.length) return "";
     const rows = [1].concat((lu.formation || "").split("-").map((n) => parseInt(n, 10)).filter(Boolean));
     if (rows.reduce((s, n) => s + n, 0) !== 11) {
@@ -1694,19 +1705,25 @@ function soccerPitchHtml(sc) {
     const players = lu.players.slice().sort((a, b) => a.place - b.place);
     const out = [];
     let idx = 0;
-    const halfW = 110, x0 = leftSide ? 12 : W - 12;
+    const R = 6;
+    const halfW = 106, x0 = leftSide ? 14 : W - 14;
     for (let ri = 0; ri < rows.length && idx < players.length; ri++) {
       const depth = rows.length === 1 ? 0 : ri / (rows.length - 1);
       const x = leftSide ? x0 + depth * halfW : x0 - depth * halfW;
       const k = rows[ri];
       for (let j = 0; j < k && idx < players.length; j++, idx++) {
-        const y = TOP + (BOT - TOP) * ((j + 1) / (k + 1));
+        const y = TOP + 2 + (BOT - TOP - 14) * ((j + 1) / (k + 1));
         const p = players[idx];
+        const cid = `${_cidp}_${++_clipSeq}`;
+        clips.push(`<clipPath id="${cid}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}"/></clipPath>`);
         out.push(
           `<g opacity="${p.off ? 0.35 : 1}">` +
-          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5.5" fill="${leftSide ? "#1d4ed8" : "#b91c1c"}" stroke="#fff" stroke-width="1"/>` +
-          `<text x="${x.toFixed(1)}" y="${(y + 2.4).toFixed(1)}" font-size="5.6" font-weight="700" text-anchor="middle" fill="#fff">${escapeHtml(p.jersey)}</text>` +
-          `<title>${escapeHtml(p.name)}${p.off ? " (subbed off)" : ""}</title>` +
+          (flagUrl
+            ? `<image href="${flagUrl}" x="${(x - R - 2).toFixed(1)}" y="${(y - R).toFixed(1)}" width="${2 * R + 4}" height="${2 * R}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${cid})"/>`
+            : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="${leftSide ? "#1d4ed8" : "#b91c1c"}"/>`) +
+          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="none" stroke="${leftSide ? "#1d4ed8" : "#b91c1c"}" stroke-width="1.3"/>` +
+          `<text x="${x.toFixed(1)}" y="${(y + R + 6.5).toFixed(1)}" font-size="5.4" text-anchor="middle" fill="#333">${escapeHtml(shortName(p.name))}</text>` +
+          `<title>#${escapeHtml(p.jersey)} ${escapeHtml(p.name)}${p.off ? " (subbed off)" : ""}</title>` +
           `</g>`);
       }
     }
@@ -1727,7 +1744,8 @@ function soccerPitchHtml(sc) {
       <circle cx="130" cy="${(TOP + BOT) / 2}" r="12" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
       <rect x="6" y="${(TOP + BOT) / 2 - 18}" width="20" height="36" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
       <rect x="234" y="${(TOP + BOT) / 2 - 18}" width="20" height="36" fill="none" stroke="#7aa67a" stroke-width="1.2"/>
-      ${lineupSvg(luA, true)}${lineupSvg(luB, false)}
+      ${lineupSvg(luA, true, sc.flagByAbbr ? sc.flagByAbbr[tA.abbr] : "")}${lineupSvg(luB, false, sc.flagByAbbr ? sc.flagByAbbr[tB.abbr] : "")}
+      <defs>${clips.join("")}</defs>
       ${ballsA}${ballsB}
       <text x="8" y="9" font-size="8.5" font-weight="700" fill="#333">${escapeHtml(tA.abbr)} ${pA}%${escapeHtml(formA)} →</text>
       <text x="${W - 8}" y="9" font-size="8.5" font-weight="700" fill="#333" text-anchor="end">← ${escapeHtml(tB.abbr)} ${pB}%${escapeHtml(formB)}</text>
@@ -2995,6 +3013,15 @@ function renderGameCards() {
           sot: pick(t, "shotsOnTarget"),
           corners: pick(t, "wonCorners"),
         }));
+      }
+      // Flag URLs for the pitch dots (ESPN has headshots for ~1/22 WC
+      // starters — checked live 6/11 — so dots are circular flags instead).
+      if (live.soccer.stats) {
+        live.soccer.flagByAbbr = {};
+        for (const t of live.soccer.stats) {
+          live.soccer.flagByAbbr[t.abbr] =
+            teamLogoUrl(g.sportLogoKey, t.abbr, { league: g.league }) || "";
+        }
       }
       const rosters = summary?.rosters;
       if (Array.isArray(rosters) && rosters.length === 2) {
