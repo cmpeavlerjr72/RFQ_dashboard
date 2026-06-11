@@ -1807,7 +1807,8 @@ function soccerSituationHtml(sc) {
       `<span class="soc-chip${e.big ? " big" : ""}">${e.icon} ${escapeHtml(e.text)}${e.team ? ` <b>${escapeHtml(e.team)}</b>` : ""}</span>`).join("");
     return `<div class="soc-group"><span class="soc-glbl">${label}</span><span class="soc-chips">${chips}</span></div>`;
   };
-  const groups = row("Goals", goals) + row("Cards", cards) + row("Subs", subs);
+  const inner = row("Goals", goals) + row("Cards", cards) + row("Subs", subs);
+  const groups = inner ? `<div class="soc-groups">${inner}</div>` : "";
   let stats = "";
   if (sc.stats && sc.stats.length === 2) {
     const [a, h] = sc.stats;
