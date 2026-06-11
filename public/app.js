@@ -2540,7 +2540,8 @@ function computeRiskGrid(g, parlays, live) {
       const a = Math.round((live.total - live.margin) / 2);
       mark = { a, h, final: !!live.final };
     }
-    return { kind: "score", scores, cells, reach, maxAbs, teams, mark };
+    return { kind: "score", scores, cells, reach, maxAbs, teams, mark,
+             logoKey: g.sportLogoKey, league: g.league };
   }
 
   // NON-SOCCER: margin × total grid (the generic auto-sized projection).
@@ -2634,12 +2635,19 @@ function computeRiskGrid(g, parlays, live) {
   return { margins, totals, cells, reach, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep };
 }
 
-// Soccer scoreline grid: away goals (rows) × home goals (cols); the diagonal
-// is the draw band. Cells/colors identical in spirit to the margin×total
-// renderer — this is the same expected-P&L surface on truer axes.
+// Soccer scoreline grid, graph-style: ORIGIN (0,0) at the BOTTOM-LEFT — away
+// team's goals climb the y-axis, home team's goals run along the x-axis.
+// Ticks are plain 0..5; each axis carries a flag + country-name title. The
+// diagonal is the draw band.
 function renderScoreGridHtml(grid) {
-  const { scores, cells, reach, maxAbs, mark, teams } = grid;
+  const { scores, cells, reach, maxAbs, mark, teams, logoKey, league } = grid;
   const [away, home] = teams;
+  const awayName = NATIONAL_TEAMS[away] || away;
+  const homeName = NATIONAL_TEAMS[home] || home;
+  const flag = (ab) => {
+    const url = teamLogoUrl(logoKey || "wcup", ab, { league });
+    return url ? `<img class="rg-axis-flag" src="${url}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">` : "";
+  };
   const color = (pnl) => {
     const a = Math.min(1, Math.abs(pnl) / maxAbs);
     const alpha = (0.08 + a * 0.64).toFixed(2);
@@ -2649,40 +2657,45 @@ function renderScoreGridHtml(grid) {
   const N = scores.length;
   const top = N - 1;
   // Live/final mark cell (scores beyond the grid edge clamp to the last cell).
-  let markR = -1, markC = -1;
+  let markA = -1, markH = -1;
   if (mark) {
-    markR = Math.min(top, Math.max(0, mark.a));
-    markC = Math.min(top, Math.max(0, mark.h));
+    markA = Math.min(top, Math.max(0, mark.a));
+    markH = Math.min(top, Math.max(0, mark.h));
   }
   let rows = "";
-  for (let r = 0; r < N; r++) {
-    const a = scores[r];
-    let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(away)} scores ${a}">${escapeHtml(`${away} ${a}`)}</div>`;
-    for (let c = 0; c < N; c++) {
-      const h = scores[c];
+  for (let a = top; a >= 0; a--) {          // top row = most away goals; 0 lands at the bottom
+    let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(awayName)} scores ${a}">${a}</div>`;
+    for (let h = 0; h < N; h++) {
       const isDraw = a === h;
       const drawCls = isDraw ? " rg-draw" : "";
-      if (reach && !reach[r][c]) {
+      if (reach && !reach[a][h]) {
         cellsHtml += `<div class="rg-cell rg-dead${drawCls}" style="background:rgba(80,80,90,0.05);color:rgba(160,160,170,0.25)" `
           + `title="unreachable from the current score">·</div>`;
         continue;
       }
-      const pnl = cells[r][c];
-      const isMark = (r === markR && c === markC);
-      const base = `${away} ${a} – ${home} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
+      const pnl = cells[a][h];
+      const isMark = (a === markA && h === markH);
+      const base = `${awayName} ${a} – ${homeName} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
       const title = isMark ? (mark.final ? `FINAL — ${base}` : `current score — ${base}`) : base;
       cellsHtml += `<div class="rg-cell${drawCls}${isMark ? " rg-mark" : ""}" style="background:${color(pnl)}" `
         + `title="${escapeHtml(title)}">${isMark ? (mark.final ? "●" : "✕") : dollar(pnl)}</div>`;
     }
     rows += `<div class="rg-row">${cellsHtml}</div>`;
   }
-  let xlabs = `<div class="rg-corner" title="rows: ${escapeHtml(away)} goals · cols: ${escapeHtml(home)} goals">${escapeHtml(home)} →</div>`;
-  for (let c = 0; c < N; c++) xlabs += `<div class="rg-xlab">${scores[c]}</div>`;
+  let xlabs = `<div class="rg-corner"></div>`;
+  for (let h = 0; h < N; h++) xlabs += `<div class="rg-xlab">${scores[h]}</div>`;
   rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
   return `
     <div class="risk-grid">
-      <div class="rg-head">Risk surface — expected $ P&L · ${escapeHtml(away)} goals (rows) × ${escapeHtml(home)} goals (cols)</div>
-      <div class="rg-grid" style="--rg-n:${N}">${rows}</div>
+      <div class="rg-head">Risk surface — expected $ P&L by final score</div>
+      <div class="rg-wrap">
+        <div class="rg-ytitle" title="${escapeHtml(awayName)} goals (y-axis)">
+          ${flag(away)}
+          <span class="rg-axis-name">${escapeHtml(awayName)}</span>
+        </div>
+        <div class="rg-grid" style="--rg-n:${N}">${rows}</div>
+      </div>
+      <div class="rg-xtitle" title="${escapeHtml(homeName)} goals (x-axis)">${flag(home)}<span class="rg-axis-name-x">${escapeHtml(homeName)}</span></div>
       <div class="rg-legend">
         <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
         ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : ""}
