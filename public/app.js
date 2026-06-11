@@ -2500,12 +2500,50 @@ function computeRiskGrid(g, parlays, live) {
   }
   if (!haveGameLeg) return null;
 
-  // SOCCER (3-way, 2026-06-11): a compact unit grid. Margins +3..-3 with an
-  // explicit DRAW row (margin 0 is a first-class outcome, not a "can't
-  // happen"), totals 0..7 one goal per column. The generic auto-sizing put a
-  // WC game on a -3..-18 margin axis with 3-goal steps — meaningless cells.
   const isSoccer = _SOCCER_TREE_SPORTS.has(g.sport) ||
     (g.legs && g.legs.length ? _SOCCER_TREE_SPORTS.has(legSport(g.legs[0].ticker)) : false);
+
+  // SOCCER (2026-06-11 v2): direct SCORELINE axes — away score (rows) ×
+  // home score (cols), 0..5 each. The margin×total framing was a lossy
+  // projection for soccer (the cells already pin exact scorelines, and the
+  // parity-impossible holes only existed because of the projection). Every
+  // score×score cell is a real outcome; the draw band is just the diagonal.
+  if (isSoccer) {
+    const NS = 6;                         // 0..5 goals per team (6x6 = 36 cells)
+    const scores = Array.from({ length: NS }, (_, i) => i);
+    // Team codes: from any ML/spread leg if held, else split the game chunk
+    // (date token + AAABBB) — away first, Kalshi convention.
+    if (!teams) {
+      const m = /^\d{2}[A-Z]{3}\d{2}(?:\d{4})?([A-Z]{6})$/.exec(g.key || "");
+      teams = m ? [m[1].slice(0, 3), m[1].slice(3)] : ["AWAY", "HOME"];
+    }
+    const [away, home] = teams;
+    const inProgress = !!(live && live.total != null && live.margin != null && !live.final);
+    // Current per-team scores recovered from (margin=h−a, total=a+h).
+    const curH = inProgress ? Math.round((live.total + live.margin) / 2) : null;
+    const curA = inProgress ? Math.round((live.total - live.margin) / 2) : null;
+    // Reachability is exact and simple in score space: goals only increase.
+    const reach = scores.map((a) =>
+      scores.map((h) => !inProgress || (a >= curA && h >= curH)));
+    let maxAbs = 0;
+    const cells = scores.map((a, ri) => scores.map((h, ci) => {
+      const asg = { margin: h - a, total: a + h,
+                    winner: h > a ? home : a > h ? away : "__DRAW__",
+                    btts: a > 0 && h > 0 };
+      const pnl = _treeNodeExpected(ours, g.key, asg);
+      if (reach[ri][ci] && Math.abs(pnl) > maxAbs) maxAbs = Math.abs(pnl);
+      return pnl;
+    }));
+    let mark = null;
+    if (live && live.margin != null && live.total != null) {
+      const h = Math.round((live.total + live.margin) / 2);
+      const a = Math.round((live.total - live.margin) / 2);
+      mark = { a, h, final: !!live.final };
+    }
+    return { kind: "score", scores, cells, reach, maxAbs, teams, mark };
+  }
+
+  // NON-SOCCER: margin × total grid (the generic auto-sized projection).
   const NT = isSoccer ? 8 : 13;  // total columns (odd => centered on the line)
   const NM = isSoccer ? 7 : 12;  // margin rows (EVEN => no margin-0 row; soccer ODD => draw row)
   const sportTotalDefault = { nba: 222, wnba: 162, nhl: 6, mlb: 9,
@@ -2596,8 +2634,66 @@ function computeRiskGrid(g, parlays, live) {
   return { margins, totals, cells, reach, maxAbs, totalLines, teams: teams || [away, home], mark, mStep, tStep };
 }
 
+// Soccer scoreline grid: away goals (rows) × home goals (cols); the diagonal
+// is the draw band. Cells/colors identical in spirit to the margin×total
+// renderer — this is the same expected-P&L surface on truer axes.
+function renderScoreGridHtml(grid) {
+  const { scores, cells, reach, maxAbs, mark, teams } = grid;
+  const [away, home] = teams;
+  const color = (pnl) => {
+    const a = Math.min(1, Math.abs(pnl) / maxAbs);
+    const alpha = (0.08 + a * 0.64).toFixed(2);
+    return `rgba(${pnl >= 0 ? "21,128,61" : "190,18,60"},${alpha})`;
+  };
+  const dollar = (v) => { const r = Math.round(v); return r > 0 ? "+" + r : "" + r; };
+  const N = scores.length;
+  const top = N - 1;
+  // Live/final mark cell (scores beyond the grid edge clamp to the last cell).
+  let markR = -1, markC = -1;
+  if (mark) {
+    markR = Math.min(top, Math.max(0, mark.a));
+    markC = Math.min(top, Math.max(0, mark.h));
+  }
+  let rows = "";
+  for (let r = 0; r < N; r++) {
+    const a = scores[r];
+    let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(away)} scores ${a}">${escapeHtml(`${away} ${a}`)}</div>`;
+    for (let c = 0; c < N; c++) {
+      const h = scores[c];
+      const isDraw = a === h;
+      const drawCls = isDraw ? " rg-draw" : "";
+      if (reach && !reach[r][c]) {
+        cellsHtml += `<div class="rg-cell rg-dead${drawCls}" style="background:rgba(80,80,90,0.05);color:rgba(160,160,170,0.25)" `
+          + `title="unreachable from the current score">·</div>`;
+        continue;
+      }
+      const pnl = cells[r][c];
+      const isMark = (r === markR && c === markC);
+      const base = `${away} ${a} – ${home} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
+      const title = isMark ? (mark.final ? `FINAL — ${base}` : `current score — ${base}`) : base;
+      cellsHtml += `<div class="rg-cell${drawCls}${isMark ? " rg-mark" : ""}" style="background:${color(pnl)}" `
+        + `title="${escapeHtml(title)}">${isMark ? (mark.final ? "●" : "✕") : dollar(pnl)}</div>`;
+    }
+    rows += `<div class="rg-row">${cellsHtml}</div>`;
+  }
+  let xlabs = `<div class="rg-corner" title="rows: ${escapeHtml(away)} goals · cols: ${escapeHtml(home)} goals">${escapeHtml(home)} →</div>`;
+  for (let c = 0; c < N; c++) xlabs += `<div class="rg-xlab">${scores[c]}</div>`;
+  rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
+  return `
+    <div class="risk-grid">
+      <div class="rg-head">Risk surface — expected $ P&L · ${escapeHtml(away)} goals (rows) × ${escapeHtml(home)} goals (cols)</div>
+      <div class="rg-grid" style="--rg-n:${N}">${rows}</div>
+      <div class="rg-legend">
+        <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
+        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : ""}
+        · diagonal = draws · max ±$${maxAbs.toFixed(0)}
+      </div>
+    </div>`;
+}
+
 function renderRiskGridHtml(grid) {
   if (!grid || grid.maxAbs < 0.01) return "";
+  if (grid.kind === "score") return renderScoreGridHtml(grid);
   const { margins, totals, cells, maxAbs, mark, teams } = grid;
   const NR = margins.length, NC = totals.length;
   const color = (pnl) => {
