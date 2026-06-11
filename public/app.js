@@ -1068,22 +1068,33 @@ function parseTeamsFromChunk(chunk, sport) {
   if (!m) return null;
   const teams = m[1];
   if (teams.length < 4 || teams.length > 8) return null;
+  // RETURN CONTRACT: [away, home] — every consumer (scenario eval, tree,
+  // grids, spread orientation) depends on it.
+  //
+  // Token order is SPORT-SPECIFIC (verified live 2026-06-11): US sports list
+  // away-first ("26MAY28SASDAL" = SAS @ DAL), but Kalshi SOCCER chunks are
+  // HOME-FIRST — "26JUN11MEXRSA" is Mexico (home) vs South Africa, confirmed
+  // vs ESPN ("RSA @ MEX") + Pinnacle for all four 6/11-12 WC games. The old
+  // away-first assumption inverted the live mark + chip coloring on soccer
+  // (grid showed RSA up 1-0 while Mexico led 1-0).
+  const homeFirst = _SOCCER_TREE_SPORTS.has(sport);
+  const order = (first, second) => (homeFirst ? [second, first] : [first, second]);
   // Prefer a split where BOTH halves are real abbreviations for this sport.
   // This is what correctly handles variable-length codes like MLB "AZ"
   // (AZSEA -> AZ|SEA, not the length-heuristic's wrong AZS|EA) and soccer's
-  // mix of 3- and 4-char codes. Shortest away-prefix that yields two known
-  // abbrs wins, matching Kalshi's away-first convention.
+  // mix of 3- and 4-char codes. Shortest first-token prefix that yields two
+  // known abbrs wins.
   const known = KNOWN_ABBRS[sport];
   if (known) {
     for (let i = 2; i <= teams.length - 2; i++) {
       const a = teams.slice(0, i), b = teams.slice(i);
-      if (known.has(a) && known.has(b)) return [a, b];
+      if (known.has(a) && known.has(b)) return order(a, b);
     }
   }
   // Fallback when we have no abbr table (or no clean match): old 3/2/4 heuristic.
   for (const len of [3, 2, 4]) {
     if (teams.length - len < 2 || teams.length - len > 4) continue;
-    return [teams.slice(0, len), teams.slice(len)];
+    return order(teams.slice(0, len), teams.slice(len));
   }
   return null;
 }
@@ -2564,11 +2575,12 @@ function computeRiskGrid(g, parlays, live) {
   if (isSoccer) {
     const NS = 6;                         // 0..5 goals per team (6x6 = 36 cells)
     const scores = Array.from({ length: NS }, (_, i) => i);
-    // Team codes: from any ML/spread leg if held, else split the game chunk
-    // (date token + AAABBB) — away first, Kalshi convention.
+    // Team codes: from any ML/spread leg if held (parseTeamsFromChunk,
+    // [away, home]), else split the game chunk directly — soccer chunks are
+    // HOME-FIRST (2026-06-11 fix), so away = second code.
     if (!teams) {
       const m = /^\d{2}[A-Z]{3}\d{2}(?:\d{4})?([A-Z]{6})$/.exec(g.key || "");
-      teams = m ? [m[1].slice(0, 3), m[1].slice(3)] : ["AWAY", "HOME"];
+      teams = m ? [m[1].slice(3), m[1].slice(0, 3)] : ["AWAY", "HOME"];
     }
     const [away, home] = teams;
     const inProgress = !!(live && live.total != null && live.margin != null && !live.final);
