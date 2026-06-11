@@ -1719,19 +1719,26 @@ function soccerPitchHtml(sc) {
         const subMark = p.on
           ? `<text x="${(x + R - 1).toFixed(1)}" y="${(y - R + 2).toFixed(1)}" font-size="6.5" fill="#15803d" font-weight="700">▲</text>`
           : "";
-        const tip = p.on
+        const redMark = p.red != null
+          ? `<rect x="${(x + R - 2).toFixed(1)}" y="${(y - R - 3).toFixed(1)}" width="4.5" height="6" rx="0.8" fill="#dc2626"/>`
+          : "";
+        const tip = p.red != null
+          ? `#${p.jersey} ${p.name} (SENT OFF ${p.red} — team down a man)`
+          : p.on
           ? `#${p.jersey} ${p.name} (on ${p.on.min} for ${p.on.forName})`
           : `#${p.jersey} ${p.name}${p.off ? " (subbed off)" : ""}`;
+        // Sent-off players render near-transparent — the gap in the shape IS
+        // the information (team playing with 10).
+        const alpha = p.red != null ? 0.18 : p.off ? 0.35 : 1;
         out.push(
-          `<g opacity="${p.off ? 0.35 : 1}">` +
+          `<g opacity="${alpha}">` +
           (flagUrl
             ? `<image href="${flagUrl}" x="${(x - R - 2).toFixed(1)}" y="${(y - R).toFixed(1)}" width="${2 * R + 4}" height="${2 * R}" preserveAspectRatio="xMidYMid slice" clip-path="url(#${cid})"/>`
             : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="${leftSide ? "#1d4ed8" : "#b91c1c"}"/>`) +
-          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="none" stroke="${leftSide ? "#1d4ed8" : "#b91c1c"}" stroke-width="1.3"/>` +
-          subMark +
+          `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${R}" fill="none" stroke="${p.red != null ? "#dc2626" : leftSide ? "#1d4ed8" : "#b91c1c"}" stroke-width="1.3"/>` +
           `<text x="${x.toFixed(1)}" y="${(y + R + 6.5).toFixed(1)}" font-size="5.4" text-anchor="middle" fill="#333">${escapeHtml(shortName(p.name))}</text>` +
           `<title>${escapeHtml(tip)}</title>` +
-          `</g>`);
+          `</g>` + (p.red != null ? `<g opacity="0.9">${redMark}</g>` : "") + (p.on ? `<g>${subMark}</g>` : ""));
       }
     }
     return out.join("");
@@ -1767,41 +1774,40 @@ function soccerPitchHtml(sc) {
 // stat strip (possession / shots / corners) from the summary boxscore. The
 // soccer analogue of the MLB bases diamond / NHL shot plot.
 function soccerSituationHtml(sc) {
-  const evts = [];
+  const short = (n) => {
+    const parts = String(n || "").trim().split(/\s+/);
+    return parts.length < 2 ? (parts[0] || "") : `${parts[0][0]}. ${parts[parts.length - 1]}`;
+  };
+  const minOf = (c) => parseInt(String(c || "").replace(/[^\d]/g, ""), 10) || 0;
+  // Categorize the match events into GROUPS (goals / cards / subs), each
+  // sorted by minute — one labeled row per group, chips per event.
+  const goals = [], cards = [], subs = [];
   for (const d of sc.details || []) {
     const txt = (d?.type?.text || "").toLowerCase();
-    const goal = !!d.scoringPlay;
-    const red = !!d.redCard || txt.includes("red card");
-    const yellow = !red && (!!d.yellowCard || txt.includes("yellow card"));
-    if (!goal && !red && !yellow) continue;          // skip subs etc.
-    const icon = goal
-      ? (txt.includes("own goal") ? "⚽(og)" : txt.includes("penalty") ? "⚽(p)" : "⚽")
-      : red ? "🟥" : "🟨";
-    const who = d?.athletesInvolved?.[0]?.shortName
-      || d?.athletesInvolved?.[0]?.displayName || "";
+    const who = short(d?.athletesInvolved?.[0]?.displayName || "");
     const team = sc.idAbbr[String(d?.team?.id)] || "";
     const clock = d?.clock?.displayValue || "";
-    evts.push({ icon, who, team, clock, big: goal || red });
+    if (d.scoringPlay) {
+      const tag = txt.includes("own goal") ? " (og)" : txt.includes("penalty") ? " (pen)" : "";
+      goals.push({ icon: "⚽", text: `${clock} ${who}${tag}`, team, min: minOf(clock), big: true });
+    } else if (d.redCard || txt.includes("red card")) {
+      cards.push({ icon: "🟥", text: `${clock} ${who}`, team, min: minOf(clock), big: true });
+    } else if (d.yellowCard || txt.includes("yellow card")) {
+      cards.push({ icon: "🟨", text: `${clock} ${who}`, team, min: minOf(clock), big: false });
+    }
   }
-  // Substitutions (from the roster pairs — scoreboard details don't carry
-  // them): "🔁 66' Mora ⟵ Fidalgo". Merge chronologically with goals/cards.
   for (const s of sc.subs || []) {
-    const short = (n) => {
-      const parts = String(n || "").trim().split(/\s+/);
-      return parts.length < 2 ? (parts[0] || "") : `${parts[0][0]}. ${parts[parts.length - 1]}`;
-    };
-    evts.push({ icon: "🔁", who: `${short(s.inName)} ⟵ ${short(s.outName)}`,
-                team: s.team, clock: s.min, big: false });
+    subs.push({ icon: "🔁", text: `${s.min} ${short(s.inName)} ⟵ ${short(s.outName)}`,
+                team: s.team, min: minOf(s.min), big: false });
   }
-  const minOf = (c) => parseInt(String(c || "").replace(/[^\d]/g, ""), 10) || 0;
-  evts.sort((a, b) => minOf(a.clock) - minOf(b.clock));
-  let timeline = "";
-  if (evts.length) {
-    const shown = evts.slice(-10);
-    const more = evts.length - shown.length;
-    timeline = `<div class="soc-timeline">${more > 0 ? `<span class="soc-evt">+${more} earlier</span>` : ""}${shown.map((e) =>
-      `<span class="soc-evt${e.big ? " big" : ""}">${e.icon} ${escapeHtml(e.clock)} ${escapeHtml(e.who)}${e.team ? ` <b>${escapeHtml(e.team)}</b>` : ""}</span>`).join("")}</div>`;
-  }
+  const row = (label, items) => {
+    if (!items.length) return "";
+    items.sort((a, b) => a.min - b.min);
+    const chips = items.map((e) =>
+      `<span class="soc-chip${e.big ? " big" : ""}">${e.icon} ${escapeHtml(e.text)}${e.team ? ` <b>${escapeHtml(e.team)}</b>` : ""}</span>`).join("");
+    return `<div class="soc-group"><span class="soc-glbl">${label}</span><span class="soc-chips">${chips}</span></div>`;
+  };
+  const groups = row("Goals", goals) + row("Cards", cards) + row("Subs", subs);
   let stats = "";
   if (sc.stats && sc.stats.length === 2) {
     const [a, h] = sc.stats;
@@ -1810,10 +1816,10 @@ function soccerSituationHtml(sc) {
     stats = `<div class="soc-stats">${cell(a)}${cell(h)}</div>`;
   }
   const pitch = soccerPitchHtml(sc);
-  if (!timeline && !stats && !pitch) return "";
-  // The pitch panel carries possession/shots/corners itself — the text strip
-  // is the fallback for when the boxscore hasn't loaded into a pitch yet.
-  return `<div class="soccer-situation">${pitch}${timeline}${pitch ? "" : stats}</div>`;
+  if (!groups && !stats && !pitch) return "";
+  // Pitch centered up top; grouped event rows below; the text stat strip
+  // only as fallback before the boxscore feeds the pitch.
+  return `<div class="soccer-situation">${pitch}${groups}${pitch ? "" : stats}</div>`;
 }
 
 
@@ -3042,6 +3048,14 @@ function renderGameCards() {
             teamLogoUrl(g.sportLogoKey, t.abbr, { league: g.league }) || "";
         }
       }
+      // Red cards: map sent-off athletes (by id) so the pitch can ghost them
+      // — the visual "this team is down to 10".
+      live.soccer.reds = {};
+      for (const d of live.soccer.details || []) {
+        if (!d?.redCard) continue;
+        const a = (d.athletesInvolved || [])[0];
+        if (a?.id) live.soccer.reds[String(a.id)] = d?.clock?.displayValue || "";
+      }
       const rosters = summary?.rosters;
       if (Array.isArray(rosters) && rosters.length === 2) {
         live.soccer.lineups = {};
@@ -3071,12 +3085,14 @@ function renderGameCards() {
             players: starters.map((e) => {
               const cur = resolve(e);
               const swapped = cur !== e;
+              const redMin = live.soccer.reds[String(cur?.athlete?.id || "")];
               return {
                 place: parseInt(e?.formationPlace || "0", 10) || 0,
                 jersey: cur?.jersey || "",
                 name: cur?.athlete?.displayName || "",
                 off: !swapped && !!e?.subbedOut,   // off w/ no known replacement
                 on: swapped ? { min: subMin(cur), forName: e?.athlete?.displayName || "" } : null,
+                red: redMin != null ? redMin : null,   // sent off -> team down a man
               };
             }),
           };
