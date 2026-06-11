@@ -251,7 +251,10 @@ const HF_FILLS_NAME: Record<string, string> = {
   MVPeav: "fills_mvpeav.jsonl.gz",
   GPeavT: "fills_gpeavt.jsonl.gz",
 };
-const HF_FILLS_TTL_MS = 60 * 1000;
+// 20s (was 60): the home box now mirrors fills EVENT-DRIVEN (notifier kicks
+// the sync on each verified fill, q5min task is just a backstop), so the
+// server cache is the next-largest term in corr-chip latency on Render.
+const HF_FILLS_TTL_MS = 20 * 1000;
 const hfFillsCache = new Map<string, { fetchedAt: number; fills: any[] }>();
 
 async function hfFills(account: string): Promise<any[]> {
