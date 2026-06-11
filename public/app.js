@@ -2648,6 +2648,14 @@ function aggregateGameCards() {
         pAllHit *= Math.min(1, Math.max(0, pBuyerHits));
       }
       if (havePrice) {
+        // Fold in the fill-time correlation ratio (2026-06-11) — this was the
+        // THIRD independent-product EV path (tree + parlay cards were corr-
+        // baked, this one wasn't), so a game card could read negative while
+        // every parlay card on it was green: the big CZE-by-1 fill's loss
+        // prob is 29% independent vs 20% true (ratio 0.676), a ~$2 swing.
+        if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
+          pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
+        }
         const pWeWin = 1 - pAllHit;
         g.expectedPnl = (g.expectedPnl || 0) + (pWeWin * p.qty - p.cost);
         g.expectedCovered = (g.expectedCovered || 0) + 1;
