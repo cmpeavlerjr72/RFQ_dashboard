@@ -207,6 +207,15 @@ async function refresh() {
         sport: f.sport_hint,
         fillTs: typeof f.ts === "number" ? f.ts : null,
         fillIso: f.ts_iso || null,
+        // Correlation ratio the runner priced at fill time (yes_prob_adj /
+        // yes_prob, 2026-06-11). Per-leg displays multiply independently,
+        // which misstates correlated parlays — e.g. a negatively-correlated
+        // ML+Under (ratio <1) looked -EV from the jump. Folded into
+        // _treeNodeExpected + computeParlayProbabilities as a cosmetic
+        // first-order correction; null when the fill predates the field.
+        corrRatio: (typeof f.yes_prob_adj === "number" && typeof f.yes_prob === "number"
+                    && f.yes_prob > 0 && f.yes_prob_adj > 0)
+          ? f.yes_prob_adj / f.yes_prob : null,
         midC: null, unreal: null,
         legMids: {},
       };
@@ -1363,6 +1372,12 @@ function _treeNodeExpected(parlays, gameKey, asg) {
       else if (r === "buyer_miss") pHit = 0;
       else { const pu = _treeLegPUs(p, l); pHit = pu == null ? 0.5 : (1 - pu); }
       pAllHit *= pHit;
+    }
+    // Fold in the runner's fill-time correlation ratio (cosmetic first-order:
+    // entry-time joint/product, held fixed as mids move). Skip decided
+    // parlays (pAllHit 0/1) where correlation no longer applies.
+    if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
+      pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
     }
     exp += pAllHit * (-p.cost) + (1 - pAllHit) * p.max_profit;
   }
@@ -4274,6 +4289,12 @@ function computeParlayProbabilities(p) {
   if (unknown || p.legs.length === 0) {
     return { pWin: null, pLose: null, expectedPnl: null, unknown: true, breakdown };
   }
+  // Bake in the runner's fill-time correlation ratio (see corrRatio above):
+  // pLose is the independent product, which overstates the loss prob on
+  // negatively-correlated parlays. Skip decided parlays (pLose 0/1).
+  if (p.corrRatio != null && pLose > 0 && pLose < 1) {
+    pLose = Math.min(1, Math.max(0, pLose * p.corrRatio));
+  }
   const pWin = 1 - pLose;
   const expectedPnl = pWin * p.max_profit - pLose * p.cost;
   return { pWin, pLose, expectedPnl, unknown: false, breakdown };
@@ -4396,6 +4417,12 @@ function renderParlayCard(p, n, probs) {
   const pWinHtml = probs.pWin != null
     ? `<div class="col"><div class="lbl">Win chance</div><div class="val">${(probs.pWin*100).toFixed(0)}%</div></div>`
     : "";
+  // Fill-time correlation the runner priced (joint / independent product).
+  // <1 = negatively-correlated legs (the parlay is HARDER to lose than the
+  // leg product implies); >1 = positively-correlated chalk.
+  const corrHtml = (p.corrRatio != null && Math.abs(p.corrRatio - 1) >= 0.005)
+    ? `<div class="col"><div class="lbl">Corr</div><div class="val" title="Runner's fill-time correlation: joint probability vs independent leg product. Baked into Win chance / EV / ROI.">×${p.corrRatio.toFixed(2)}</div></div>`
+    : "";
   const evHtml = probs.expectedPnl != null
     ? `<div class="col"><div class="lbl">Expected current outcome</div><div class="val ${pnlClass(probs.expectedPnl)}">${fmtMoney(probs.expectedPnl)}</div></div>`
     : "";
@@ -4426,6 +4453,7 @@ function renderParlayCard(p, n, probs) {
         <div class="col"><div class="lbl">Risk</div><div class="val">${fmtMoney(p.cost)}</div></div>
         <div class="col"><div class="lbl">To win</div><div class="val pos">+${p.max_profit.toFixed(2)}</div></div>
         ${pWinHtml}
+        ${corrHtml}
         ${evHtml}
         ${roiHtml}
       </div>
