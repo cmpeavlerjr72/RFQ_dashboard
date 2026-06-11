@@ -1800,12 +1800,28 @@ function soccerSituationHtml(sc) {
     subs.push({ icon: "🔁", text: `${s.min} ${short(s.inName)} ⟵ ${short(s.outName)}`,
                 team: s.team, min: minOf(s.min), big: false });
   }
+  // Each group splits into two per-team sub-columns headed by the team's
+  // flag (the flag IS the team label — no abbr text on chips).
+  const [tA, tB] = (sc.stats && sc.stats.length === 2)
+    ? [sc.stats[0].abbr, sc.stats[1].abbr] : ["", ""];
+  const flagImg = (ab) => {
+    const url = sc.flagByAbbr ? sc.flagByAbbr[ab] : "";
+    return url
+      ? `<img class="soc-tflag" src="${url}" alt="${escapeHtml(ab)}" title="${escapeHtml(ab)}" loading="lazy" decoding="async">`
+      : `<b class="soc-tflag-txt">${escapeHtml(ab)}</b>`;
+  };
   const row = (label, items) => {
     if (!items.length) return "";
     items.sort((a, b) => a.min - b.min);
-    const chips = items.map((e) =>
-      `<span class="soc-chip${e.big ? " big" : ""}">${e.icon} ${escapeHtml(e.text)}${e.team ? ` <b>${escapeHtml(e.team)}</b>` : ""}</span>`).join("");
-    return `<div class="soc-group"><span class="soc-glbl">${label}</span><span class="soc-chips">${chips}</span></div>`;
+    const col = (ab) => {
+      const mine = items.filter((e) => e.team === ab
+        || (!e.team && ab === tA));          // unknown-team chips fall to col A
+      const chips = mine.map((e) =>
+        `<span class="soc-chip${e.big ? " big" : ""}">${e.icon} ${escapeHtml(e.text)}</span>`).join("");
+      return `<div class="soc-teamcol">${flagImg(ab)}${chips}</div>`;
+    };
+    return `<div class="soc-group"><span class="soc-glbl">${label}</span>` +
+           `<div class="soc-teamcols">${col(tA)}${col(tB)}</div></div>`;
   };
   const inner = row("Goals", goals) + row("Cards", cards) + row("Subs", subs);
   const groups = inner ? `<div class="soc-groups">${inner}</div>` : "";
