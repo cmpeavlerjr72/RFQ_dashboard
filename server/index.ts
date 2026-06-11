@@ -213,7 +213,11 @@ app.get("/api/roster", async (req, res, next) => {
 // ----------------------------------------------------------------------------
 
 // Per-account local fills file. MVPeav keeps the original FILLS_PATH (default
-// data/fills.jsonl); TGPeav uses FILLS_PATH_SECOND (default data/fills_second.jsonl).
+// data/fills.jsonl); GPeavT (TP) uses FILLS_PATH_SECOND (default
+// data/fills_second.jsonl — the runner's actual TP fill log; 2026-06-11 fix:
+// the generic fills_<account>.jsonl fallback resolved to a nonexistent
+// fills_gpeavt.jsonl, so the TP page NEVER got fill enrichment — no fill
+// timestamps and no corr-adjusted win%/EV).
 // This file is only an optional fast-path for the live open-positions panel —
 // positions + leg recovery come from Kalshi regardless (see kalshi.ts), so a
 // missing file just yields {fills: []}, exactly like the deployed MVPeav case.
@@ -223,7 +227,12 @@ function fillsPathFor(account: string): string {
       ? path.resolve(process.cwd(), process.env.FILLS_PATH)
       : path.resolve(__dirname, "..", "..", "data", "fills.jsonl");
   }
-  // Suffix convention for non-default accounts: FILLS_PATH_<ACCOUNT-UPPER>
+  if (account === "GPeavT") {
+    return process.env.FILLS_PATH_SECOND
+      ? path.resolve(process.cwd(), process.env.FILLS_PATH_SECOND)
+      : path.resolve(__dirname, "..", "..", "data", "fills_second.jsonl");
+  }
+  // Suffix convention for any future accounts: FILLS_PATH_<ACCOUNT-UPPER>
   const envVar = `FILLS_PATH_${account.toUpperCase()}`;
   if (process.env[envVar]) return path.resolve(process.cwd(), process.env[envVar]!);
   return path.resolve(__dirname, "..", "..", "data", `fills_${account.toLowerCase()}.jsonl`);
