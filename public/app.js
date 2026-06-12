@@ -2802,76 +2802,91 @@ function _bisect(lo, hi, fn) {
 }
 
 // ── 3D expected-$ surface (the "3D" grid view, 2026-06-12) ──────────────────
-// Textbook-style isometric surface plot of EV(a,h) = P&L x probability per
-// scoreline. Pure SVG string (composes with the innerHTML-swapping scrubber/
-// toggle pipeline): base lattice at z=0, mesh quads painted back-to-front
-// (height fields viewed from a fixed angle need no real z-buffer), green above
-// the plane / red below, a hoverable node per scoreline, axes labeled with the
-// team names. Heights scale to the deepest |EV| cell.
-function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell) {
+// Textbook-style isometric 3D BAR plot of EV(a,h) = P&L x probability per
+// scoreline: one prism per cell, centered on the cell, rising above the z=0
+// floor (green, lifts E) or hanging below it (red, drags E). Pure SVG string
+// (composes with the innerHTML-swapping scrubber/toggle pipeline). Painted
+// back-to-front; tick labels sit on the bar centers; axis titles carry flags.
+function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell, flags) {
   const N = scores.length;
-  const ux = 26, uy = 14, Z = 44;          // iso step + max peak height (px)
-  const cx = 180, cy = 56;
-  const W = 360, H = 252;
+  const ux = 26, uy = 14, Z = 46;          // iso step + max bar height (px)
+  const k = 0.36;                          // bar footprint half-fraction of a cell
+  const cx = 185, cy = 64;
+  const W = 380, H = 280;
   const ev = (a, h) => probs[a][h] * cells[a][h];
   const zOf = (a, h) => (maxEv > 0 ? (ev(a, h) / maxEv) * Z : 0);
-  const px = (h, a, z) => [cx + (h - a) * ux, cy + (h + a) * uy - z];
+  const C = (h, a) => [cx + (h - a) * ux, cy + (h + a) * uy];
+  const fmt = (p) => p[0].toFixed(1) + "," + p[1].toFixed(1);
   const out = [];
-  // z=0 base lattice
+
+  // z=0 floor: cell diamonds (so empty cells still read as the floor plane)
   let base = "";
-  for (let k = 0; k < N; k++) {
-    const [x1, y1] = px(k, 0, 0), [x2, y2] = px(k, N - 1, 0);
-    const [x3, y3] = px(0, k, 0), [x4, y4] = px(N - 1, k, 0);
-    base += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`
-          + `<line x1="${x3}" y1="${y3}" x2="${x4}" y2="${y4}"/>`;
-  }
-  out.push(`<g stroke="rgba(128,128,140,.30)" stroke-width="1">${base}</g>`);
-  // axis tick labels + team names along the two back edges
-  let labels = "";
-  for (let k = 0; k < N; k++) {
-    const [hx, hy] = px(k, -0.45, 0);
-    const [ax, ay] = px(-0.45, k, 0);
-    labels += `<text x="${hx.toFixed(1)}" y="${(hy - 2).toFixed(1)}" text-anchor="middle">${scores[k]}</text>`
-            + `<text x="${ax.toFixed(1)}" y="${(ay - 2).toFixed(1)}" text-anchor="middle">${scores[k]}</text>`;
-  }
-  const [hnx, hny] = px(N * 0.5 - 0.5, -1.7, 0);
-  const [anx, any_] = px(-1.7, N * 0.5 - 0.5, 0);
-  labels += `<text x="${hnx.toFixed(1)}" y="${hny.toFixed(1)}" text-anchor="middle" font-weight="700">${escapeHtml(homeName)} →</text>`
-          + `<text x="${anx.toFixed(1)}" y="${any_.toFixed(1)}" text-anchor="middle" font-weight="700">← ${escapeHtml(awayName)}</text>`;
-  out.push(`<g font-size="8" fill="rgba(150,150,162,.95)">${labels}</g>`);
-  // mesh quads, painter's order (back to front = ascending h+a)
-  const quads = [];
-  for (let h = 0; h < N - 1; h++) for (let a = 0; a < N - 1; a++) quads.push([h, a]);
-  quads.sort((q, r) => (q[0] + q[1]) - (r[0] + r[1]));
-  let mesh = "";
-  for (const [h, a] of quads) {
-    const pts = [px(h, a, zOf(a, h)), px(h + 1, a, zOf(a, h + 1)),
-                 px(h + 1, a + 1, zOf(a + 1, h + 1)), px(h, a + 1, zOf(a + 1, h))];
-    const mean = (ev(a, h) + ev(a, h + 1) + ev(a + 1, h) + ev(a + 1, h + 1)) / 4;
-    const mag = maxEv > 0 ? Math.min(1, Math.abs(mean) / maxEv) : 0;
-    const fill = `rgba(${mean >= 0 ? "21,128,61" : "190,18,60"},${(0.10 + mag * 0.55).toFixed(2)})`;
-    mesh += `<polygon points="${pts.map((p) => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ")}"`
-          + ` fill="${fill}" stroke="rgba(25,25,35,.55)" stroke-width=".7"/>`;
-  }
-  out.push(mesh);
-  // one hoverable node per scoreline (front-most last so hover wins)
-  let dots = "";
   for (let s = 0; s <= 2 * (N - 1); s++) {
     for (let h = 0; h < N; h++) {
       const a = s - h;
       if (a < 0 || a >= N) continue;
-      const z = zOf(a, h);
-      const [x, y] = px(h, a, z);
-      const e = ev(a, h), pnl = cells[a][h], p = probs[a][h];
-      const isMark = markCell && markCell.a === a && markCell.h === h;
-      const tip = `${awayName} ${a} – ${homeName} ${h} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`
-                + ` · ${(p * 100).toFixed(1)}% · EV ${e >= 0 ? "+" : "−"}$${Math.abs(e).toFixed(2)}`;
-      dots += isMark
-        ? `<text x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="800" fill="#000">${markCell.final ? "●" : "✕"}<title>${escapeHtml(tip)}</title></text>`
-        : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="rgba(120,120,135,.25)" stroke="rgba(60,60,75,.4)" stroke-width=".5"><title>${escapeHtml(tip)}</title></circle>`;
+      const [x, y] = C(h, a);
+      const d = [[x, y - 2 * k * uy], [x + 2 * k * ux, y], [x, y + 2 * k * uy], [x - 2 * k * ux, y]];
+      base += `<polygon points="${d.map(fmt).join(" ")}"/>`;
     }
   }
-  out.push(`<g class="rg3d-dots">${dots}</g>`);
+  out.push(`<g fill="rgba(128,128,140,.07)" stroke="rgba(128,128,140,.30)" stroke-width=".7">${base}</g>`);
+
+  // tick labels centered on the OUTER cells of each axis row/column
+  let labels = "";
+  for (let i = 0; i < N; i++) {
+    const [hx, hy] = C(i, -0.95);          // just outside the a=0 edge
+    const [ax, ay] = C(-0.95, i);          // just outside the h=0 edge
+    labels += `<text x="${hx.toFixed(1)}" y="${(hy + 2.5).toFixed(1)}" text-anchor="middle">${scores[i]}</text>`
+            + `<text x="${ax.toFixed(1)}" y="${(ay + 2.5).toFixed(1)}" text-anchor="middle">${scores[i]}</text>`;
+  }
+  out.push(`<g font-size="8.5" fill="rgba(150,150,162,.95)">${labels}</g>`);
+
+  // axis titles with flags, along each axis direction
+  const title = (x, y, name, url, arrowAfter) => {
+    const img = url ? `<image href="${url}" x="${(x - (arrowAfter ? 34 : -22)).toFixed(1)}" y="${(y - 9).toFixed(1)}" width="11" height="11" preserveAspectRatio="xMidYMid meet"/>` : "";
+    return `${img}<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${arrowAfter ? "end" : "start"}" font-size="9" font-weight="700" fill="rgba(150,150,162,.95)">${escapeHtml(name)} ${arrowAfter ? "→" : ""}</text>`
+      + (arrowAfter ? "" : `<text x="${(x - 8).toFixed(1)}" y="${y.toFixed(1)}" text-anchor="end" font-size="9" font-weight="700" fill="rgba(150,150,162,.95)">←</text>`);
+  };
+  const [htx, hty] = C(N - 0.4, -2.0);
+  const [atx, aty] = C(-2.0, N - 0.4);
+  out.push(`<g>${title(htx, hty, homeName, flags && flags.home, true)}${title(atx, aty, awayName, flags && flags.away, false)}</g>`);
+
+  // bars, painter's order (back to front)
+  const cellsOrder = [];
+  for (let h = 0; h < N; h++) for (let a = 0; a < N; a++) cellsOrder.push([h, a]);
+  cellsOrder.sort((q, r) => (q[0] + q[1]) - (r[0] + r[1]));
+  let bars = "";
+  for (const [h, a] of cellsOrder) {
+    const z = zOf(a, h);
+    const e = ev(a, h), pnl = cells[a][h], p = probs[a][h];
+    const tip = `${awayName} ${a} – ${homeName} ${h} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`
+              + ` · ${(p * 100).toFixed(1)}% · EV ${e >= 0 ? "+" : "−"}$${Math.abs(e).toFixed(2)}`;
+    const [x, y] = C(h, a);
+    const isMark = markCell && markCell.a === a && markCell.h === h;
+    const markTxt = isMark
+      ? `<text x="${x.toFixed(1)}" y="${(y - z + 3).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="800" fill="#000">${markCell.final ? "●" : "✕"}</text>`
+      : "";
+    if (Math.abs(z) < 0.6) {               // ~zero EV: the floor diamond carries the tooltip
+      bars += `<g><polygon points="${[[x, y - 2 * k * uy], [x + 2 * k * ux, y], [x, y + 2 * k * uy], [x - 2 * k * ux, y]].map(fmt).join(" ")}"`
+            + ` fill="rgba(128,128,140,.10)" stroke="rgba(128,128,140,.35)" stroke-width=".6"/><title>${escapeHtml(tip)}</title>${markTxt}</g>`;
+      continue;
+    }
+    // base diamond corners: Back/Right/Front/Left around the center
+    const B0 = [x, y - 2 * k * uy], R0 = [x + 2 * k * ux, y], F0 = [x, y + 2 * k * uy], L0 = [x - 2 * k * ux, y];
+    const lift = (pt) => [pt[0], pt[1] - z];
+    const Bz = lift(B0), Rz = lift(R0), Fz = lift(F0), Lz = lift(L0);
+    const pos = z > 0;
+    const capC = pos ? "#2ea35f" : "#d4365c";
+    const leftC = pos ? "#1f7a46" : "#a32646";
+    const rightC = pos ? "#155c34" : "#7d1c36";
+    const face = (pts, fill) =>
+      `<polygon points="${pts.map(fmt).join(" ")}" fill="${fill}" fill-opacity=".92" stroke="rgba(20,20,30,.5)" stroke-width=".6"/>`;
+    // visible faces from the front: left side (F-L), right side (F-R), then cap
+    bars += `<g>${face([F0, L0, Lz, Fz], leftC)}${face([F0, R0, Rz, Fz], rightC)}`
+          + `${face([Fz, Rz, Bz, Lz], capC)}<title>${escapeHtml(tip)}</title>${markTxt}</g>`;
+  }
+  out.push(bars);
   return `<svg class="rg-ev3d" viewBox="0 0 ${W} ${H}" role="img" aria-label="3D expected-value surface">${out.join("")}</svg>`;
 }
 
@@ -3059,7 +3074,7 @@ function renderScoreGridHtml(grid) {
   const awayName = NATIONAL_TEAMS[away] || away;
   const homeName = NATIONAL_TEAMS[home] || home;
   const view = (probs && grid.gameKey && state.gridView[grid.gameKey]) || "pnl";
-  const probView = view === "prob", evView = view === "ev";
+  const probView = view === "prob", evView = view === "ev", ev2dView = view === "ev2d";
   let maxProb = 0, maxEv = 0, evSum = 0;
   if (probs) {
     for (let a = 0; a < probs.length; a++) {
@@ -3090,6 +3105,17 @@ function renderScoreGridHtml(grid) {
     const pct = p * 100;
     return pct >= 9.5 ? String(Math.round(pct)) : pct >= 1 ? pct.toFixed(1) : "·";
   };
+  // flat $x% view: diverging green/red scaled to the largest |P&L x p|
+  const evColor = (ev) => {
+    const a = maxEv > 0 ? Math.min(1, Math.abs(ev) / maxEv) : 0;
+    return `rgba(${ev >= 0 ? "21,128,61" : "190,18,60"},${(0.08 + a * 0.64).toFixed(2)})`;
+  };
+  const evTxt = (ev) => {
+    const v = Math.abs(ev);
+    if (v < 0.05) return "·";
+    const s = ev > 0 ? "+" : "-";
+    return v >= 9.5 ? s + Math.round(v) : s + v.toFixed(1);
+  };
   const dollar = (v) => { const r = Math.round(v); return r > 0 ? "+" + r : "" + r; };
   const N = scores.length;
   const top = N - 1;
@@ -3119,8 +3145,11 @@ function renderScoreGridHtml(grid) {
         : "";
       const base = `${awayName} ${a} – ${homeName} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}${extraTxt}`;
       const title = isMark ? (mark.final ? `FINAL — ${base}` : `current score — ${base}`) : base;
-      const bg = probView ? probColor(cellP) : color(pnl);
-      const body = isMark ? (mark.final ? "●" : "✕") : probView ? pctTxt(cellP) : dollar(pnl);
+      const bg = probView ? probColor(cellP) : ev2dView ? evColor(cellEv) : color(pnl);
+      const body = isMark ? (mark.final ? "●" : "✕")
+        : probView ? pctTxt(cellP)
+        : ev2dView ? evTxt(cellEv)
+        : dollar(pnl);
       cellsHtml += `<div class="rg-cell${drawCls}${isMark ? " rg-mark" : ""}" style="background:${bg}" `
         + `title="${escapeHtml(title)}">${body}</div>`;
     }
@@ -3133,23 +3162,30 @@ function renderScoreGridHtml(grid) {
         <span class="rg-view-toggle" data-game-key="${escapeHtml(grid.gameKey)}">
           <button type="button" class="rg-view-btn${view === "pnl" ? " on" : ""}" data-view="pnl" title="expected $ P&L per final score">$</button>
           <button type="button" class="rg-view-btn${probView ? " on" : ""}" data-view="prob" title="chance of each final score (Poisson fit from live mids)">%</button>
-          <button type="button" class="rg-view-btn${evView ? " on" : ""}" data-view="ev" title="3D expected-$ surface: height = P&L x chance per scoreline (heights sum to the book's E[P&L])">3D</button>
+          <button type="button" class="rg-view-btn${ev2dView ? " on" : ""}" data-view="ev2d" title="P&L x chance per cell: contribution to expected $ (cells sum to the book's E[P&L])">$×%</button>
+          <button type="button" class="rg-view-btn${evView ? " on" : ""}" data-view="ev" title="3D bar surface: height = P&L x chance per scoreline (heights sum to the book's E[P&L])">3D</button>
         </span>` : "";
   const markLegend = mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : "";
   const legend = probView
     ? `darker blue = more likely · % chance shown in each cell (model est. ${grid.lambdas ? grid.lambdas.map((x) => x.toFixed(1)).join("/") : ""} goals)
         ${markLegend} · diagonal = draws · hover a cell for its $`
+    : ev2dView
+    ? `<span class="rg-sw neg"></span>drags E<span class="rg-sw pos"></span>lifts E · $ P&L × chance per cell — contribution to expected $
+        ${markLegend} · cells sum to E[P&L] ≈ ${evSum >= 0 ? "+" : "−"}$${Math.abs(evSum).toFixed(2)}`
     : evView
-    ? `<span class="rg-sw neg"></span>pit (drags E)<span class="rg-sw pos"></span>peak (lifts E) · height = $ P&L × chance per scoreline
-        · heights sum to E[P&L] ≈ ${evSum >= 0 ? "+" : "−"}$${Math.abs(evSum).toFixed(2)} · hover a point for $/%/EV`
+    ? `<span class="rg-sw neg"></span>pit (drags E)<span class="rg-sw pos"></span>peak (lifts E) · bar height = $ P&L × chance per scoreline
+        · heights sum to E[P&L] ≈ ${evSum >= 0 ? "+" : "−"}$${Math.abs(evSum).toFixed(2)} · hover a bar for $/%/EV`
     : `<span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
         ${markLegend} · diagonal = draws · max ±$${maxAbs.toFixed(0)}`;
   const headTitle = probView ? "chance of each final score"
+    : ev2dView ? "P&L × chance (expected-$ contribution)"
     : evView ? "expected-$ surface (P&L × chance)"
     : "expected $ P&L by final score";
+  const flagUrl = (ab) => teamLogoUrl(logoKey || "wcup", ab, { league }) || null;
   const body = evView
     ? _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName,
-                    mark ? { a: markA, h: markH, final: !!mark.final } : null)
+                    mark ? { a: markA, h: markH, final: !!mark.final } : null,
+                    { home: flagUrl(home), away: flagUrl(away) })
     : `
       <div class="rg-wrap">
         <div class="rg-ytitle" title="${escapeHtml(awayName)} goals (y-axis)">
