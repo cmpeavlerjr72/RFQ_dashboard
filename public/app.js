@@ -48,9 +48,10 @@ const state = {
   // gameGroupKey -> scrubber position (fill index 1..N). Absent/null = "now"
   // (live grid, default). Survives the periodic re-render.
   gridScrub: {},
-  // Game keys whose risk grid is showing CELL PROBABILITIES instead of $ P&L
-  // (the $/% toggle, 2026-06-12). Soccer score grids only.
-  gridProbView: new Set(),
+  // gameKey -> risk-grid view mode: "prob" (cell odds) or "ev" (P&L x odds =
+  // contribution to expected $). Absent = "pnl", the default $ view.
+  // Soccer score grids only (the $/%/$x% toggle, 2026-06-12).
+  gridView: {},
   scoreboards: {},        // sport:date -> ESPN scoreboard payload
   // ML event ticker (KXWCGAME-…, KXINTLFRIENDLYGAME-…) -> ISO kickoff, from
   // Kalshi's milestone feed (/api/start-times). Used to show a kickoff time on
@@ -2983,9 +2984,20 @@ function renderScoreGridHtml(grid) {
   const [away, home] = teams;
   const awayName = NATIONAL_TEAMS[away] || away;
   const homeName = NATIONAL_TEAMS[home] || home;
-  const probView = !!(probs && grid.gameKey && state.gridProbView.has(grid.gameKey));
-  let maxProb = 0;
-  if (probs) for (const row of probs) for (const v of row) if (v > maxProb) maxProb = v;
+  const view = (probs && grid.gameKey && state.gridView[grid.gameKey]) || "pnl";
+  const probView = view === "prob", evView = view === "ev";
+  let maxProb = 0, maxEv = 0, evSum = 0;
+  if (probs) {
+    for (let a = 0; a < probs.length; a++) {
+      for (let h = 0; h < probs[a].length; h++) {
+        const p = probs[a][h];
+        if (p > maxProb) maxProb = p;
+        const ev = p * cells[a][h];
+        evSum += ev;
+        if ((!reach || reach[a][h]) && Math.abs(ev) > maxEv) maxEv = Math.abs(ev);
+      }
+    }
+  }
   const flag = (ab) => {
     const url = teamLogoUrl(logoKey || "wcup", ab, { league });
     return url ? `<img class="rg-axis-flag" src="${url}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">` : "";
@@ -3000,9 +3012,20 @@ function renderScoreGridHtml(grid) {
     const a = maxProb > 0 ? Math.min(1, p / maxProb) : 0;
     return `rgba(59,130,246,${(0.06 + a * 0.66).toFixed(2)})`;
   };
+  // EV view: same diverging green/red as P&L, scaled to the largest |P&L x p|.
+  const evColor = (ev) => {
+    const a = maxEv > 0 ? Math.min(1, Math.abs(ev) / maxEv) : 0;
+    return `rgba(${ev >= 0 ? "21,128,61" : "190,18,60"},${(0.08 + a * 0.64).toFixed(2)})`;
+  };
   const pctTxt = (p) => {
     const pct = p * 100;
     return pct >= 9.5 ? String(Math.round(pct)) : pct >= 1 ? pct.toFixed(1) : "·";
+  };
+  const evTxt = (ev) => {
+    const v = Math.abs(ev);
+    if (v < 0.05) return "·";
+    const s = ev > 0 ? "+" : "-";
+    return v >= 9.5 ? s + Math.round(v) : s + v.toFixed(1);
   };
   const dollar = (v) => { const r = Math.round(v); return r > 0 ? "+" + r : "" + r; };
   const N = scores.length;
@@ -3026,12 +3049,18 @@ function renderScoreGridHtml(grid) {
       }
       const pnl = cells[a][h];
       const cellP = probs ? probs[a][h] : null;
+      const cellEv = cellP != null ? cellP * pnl : null;
       const isMark = (a === markA && h === markH);
-      const probTxt = cellP != null ? ` · ${(cellP * 100).toFixed(1)}% chance` : "";
-      const base = `${awayName} ${a} – ${homeName} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}${probTxt}`;
+      const extraTxt = cellP != null
+        ? ` · ${(cellP * 100).toFixed(1)}% chance · EV ${cellEv >= 0 ? "+" : "−"}$${Math.abs(cellEv).toFixed(2)}`
+        : "";
+      const base = `${awayName} ${a} – ${homeName} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}${extraTxt}`;
       const title = isMark ? (mark.final ? `FINAL — ${base}` : `current score — ${base}`) : base;
-      const bg = probView ? probColor(cellP) : color(pnl);
-      const body = isMark ? (mark.final ? "●" : "✕") : (probView ? pctTxt(cellP) : dollar(pnl));
+      const bg = probView ? probColor(cellP) : evView ? evColor(cellEv) : color(pnl);
+      const body = isMark ? (mark.final ? "●" : "✕")
+        : probView ? pctTxt(cellP)
+        : evView ? evTxt(cellEv)
+        : dollar(pnl);
       cellsHtml += `<div class="rg-cell${drawCls}${isMark ? " rg-mark" : ""}" style="background:${bg}" `
         + `title="${escapeHtml(title)}">${body}</div>`;
     }
@@ -3042,19 +3071,25 @@ function renderScoreGridHtml(grid) {
   rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
   const toggle = probs ? `
         <span class="rg-view-toggle" data-game-key="${escapeHtml(grid.gameKey)}">
-          <button type="button" class="rg-view-btn${probView ? "" : " on"}" data-view="pnl" title="expected $ P&L per final score">$</button>
+          <button type="button" class="rg-view-btn${view === "pnl" ? " on" : ""}" data-view="pnl" title="expected $ P&L per final score">$</button>
           <button type="button" class="rg-view-btn${probView ? " on" : ""}" data-view="prob" title="chance of each final score (Poisson fit from live mids)">%</button>
+          <button type="button" class="rg-view-btn${evView ? " on" : ""}" data-view="ev" title="P&L x chance: each cell's contribution to expected $ (cells sum to the book's E[P&L])">$×%</button>
         </span>` : "";
+  const markLegend = mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : "";
   const legend = probView
     ? `darker blue = more likely · % chance shown in each cell (model est. ${grid.lambdas ? grid.lambdas.map((x) => x.toFixed(1)).join("/") : ""} goals)
-        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : ""}
-        · diagonal = draws · hover a cell for its $`
+        ${markLegend} · diagonal = draws · hover a cell for its $`
+    : evView
+    ? `<span class="rg-sw neg"></span>drag<span class="rg-sw pos"></span>lift · $ P&L × chance per cell — contribution to expected $
+        ${markLegend} · cells sum to E[P&L] ≈ ${evSum >= 0 ? "+" : "−"}$${Math.abs(evSum).toFixed(2)}`
     : `<span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
-        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : ""}
-        · diagonal = draws · max ±$${maxAbs.toFixed(0)}`;
+        ${markLegend} · diagonal = draws · max ±$${maxAbs.toFixed(0)}`;
+  const headTitle = probView ? "chance of each final score"
+    : evView ? "P&L × chance (expected-$ contribution)"
+    : "expected $ P&L by final score";
   return `
     <div class="risk-grid">
-      <div class="rg-head">Risk surface — ${probView ? "chance of each final score" : "expected $ P&L by final score"}${toggle}</div>
+      <div class="rg-head">Risk surface — ${headTitle}${toggle}</div>
       <div class="rg-wrap">
         <div class="rg-ytitle" title="${escapeHtml(awayName)} goals (y-axis)">
           ${flag(away)}
@@ -4297,8 +4332,9 @@ function renderGameCards() {
       e.stopPropagation();
       const key = btn.closest(".rg-view-toggle")?.getAttribute("data-game-key");
       if (!key) return;
-      if (btn.getAttribute("data-view") === "prob") state.gridProbView.add(key);
-      else state.gridProbView.delete(key);
+      const v = btn.getAttribute("data-view");
+      if (v === "pnl") delete state.gridView[key];
+      else state.gridView[key] = v;
       renderGameCards();
     });
   }
