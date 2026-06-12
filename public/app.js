@@ -2626,7 +2626,7 @@ function gameFracRemaining(live, sport) {
     const elapsedMin = (period - 1) * reg.len + (reg.len - rem);
     return Math.max(0, Math.min(1, 1 - elapsedMin / total));
   }
-  if (["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl"].includes(sport)) {
+  if (_SOCCER_TREE_SPORTS.has(sport)) {
     const m = String(clock).match(/(\d+)/);  // ESPN soccer clock e.g. "67'"
     return m ? Math.max(0, Math.min(1, 1 - parseInt(m[1], 10) / 90)) : 0.5;
   }
@@ -2724,9 +2724,36 @@ function _legYesProbNow(ticker) {
   return null;
 }
 
+// P(remaining ~ Poisson(mu) >= n)
+function _poisGE(mu, n) {
+  if (n <= 0) return 1.0;
+  let cdf = 0;
+  for (let k = 0; k < n; k++) cdf += _poisPmf(mu, k);
+  return 1 - cdf;
+}
+// P(curMargin + (H_rem - A_rem) {>|<|==} 0) for remaining rates (lh, la)
+function _pCondResult(curMargin, lh, la, cmp) {
+  let p = 0;
+  for (let i = 0; i <= 10; i++) {
+    for (let j = 0; j <= 10; j++) {
+      const m = curMargin + i - j;
+      if ((cmp === "home" && m > 0) || (cmp === "away" && m < 0) || (cmp === "draw" && m === 0)) {
+        p += _poisPmf(lh, i) * _poisPmf(la, j);
+      }
+    }
+  }
+  return p;
+}
+
 // P(final away=a, home=h) matrix oriented like the score grid's cells[a][h].
 // Returns null when we can't even locate the game's tickers.
-function soccerScoreProbs(gameKey, teams, N) {
+// liveCond = {curH, curA, fracLeft, final} switches to the IN-GAME CONDITIONAL
+// model (2026-06-12): final = current score + Poisson(remaining), with the
+// remaining-goal rate solved from the in-game mids read CONDITIONALLY — the
+// live over-X price is P(remaining >= X - curTotal), the live ML price is
+// P(curMargin + remaining-difference > 0). A full-match refit misreads those
+// same mids (it puts mass below the current score and ignores the clock).
+function soccerScoreProbs(gameKey, teams, N, liveCond) {
   // Find this game's chunk + GAME-series prefix from any held leg.
   let chunk = null, gameSeries = null;
   outer:
@@ -2746,6 +2773,53 @@ function soccerScoreProbs(gameKey, teams, N) {
   gameSeries = gameSeries || "KXWCGAME";
   const [away, home] = teams;
 
+  // ── IN-GAME: conditional remaining-goals model ──
+  if (liveCond && liveCond.curH != null && liveCond.curA != null) {
+    const { curH, curA } = liveCond;
+    if (liveCond.final) {                       // settled: all mass on the final
+      const probs = Array.from({ length: N }, (_, a) =>
+        Array.from({ length: N }, (_, h) => (a === curA && h === curH ? 1 : 0)));
+      return { probs, lh: 0, la: 0, live: true };
+    }
+    const fracLeft = liveCond.fracLeft != null
+      ? Math.max(0.02, Math.min(1, liveCond.fracLeft)) : 0.5;
+    const curTotal = curH + curA, curMargin = curH - curA;
+    // remaining-goal rate from the most informative live total strike
+    let muRem = null;
+    for (const k of [3, 4, 2, 5, 6, 1]) {
+      const p = _legYesProbNow(`KXWCTOTAL-${chunk}-${k}`);
+      const need = k - curTotal;                // goals still required for OVER
+      if (p == null || p <= 0.04 || p >= 0.96 || need <= 0) continue;
+      muRem = _bisect(0.02, 6, (m) => _poisGE(m, need) - p);
+      break;
+    }
+    if (muRem == null) muRem = 2.5 * fracLeft;  // decayed league-average fallback
+    // Staleness guard: thin in-game books can leave the total mid frozen at
+    // pregame levels; never let the implied REMAINING goals exceed a generous
+    // tempo allowance for the time actually left on the clock.
+    muRem = Math.max(0.05, Math.min(muRem, 3.2 * fracLeft));
+    // remaining supremacy from the live ML (home first, away as backup —
+    // P(draw) is non-monotone in s, so TIE can't anchor a bisection)
+    let s = 0;
+    const pH = _legYesProbNow(`${gameSeries}-${chunk}-${home}`);
+    const pA = _legYesProbNow(`${gameSeries}-${chunk}-${away}`);
+    const sLim = Math.max(0.01, muRem - 0.02);
+    if (pH != null && pH > 0.02 && pH < 0.98) {
+      s = _bisect(-sLim, sLim,
+                  (sv) => _pCondResult(curMargin, (muRem + sv) / 2, (muRem - sv) / 2, "home") - pH);
+    } else if (pA != null && pA > 0.02 && pA < 0.98) {
+      s = _bisect(-sLim, sLim,
+                  (sv) => pA - _pCondResult(curMargin, (muRem + sv) / 2, (muRem - sv) / 2, "away"));
+    }
+    const lhR = Math.max(0.01, (muRem + s) / 2), laR = Math.max(0.01, (muRem - s) / 2);
+    const probs = Array.from({ length: N }, (_, a) =>
+      Array.from({ length: N }, (_, h) =>
+        (h >= curH && a >= curA)
+          ? _poisPmf(lhR, h - curH) * _poisPmf(laR, a - curA) : 0));
+    return { probs, lh: lhR, la: laR, live: true };
+  }
+
+  // ── PREGAME: full-match fit (unchanged) ──
   // mu from the first total strike with a usable prob (P(total >= k) = p).
   let mu = 2.6;                                   // soccer default
   for (const k of [3, 4, 2, 5, 1]) {
@@ -2981,10 +3055,20 @@ function computeRiskGrid(g, parlays, live) {
     }
     // Cell probabilities for the $/% toggle — display-grade Poisson fit from
     // live mids; null (toggle hidden) when the fit has nothing to chew on.
+    // Once live, switch to the conditional model: current score + Poisson of
+    // the REMAINING goals (rates read conditionally off the in-game mids).
+    let liveCond = null;
+    if (live && live.total != null && live.margin != null) {
+      liveCond = { curH: Math.round((live.total + live.margin) / 2),
+                   curA: Math.round((live.total - live.margin) / 2),
+                   fracLeft: live.fracRemaining != null ? live.fracRemaining : null,
+                   final: !!live.final };
+    }
     let prob = null;
-    try { prob = soccerScoreProbs(g.key, [away, home], NS); } catch (_) { prob = null; }
+    try { prob = soccerScoreProbs(g.key, [away, home], NS, liveCond); } catch (_) { prob = null; }
     return { kind: "score", scores, cells, reach, maxAbs, teams, mark,
              probs: prob ? prob.probs : null, lambdas: prob ? [prob.lh, prob.la] : null,
+             probsLive: !!(prob && prob.live),
              gameKey: g.key, logoKey: g.sportLogoKey, league: g.league };
   }
 
@@ -3186,7 +3270,9 @@ function renderScoreGridHtml(grid) {
         </span>` : "";
   const markLegend = mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : "";
   const legend = probView
-    ? `darker blue = more likely · % chance shown in each cell (model est. ${grid.lambdas ? grid.lambdas.map((x) => x.toFixed(1)).join("/") : ""} goals)
+    ? `darker blue = more likely · % chance shown in each cell ${grid.probsLive
+        ? `(LIVE conditional: score + clock, ~${grid.lambdas ? (grid.lambdas[0] + grid.lambdas[1]).toFixed(1) : "?"} goals left)`
+        : `(model est. ${grid.lambdas ? grid.lambdas.map((x) => x.toFixed(1)).join("/") : ""} goals)`}
         ${markLegend} · diagonal = draws · hover a cell for its $`
     : ev2dView
     ? `<span class="rg-sw neg"></span>drags E<span class="rg-sw pos"></span>lifts E · $ P&L × chance per cell — contribution to expected $
@@ -3355,7 +3441,7 @@ function renderScoreSummaryHtml(grid) {
   const medW = wmedian(items, +1), medL = wmedian(items, -1);
   return `
     <div class="rg-t5">
-      <span class="rg-t5lab" title="the five most likely final scores (model fit from live mids) and what each pays us">most likely:</span>
+      <span class="rg-t5lab" title="the five most likely final scores and what each pays us${grid.probsLive ? " (LIVE: conditional on the current score + clock)" : " (model fit from live mids)"}">most likely:</span>
       ${chips}
       <span class="rg-t5split" title="probability mass of winning vs losing scorelines × average $ given each side = expected $ (the line is exact arithmetic). Typical (probability-weighted median) win +$${medW.toFixed(0)} / loss −$${medL.toFixed(0)} — medians resist the tail cells that pull the averages.">
         <span class="rg-sw pos"></span>${pwn.toFixed(0)}% pay us <i>(avg +$${avgW.toFixed(0)})</i>
