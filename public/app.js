@@ -3337,14 +3337,27 @@ function renderScoreSummaryHtml(grid) {
   const pwn = (pw / tot) * 100, pln = (pl / tot) * 100;
   // conditional magnitudes: avg $ GIVEN a winning / losing scoreline. Frequency
   // alone misreads a short-the-mode book — pw*avgW - pl*avgL = E completes it.
+  // (Means, not medians: only means multiply back out to E. The probability-
+  // weighted MEDIANS — the "typical" win/loss, immune to tail cells — go in
+  // the tooltip.)
   const avgW = pw > 0 ? evw / pw : 0;
   const avgL = pl > 0 ? Math.abs(evl) / pl : 0;
   const e = (evw + evl) / tot;
+  const wmedian = (rows, side) => {
+    const xs = items.filter((it) => side > 0 ? it.pnl > 0.005 : it.pnl < -0.005)
+      .map((it) => ({ v: Math.abs(it.pnl), p: it.p }))
+      .sort((x, y) => x.v - y.v);
+    const half = xs.reduce((s, x) => s + x.p, 0) / 2;
+    let cum = 0;
+    for (const x of xs) { cum += x.p; if (cum >= half) return x.v; }
+    return xs.length ? xs[xs.length - 1].v : 0;
+  };
+  const medW = wmedian(items, +1), medL = wmedian(items, -1);
   return `
     <div class="rg-t5">
       <span class="rg-t5lab" title="the five most likely final scores (model fit from live mids) and what each pays us">most likely:</span>
       ${chips}
-      <span class="rg-t5split" title="probability mass of winning vs losing scorelines, with the average $ GIVEN each side — frequency × magnitude nets to the book's expected $">
+      <span class="rg-t5split" title="probability mass of winning vs losing scorelines × average $ given each side = expected $ (the line is exact arithmetic). Typical (probability-weighted median) win +$${medW.toFixed(0)} / loss −$${medL.toFixed(0)} — medians resist the tail cells that pull the averages.">
         <span class="rg-sw pos"></span>${pwn.toFixed(0)}% pay us <i>(avg +$${avgW.toFixed(0)})</i>
         <span class="rg-sw neg"></span>${pln.toFixed(0)}% cost us <i>(avg −$${avgL.toFixed(0)})</i>
         <b class="${e >= 0 ? "pos" : "neg"}">→ E ${e >= 0 ? "+" : "−"}$${Math.abs(e).toFixed(2)}</b>
