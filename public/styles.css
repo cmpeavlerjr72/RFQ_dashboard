@@ -1412,7 +1412,8 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 }
 .rg-scrub-empty { font-size: 11px; color: var(--muted); padding: 8px 0; }
 /* $/% grid view toggle (2026-06-12) */
-.rg-view-toggle { float: right; display: inline-flex; gap: 2px; }
+.rg-view-toggle { float: right; display: inline-flex; flex-direction: column; gap: 2px; align-items: flex-end; }
+.rg-view-row { display: inline-flex; gap: 2px; }
 .rg-view-btn {
   background: transparent; border: 1px solid var(--muted-2); color: var(--muted);
   border-radius: 3px; font-size: 10px; font-weight: 700; line-height: 1;

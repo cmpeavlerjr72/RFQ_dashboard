@@ -2807,7 +2807,10 @@ function _bisect(lo, hi, fn) {
 // floor (green, lifts E) or hanging below it (red, drags E). Pure SVG string
 // (composes with the innerHTML-swapping scrubber/toggle pipeline). Painted
 // back-to-front; tick labels sit on the bar centers; axis titles carry flags.
+let _evSvgUid = 0;   // unique clipPath ids across the multiple SVGs on a page
+
 function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell, flags) {
+  _evSvgUid++;
   const N = scores.length;
   const ux = 26, uy = 14, Z = 46;          // iso step + max bar height (px)
   const k = 0.36;                          // bar footprint half-fraction of a cell
@@ -2864,8 +2867,9 @@ function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell
               + ` · ${(p * 100).toFixed(1)}% · EV ${e >= 0 ? "+" : "−"}$${Math.abs(e).toFixed(2)}`;
     const [x, y] = C(h, a);
     const isMark = markCell && markCell.a === a && markCell.h === h;
+    // mark rides the bar cap when raised; sits on the rim for pits/flat cells
     const markTxt = isMark
-      ? `<text x="${x.toFixed(1)}" y="${(y - z + 3).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="800" fill="#000">${markCell.final ? "●" : "✕"}</text>`
+      ? `<text x="${x.toFixed(1)}" y="${(y - Math.max(0, z) + 3).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="800" fill="#000">${markCell.final ? "●" : "✕"}</text>`
       : "";
     if (Math.abs(z) < 0.6) {               // ~zero EV: the floor diamond carries the tooltip
       bars += `<g><polygon points="${[[x, y - 2 * k * uy], [x + 2 * k * ux, y], [x, y + 2 * k * uy], [x - 2 * k * ux, y]].map(fmt).join(" ")}"`
@@ -2876,15 +2880,26 @@ function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell
     const B0 = [x, y - 2 * k * uy], R0 = [x + 2 * k * ux, y], F0 = [x, y + 2 * k * uy], L0 = [x - 2 * k * ux, y];
     const lift = (pt) => [pt[0], pt[1] - z];
     const Bz = lift(B0), Rz = lift(R0), Fz = lift(F0), Lz = lift(L0);
-    const pos = z > 0;
-    const capC = pos ? "#2ea35f" : "#d4365c";
-    const leftC = pos ? "#1f7a46" : "#a32646";
-    const rightC = pos ? "#155c34" : "#7d1c36";
     const face = (pts, fill) =>
       `<polygon points="${pts.map(fmt).join(" ")}" fill="${fill}" fill-opacity=".92" stroke="rgba(20,20,30,.5)" stroke-width=".6"/>`;
-    // visible faces from the front: left side (F-L), right side (F-R), then cap
-    bars += `<g>${face([F0, L0, Lz, Fz], leftC)}${face([F0, R0, Rz, Fz], rightC)}`
-          + `${face([Fz, Rz, Bz, Lz], capC)}<title>${escapeHtml(tip)}</title>${markTxt}</g>`;
+    if (z > 0) {
+      // raised bar: left/right outer walls + cap on top
+      bars += `<g>${face([F0, L0, Lz, Fz], "#1f7a46")}${face([F0, R0, Rz, Fz], "#155c34")}`
+            + `${face([Fz, Rz, Bz, Lz], "#2ea35f")}<title>${escapeHtml(tip)}</title>${markTxt}</g>`;
+    } else {
+      // sunken PIT: everything clipped to the cell opening so the hole never
+      // paints over neighbors — you look down past the rim onto the pit floor
+      // and the two inner back walls.
+      const cid = `evpit${_evSvgUid}x${h}${a}`;
+      const diamond = [B0, R0, F0, L0].map(fmt).join(" ");
+      bars += `<g><defs><clipPath id="${cid}"><polygon points="${diamond}"/></clipPath></defs>`
+            + `<g clip-path="url(#${cid})">`
+            + face([Fz, Rz, Bz, Lz], "#d4365c")            // pit floor (brightest)
+            + face([B0, L0, Lz, Bz], "#a32646")            // inner back-left wall
+            + face([B0, R0, Rz, Bz], "#7d1c36")            // inner back-right wall
+            + `</g><polygon points="${diamond}" fill="none" stroke="rgba(212,54,92,.85)" stroke-width="1"/>`
+            + `<title>${escapeHtml(tip)}</title>${markTxt}</g>`;
+    }
   }
   out.push(bars);
   return `<svg class="rg-ev3d" viewBox="0 0 ${W} ${H}" role="img" aria-label="3D expected-value surface">${out.join("")}</svg>`;
@@ -3160,10 +3175,14 @@ function renderScoreGridHtml(grid) {
   rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
   const toggle = probs ? `
         <span class="rg-view-toggle" data-game-key="${escapeHtml(grid.gameKey)}">
-          <button type="button" class="rg-view-btn${view === "pnl" ? " on" : ""}" data-view="pnl" title="expected $ P&L per final score">$</button>
-          <button type="button" class="rg-view-btn${probView ? " on" : ""}" data-view="prob" title="chance of each final score (Poisson fit from live mids)">%</button>
-          <button type="button" class="rg-view-btn${ev2dView ? " on" : ""}" data-view="ev2d" title="P&L x chance per cell: contribution to expected $ (cells sum to the book's E[P&L])">$×%</button>
-          <button type="button" class="rg-view-btn${evView ? " on" : ""}" data-view="ev" title="3D bar surface: height = P&L x chance per scoreline (heights sum to the book's E[P&L])">3D</button>
+          <span class="rg-view-row">
+            <button type="button" class="rg-view-btn${view === "pnl" ? " on" : ""}" data-view="pnl" title="expected $ P&L per final score">$</button>
+            <button type="button" class="rg-view-btn${probView ? " on" : ""}" data-view="prob" title="chance of each final score (Poisson fit from live mids)">%</button>
+            <button type="button" class="rg-view-btn${evView ? " on" : ""}" data-view="ev" title="3D bar surface: height = P&L x chance per scoreline (heights sum to the book's E[P&L])">3D</button>
+          </span>
+          <span class="rg-view-row">
+            <button type="button" class="rg-view-btn${ev2dView ? " on" : ""}" data-view="ev2d" title="P&L x chance per cell, flat heatmap: contribution to expected $ (cells sum to the book's E[P&L])">2D</button>
+          </span>
         </span>` : "";
   const markLegend = mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : "";
   const legend = probView
