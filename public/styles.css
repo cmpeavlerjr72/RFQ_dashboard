@@ -1441,4 +1441,7 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .rg-t5abbr { font-size: 8px; font-weight: 700; }
 .rg-t5p { opacity: .75; }
 .rg-t5d { font-weight: 700; }
-.rg-t5split { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
+.rg-t5split { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.rg-t5split i { font-style: normal; opacity: .75; }
+.rg-t5split b.pos { color: #2ea35f; }
+.rg-t5split b.neg { color: #d4365c; }

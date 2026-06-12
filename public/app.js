@@ -3308,14 +3308,14 @@ function renderScoreSummaryHtml(grid) {
   const awayName = NATIONAL_TEAMS[away] || away;
   const N = scores.length;
   const items = [];
-  let pw = 0, pl = 0, tot = 0;
+  let pw = 0, pl = 0, tot = 0, evw = 0, evl = 0;
   for (let a = 0; a < N; a++) {
     for (let h = 0; h < N; h++) {
       if (reach && !reach[a][h]) continue;
       const p = probs[a][h], pnl = cells[a][h];
       tot += p;
-      if (pnl > 0.005) pw += p;
-      else if (pnl < -0.005) pl += p;
+      if (pnl > 0.005) { pw += p; evw += p * pnl; }
+      else if (pnl < -0.005) { pl += p; evl += p * pnl; }
       items.push({ h, a, p, pnl });
     }
   }
@@ -3335,13 +3335,19 @@ function renderScoreSummaryHtml(grid) {
       + `<span class="rg-t5d">${it.pnl >= 0 ? "+" : "−"}$${Math.abs(it.pnl).toFixed(0)}</span></span>`;
   }).join("");
   const pwn = (pw / tot) * 100, pln = (pl / tot) * 100;
+  // conditional magnitudes: avg $ GIVEN a winning / losing scoreline. Frequency
+  // alone misreads a short-the-mode book — pw*avgW - pl*avgL = E completes it.
+  const avgW = pw > 0 ? evw / pw : 0;
+  const avgL = pl > 0 ? Math.abs(evl) / pl : 0;
+  const e = (evw + evl) / tot;
   return `
     <div class="rg-t5">
       <span class="rg-t5lab" title="the five most likely final scores (model fit from live mids) and what each pays us">most likely:</span>
       ${chips}
-      <span class="rg-t5split" title="probability mass of scorelines where the book profits vs loses (remainder ≈ flat)">
-        <span class="rg-sw pos"></span>${pwn.toFixed(0)}% pay us
-        <span class="rg-sw neg"></span>${pln.toFixed(0)}% cost us
+      <span class="rg-t5split" title="probability mass of winning vs losing scorelines, with the average $ GIVEN each side — frequency × magnitude nets to the book's expected $">
+        <span class="rg-sw pos"></span>${pwn.toFixed(0)}% pay us <i>(avg +$${avgW.toFixed(0)})</i>
+        <span class="rg-sw neg"></span>${pln.toFixed(0)}% cost us <i>(avg −$${avgL.toFixed(0)})</i>
+        <b class="${e >= 0 ? "pos" : "neg"}">→ E ${e >= 0 ? "+" : "−"}$${Math.abs(e).toFixed(2)}</b>
       </span>
     </div>`;
 }
