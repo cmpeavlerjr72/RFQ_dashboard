@@ -1383,3 +1383,22 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .rg-sw.pos { background: rgba(21,128,61,.72); }
 .rg-sw.neg { background: rgba(190,18,60,.72); }
 .rg-markk { font-weight: 700; color: var(--muted-2); }
+/* Fill scrubber above the risk grid (2026-06-12): time-positioned dots over a
+   range input; drag to replay how the book built fill-by-fill. */
+.rg-scrub-zone { margin-top: 12px; }
+.rg-scrub-zone .risk-grid { margin-top: 4px; }
+.rg-scrub { margin-bottom: 2px; }
+.rg-scrub-track { position: relative; height: 12px; margin: 0 8px; }
+.rg-scrub-dot {
+  position: absolute; top: 3px; width: 7px; height: 7px; border-radius: 50%;
+  transform: translateX(-50%); background: var(--muted-2); opacity: .45;
+}
+.rg-scrub-dot.on { background: #4f8cff; opacity: .95; }
+.rg-scrub input[type="range"] {
+  width: 100%; margin: 0; height: 16px; cursor: pointer; accent-color: #4f8cff;
+}
+.rg-scrub-label { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.rg-scrub-replay {
+  font-weight: 800; color: #d97706; letter-spacing: .04em; margin-right: 3px;
+}
+.rg-scrub-empty { font-size: 11px; color: var(--muted); padding: 8px 0; }

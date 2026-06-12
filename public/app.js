@@ -39,6 +39,15 @@ const state = {
   balance: null,
   positions: [],          // each = full parlay record
   fillsByParlay: {},
+  // EVERY fill row from /api/fills (real contracts only), in file order. Each
+  // row carries ts + legs(+sides+fill-time probs) + contracts + cost, which is
+  // exactly enough to rebuild the book "as of" any moment — feeds the risk-grid
+  // fill scrubber (2026-06-12). fillsByParlay above keeps only the latest row
+  // per ticker and stays as-is for the per-position fill-time stamp.
+  fillRows: [],
+  // gameGroupKey -> scrubber position (fill index 1..N). Absent/null = "now"
+  // (live grid, default). Survives the periodic re-render.
+  gridScrub: {},
   scoreboards: {},        // sport:date -> ESPN scoreboard payload
   // ML event ticker (KXWCGAME-…, KXINTLFRIENDLYGAME-…) -> ISO kickoff, from
   // Kalshi's milestone feed (/api/start-times). Used to show a kickoff time on
@@ -178,6 +187,12 @@ async function refresh() {
     for (const f of (fills.fills || [])) {
       if (f.parlay_ticker) state.fillsByParlay[f.parlay_ticker] = f;
     }
+    // Full per-fill history for the grid scrubber: drop phantom rows (0
+    // contracts = 204-ack that never delivered) and legless rows.
+    state.fillRows = (fills.fills || []).filter(
+      (f) => (Number(f.contracts) || 0) > 0 && Array.isArray(f.legs) && f.legs.length
+             && typeof f.ts === "number",
+    );
 
     // Separate excluded positions (non-sports tickers) so we can still
     // subtract their current value from the displayed portfolio total —
@@ -2987,6 +3002,112 @@ function renderRiskGridHtml(grid) {
     </div>`;
 }
 
+// ── Risk-grid FILL SCRUBBER (2026-06-12) ────────────────────────────────────
+// A slider above each grid replays how the book built: position k shows the
+// grid with only the first k fills touching the game. Dots on the track mark
+// each fill's arrival time. Rightmost position = the live grid (default,
+// identical to pre-scrubber behavior). Replay grids are rebuilt from the raw
+// fill rows (state.fillRows) — legs marginalize at their FILL-TIME side prob
+// (leg.p), so a replay step is "that moment's book at entry-time fairs", while
+// the live position uses current legMids as before.
+
+// Per-render context the input handler needs to rebuild a card's grid.
+const _gridScrubCtx = new Map();   // gameKey -> {g, treeLive, events}
+
+function gameFillEvents(gameKey) {
+  return state.fillRows
+    .filter((f) => f.legs.some((l) => legGameGroupKey(l.ticker) === gameKey))
+    .sort((x, y) => x.ts - y.ts);
+}
+
+// Fill rows -> the parlay shape _treeNodeExpected/computeRiskGrid consume.
+// legMids stays empty on purpose: _treeLegPUs then falls back to leg.p.
+function fillRowsAsParlays(rows) {
+  return rows.map((f) => ({
+    ticker: f.parlay_ticker,
+    legs: f.legs,
+    cost: Number(f.cost_paid_dollars) || 0,
+    max_profit: (Number(f.contracts) || 0) - (Number(f.cost_paid_dollars) || 0),
+    corrRatio: (typeof f.yes_prob_adj === "number" && typeof f.yes_prob === "number"
+                && f.yes_prob > 0 && f.yes_prob_adj > 0)
+      ? f.yes_prob_adj / f.yes_prob : null,
+    legMids: {},
+  }));
+}
+
+function _scrubGridHtml(g, treeLive, events, idx) {
+  // idx in [1..events.length]; events.length = live book (real positions).
+  if (idx >= events.length) {
+    return renderRiskGridHtml(computeRiskGrid(g, state.positions, treeLive));
+  }
+  const pseudo = fillRowsAsParlays(events.slice(0, idx));
+  return renderRiskGridHtml(computeRiskGrid(g, pseudo, treeLive))
+    || `<div class="rg-scrub-empty">grid too small to draw at this point</div>`;
+}
+
+function _scrubLabel(events, idx) {
+  const live = idx >= events.length;
+  const f = events[Math.min(idx, events.length) - 1];
+  const t = new Date(f.ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  let cum = 0;
+  for (let i = 0; i < idx && i < events.length; i++) cum += Number(events[i].cost_paid_dollars) || 0;
+  return live
+    ? `now · ${events.length} fills · book $${cum.toFixed(2)}`
+    : `<span class="rg-scrub-replay">REPLAY</span> after fill ${idx}/${events.length} · ${t} · book $${cum.toFixed(2)}`;
+}
+
+// Slider + time-positioned dots + the grid itself, all in one container the
+// input handler can re-render in place.
+function renderGridWithScrubber(g, treeLive) {
+  const liveGrid = renderRiskGridHtml(computeRiskGrid(g, state.positions, treeLive));
+  const events = gameFillEvents(g.key);
+  if (!liveGrid || events.length < 2) return liveGrid;   // nothing to scrub
+  _gridScrubCtx.set(g.key, { g, treeLive, events });
+
+  const saved = state.gridScrub[g.key];
+  const idx = (saved != null && saved >= 1 && saved < events.length) ? saved : events.length;
+  const t0 = events[0].ts, t1 = events[events.length - 1].ts;
+  const span = Math.max(1, t1 - t0);
+  const dots = events.map((f, i) => {
+    const pct = ((f.ts - t0) / span) * 100;
+    const t = new Date(f.ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const legs = f.legs.length;
+    return `<span class="rg-scrub-dot${i < idx ? " on" : ""}" style="left:${pct.toFixed(1)}%" `
+      + `title="fill ${i + 1}: ${t} · ${legs} leg${legs > 1 ? "s" : ""} · $${(Number(f.cost_paid_dollars) || 0).toFixed(2)}"></span>`;
+  }).join("");
+
+  return `
+    <div class="rg-scrub-zone" data-game-key="${escapeHtml(g.key)}">
+      <div class="rg-scrub">
+        <div class="rg-scrub-track">${dots}</div>
+        <input type="range" min="1" max="${events.length}" step="1" value="${idx}"
+               aria-label="replay book build by fill">
+        <div class="rg-scrub-label">${_scrubLabel(events, idx)}</div>
+      </div>
+      <div class="rg-scrub-body">${_scrubGridHtml(g, treeLive, events, idx)}</div>
+    </div>`;
+}
+
+function wireGridScrubbers(wrap) {
+  wrap.querySelectorAll(".rg-scrub-zone").forEach((zone) => {
+    const key = zone.getAttribute("data-game-key");
+    const ctx = _gridScrubCtx.get(key);
+    const inp = zone.querySelector('input[type="range"]');
+    if (!ctx || !inp) return;
+    inp.addEventListener("input", () => {
+      const idx = Math.max(1, Math.min(ctx.events.length, Number(inp.value) || 1));
+      // Remember replay positions; "now" clears the entry so new fills extend the range.
+      if (idx >= ctx.events.length) delete state.gridScrub[key];
+      else state.gridScrub[key] = idx;
+      zone.querySelector(".rg-scrub-body").innerHTML = _scrubGridHtml(ctx.g, ctx.treeLive, ctx.events, idx);
+      zone.querySelector(".rg-scrub-label").innerHTML = _scrubLabel(ctx.events, idx);
+      zone.querySelectorAll(".rg-scrub-dot").forEach((d, i) => d.classList.toggle("on", i < idx));
+    });
+    // Don't let drags on the slider toggle the card collapse.
+    inp.addEventListener("click", (e) => e.stopPropagation());
+  });
+}
+
 function renderGameCards() {
   const wrap = $("game-cards");
   const cards = aggregateGameCards();
@@ -3943,8 +4064,9 @@ function renderGameCards() {
     // books, but the book is game-level-only now and the grid shows the same
     // information better: full outcome envelope, expected mark, live ✕,
     // hedge shape). computeRiskGrid returns null when a card has no
-    // game-level legs, which renders as nothing.
-    const riskGridHtml = renderRiskGridHtml(computeRiskGrid(g, state.positions, treeLive));
+    // game-level legs, which renders as nothing. Wrapped with the fill
+    // scrubber (2026-06-12) when the game has 2+ fills to replay.
+    const riskGridHtml = renderGridWithScrubber(g, treeLive);
 
     return `
       <div class="game-card${collapsed ? " collapsed" : ""}" data-game-key="${escapeHtml(g.key)}">
@@ -3998,6 +4120,8 @@ function renderGameCards() {
   }).join("");
 
   wrap.innerHTML = html;
+
+  wireGridScrubbers(wrap);
 
   // Toggle collapse when the header is clicked (or activated by keyboard).
   wrap.querySelectorAll(".game-card-head").forEach((head) => {
