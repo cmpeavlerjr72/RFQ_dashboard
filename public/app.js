@@ -48,6 +48,9 @@ const state = {
   // gameGroupKey -> scrubber position (fill index 1..N). Absent/null = "now"
   // (live grid, default). Survives the periodic re-render.
   gridScrub: {},
+  // Game keys whose risk grid is showing CELL PROBABILITIES instead of $ P&L
+  // (the $/% toggle, 2026-06-12). Soccer score grids only.
+  gridProbView: new Set(),
   scoreboards: {},        // sport:date -> ESPN scoreboard payload
   // ML event ticker (KXWCGAME-…, KXINTLFRIENDLYGAME-…) -> ISO kickoff, from
   // Kalshi's milestone feed (/api/start-times). Used to show a kickoff time on
@@ -2691,6 +2694,112 @@ async function fetchLiveTotalProjections() {
   }));
 }
 
+// ── Soccer cell probabilities for the $/% grid toggle (2026-06-12) ──────────
+// The dashboard has no lambda feed, but it DOES hold live mids for the legs we
+// quote — enough to fit an independent-Poisson score model in the browser:
+// total-goals rate mu from an over/under mid, home/away split from an ML mid.
+// Display-grade (the engine's Dixon-Coles grid differs slightly in the corners)
+// but plenty to answer "is the deep red sitting on low-odds cells?".
+function _poisPmf(lam, k) {
+  let p = Math.exp(-lam);
+  for (let i = 1; i <= k; i++) p *= lam / i;
+  return p;
+}
+
+// Current YES prob for a leg ticker: live mid first, fill-time mark fallback.
+function _legYesProbNow(ticker) {
+  for (const p of state.positions) {
+    const lm = p.legMids?.[ticker];
+    if (lm && lm.midC != null) return Math.min(1, Math.max(0, lm.midC / 100));
+  }
+  for (const f of state.fillRows) {
+    for (const l of (f.legs || [])) {
+      if (l.ticker === ticker && l.p != null) {
+        const v = Number(l.p);
+        return l.side === "yes" ? v : 1 - v;
+      }
+    }
+  }
+  return null;
+}
+
+// P(final away=a, home=h) matrix oriented like the score grid's cells[a][h].
+// Returns null when we can't even locate the game's tickers.
+function soccerScoreProbs(gameKey, teams, N) {
+  // Find this game's chunk + GAME-series prefix from any held leg.
+  let chunk = null, gameSeries = null;
+  outer:
+  for (const src of [state.positions, state.fillRows]) {
+    for (const p of src) {
+      for (const l of (p.legs || [])) {
+        if (legGameGroupKey(l.ticker) !== gameKey) continue;
+        const parts = l.ticker.split("-");
+        if (parts.length < 2) continue;
+        chunk = chunk || parts[1];
+        if (parts[0].endsWith("GAME")) gameSeries = parts[0];
+        if (chunk && gameSeries) break outer;
+      }
+    }
+  }
+  if (!chunk) return null;
+  gameSeries = gameSeries || "KXWCGAME";
+  const [away, home] = teams;
+
+  // mu from the first total strike with a usable prob (P(total >= k) = p).
+  let mu = 2.6;                                   // soccer default
+  for (const k of [3, 4, 2, 5, 1]) {
+    const p = _legYesProbNow(`KXWCTOTAL-${chunk}-${k}`);
+    if (p != null && p > 0.01 && p < 0.99) {
+      mu = _bisect(0.2, 8, (m) => {
+        let cum = 0;
+        for (let i = 0; i < k; i++) cum += _poisPmf(m, i);
+        return (1 - cum) - p;
+      });
+      break;
+    }
+  }
+  // supremacy (lh - la) from an ML mid: home, else away, else draw.
+  const targets = [
+    [`${gameSeries}-${chunk}-${home}`, (lh, la) => _pHgtA(lh, la)],
+    [`${gameSeries}-${chunk}-${away}`, (lh, la) => _pHgtA(la, lh)],
+    [`${gameSeries}-${chunk}-TIE`, (lh, la) => _pDraw(lh, la)],
+  ];
+  let s = 0;
+  for (const [tk, fn] of targets) {
+    const p = _legYesProbNow(tk);
+    if (p != null && p > 0.01 && p < 0.99) {
+      s = _bisect(-(mu - 0.05), mu - 0.05,
+                  (sv) => fn((mu + sv) / 2, (mu - sv) / 2) - p);
+      break;
+    }
+  }
+  const lh = (mu + s) / 2, la = (mu - s) / 2;
+  const probs = Array.from({ length: N }, (_, a) =>
+    Array.from({ length: N }, (_, h) => _poisPmf(la, a) * _poisPmf(lh, h)));
+  return { probs, lh, la };
+}
+
+function _pHgtA(lh, la) {
+  let p = 0;
+  for (let h = 0; h <= 10; h++) for (let a = 0; a < h; a++)
+    p += _poisPmf(lh, h) * _poisPmf(la, a);
+  return p;
+}
+function _pDraw(lh, la) {
+  let p = 0;
+  for (let k = 0; k <= 10; k++) p += _poisPmf(lh, k) * _poisPmf(la, k);
+  return p;
+}
+// Monotone-bracket bisection: fn crosses 0 once in [lo, hi].
+function _bisect(lo, hi, fn) {
+  let flo = fn(lo);
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2, fm = fn(mid);
+    if ((fm <= 0) === (flo <= 0)) { lo = mid; flo = fm; } else hi = mid;
+  }
+  return (lo + hi) / 2;
+}
+
 // A heatmap of EXPECTED $ P&L across game outcomes: each cell is the book's
 // expected P&L if the game lands at that (home margin, combined total), with
 // player-prop / RFI / BTTS legs marginalized at their market-implied prob —
@@ -2765,8 +2874,13 @@ function computeRiskGrid(g, parlays, live) {
       const a = Math.round((live.total - live.margin) / 2);
       mark = { a, h, final: !!live.final };
     }
+    // Cell probabilities for the $/% toggle — display-grade Poisson fit from
+    // live mids; null (toggle hidden) when the fit has nothing to chew on.
+    let prob = null;
+    try { prob = soccerScoreProbs(g.key, [away, home], NS); } catch (_) { prob = null; }
     return { kind: "score", scores, cells, reach, maxAbs, teams, mark,
-             logoKey: g.sportLogoKey, league: g.league };
+             probs: prob ? prob.probs : null, lambdas: prob ? [prob.lh, prob.la] : null,
+             gameKey: g.key, logoKey: g.sportLogoKey, league: g.league };
   }
 
   // NON-SOCCER: margin × total grid (the generic auto-sized projection).
@@ -2865,10 +2979,13 @@ function computeRiskGrid(g, parlays, live) {
 // Ticks are plain 0..5; each axis carries a flag + country-name title. The
 // diagonal is the draw band.
 function renderScoreGridHtml(grid) {
-  const { scores, cells, reach, maxAbs, mark, teams, logoKey, league } = grid;
+  const { scores, cells, reach, maxAbs, mark, teams, logoKey, league, probs } = grid;
   const [away, home] = teams;
   const awayName = NATIONAL_TEAMS[away] || away;
   const homeName = NATIONAL_TEAMS[home] || home;
+  const probView = !!(probs && grid.gameKey && state.gridProbView.has(grid.gameKey));
+  let maxProb = 0;
+  if (probs) for (const row of probs) for (const v of row) if (v > maxProb) maxProb = v;
   const flag = (ab) => {
     const url = teamLogoUrl(logoKey || "wcup", ab, { league });
     return url ? `<img class="rg-axis-flag" src="${url}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">` : "";
@@ -2877,6 +2994,15 @@ function renderScoreGridHtml(grid) {
     const a = Math.min(1, Math.abs(pnl) / maxAbs);
     const alpha = (0.08 + a * 0.64).toFixed(2);
     return `rgba(${pnl >= 0 ? "21,128,61" : "190,18,60"},${alpha})`;
+  };
+  // Probability view: one blue scale, deepest = modal scoreline.
+  const probColor = (p) => {
+    const a = maxProb > 0 ? Math.min(1, p / maxProb) : 0;
+    return `rgba(59,130,246,${(0.06 + a * 0.66).toFixed(2)})`;
+  };
+  const pctTxt = (p) => {
+    const pct = p * 100;
+    return pct >= 9.5 ? String(Math.round(pct)) : pct >= 1 ? pct.toFixed(1) : "·";
   };
   const dollar = (v) => { const r = Math.round(v); return r > 0 ? "+" + r : "" + r; };
   const N = scores.length;
@@ -2899,20 +3025,36 @@ function renderScoreGridHtml(grid) {
         continue;
       }
       const pnl = cells[a][h];
+      const cellP = probs ? probs[a][h] : null;
       const isMark = (a === markA && h === markH);
-      const base = `${awayName} ${a} – ${homeName} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}`;
+      const probTxt = cellP != null ? ` · ${(cellP * 100).toFixed(1)}% chance` : "";
+      const base = `${awayName} ${a} – ${homeName} ${h}${isDraw ? " (draw)" : ""} → ${pnl >= 0 ? "+" : "−"}$${Math.abs(pnl).toFixed(2)}${probTxt}`;
       const title = isMark ? (mark.final ? `FINAL — ${base}` : `current score — ${base}`) : base;
-      cellsHtml += `<div class="rg-cell${drawCls}${isMark ? " rg-mark" : ""}" style="background:${color(pnl)}" `
-        + `title="${escapeHtml(title)}">${isMark ? (mark.final ? "●" : "✕") : dollar(pnl)}</div>`;
+      const bg = probView ? probColor(cellP) : color(pnl);
+      const body = isMark ? (mark.final ? "●" : "✕") : (probView ? pctTxt(cellP) : dollar(pnl));
+      cellsHtml += `<div class="rg-cell${drawCls}${isMark ? " rg-mark" : ""}" style="background:${bg}" `
+        + `title="${escapeHtml(title)}">${body}</div>`;
     }
     rows += `<div class="rg-row">${cellsHtml}</div>`;
   }
   let xlabs = `<div class="rg-corner"></div>`;
   for (let h = 0; h < N; h++) xlabs += `<div class="rg-xlab">${scores[h]}</div>`;
   rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
+  const toggle = probs ? `
+        <span class="rg-view-toggle" data-game-key="${escapeHtml(grid.gameKey)}">
+          <button type="button" class="rg-view-btn${probView ? "" : " on"}" data-view="pnl" title="expected $ P&L per final score">$</button>
+          <button type="button" class="rg-view-btn${probView ? " on" : ""}" data-view="prob" title="chance of each final score (Poisson fit from live mids)">%</button>
+        </span>` : "";
+  const legend = probView
+    ? `darker blue = more likely · % chance shown in each cell (model est. ${grid.lambdas ? grid.lambdas.map((x) => x.toFixed(1)).join("/") : ""} goals)
+        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : ""}
+        · diagonal = draws · hover a cell for its $`
+    : `<span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
+        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : ""}
+        · diagonal = draws · max ±$${maxAbs.toFixed(0)}`;
   return `
     <div class="risk-grid">
-      <div class="rg-head">Risk surface — expected $ P&L by final score</div>
+      <div class="rg-head">Risk surface — ${probView ? "chance of each final score" : "expected $ P&L by final score"}${toggle}</div>
       <div class="rg-wrap">
         <div class="rg-ytitle" title="${escapeHtml(awayName)} goals (y-axis)">
           ${flag(away)}
@@ -2921,11 +3063,7 @@ function renderScoreGridHtml(grid) {
         <div class="rg-grid" style="--rg-n:${N}">${rows}</div>
       </div>
       <div class="rg-xtitle" title="${escapeHtml(homeName)} goals (x-axis)">${flag(home)}<span class="rg-axis-name-x">${escapeHtml(homeName)}</span></div>
-      <div class="rg-legend">
-        <span class="rg-sw neg"></span>loss<span class="rg-sw pos"></span>profit · $ shown in each cell
-        ${mark ? `· <span class="rg-markk">${mark.final ? "●" : "✕"}</span>${mark.final ? "final" : "current score"}` : ""}
-        · diagonal = draws · max ±$${maxAbs.toFixed(0)}
-      </div>
+      <div class="rg-legend">${legend}</div>
     </div>`;
 }
 
@@ -4148,6 +4286,22 @@ function renderGameCards() {
   wrap.innerHTML = html;
 
   wireGridScrubbers(wrap);
+
+  // $/% grid-view toggle — DELEGATED and attached once (the scrubber swaps the
+  // grid's innerHTML on every drag, which would orphan per-button listeners).
+  if (!wrap._rgViewWired) {
+    wrap._rgViewWired = true;
+    wrap.addEventListener("click", (e) => {
+      const btn = e.target.closest && e.target.closest(".rg-view-btn");
+      if (!btn) return;
+      e.stopPropagation();
+      const key = btn.closest(".rg-view-toggle")?.getAttribute("data-game-key");
+      if (!key) return;
+      if (btn.getAttribute("data-view") === "prob") state.gridProbView.add(key);
+      else state.gridProbView.delete(key);
+      renderGameCards();
+    });
+  }
 
   // Toggle collapse when the header is clicked (or activated by keyboard).
   wrap.querySelectorAll(".game-card-head").forEach((head) => {
