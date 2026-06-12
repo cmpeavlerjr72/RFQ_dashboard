@@ -1420,3 +1420,6 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 }
 .rg-view-btn.on { background: #4f8cff; border-color: #4f8cff; color: #fff; }
 .rg-view-btn:hover:not(.on) { border-color: #4f8cff; color: inherit; }
+/* 3D expected-$ surface (SVG isometric plot) */
+.rg-ev3d { display: block; width: 100%; max-width: 440px; margin: 2px auto 0; }
+.rg-ev3d circle:hover { fill: #4f8cff; stroke: #4f8cff; }
