@@ -2708,10 +2708,19 @@ function _poisPmf(lam, k) {
 }
 
 // Current YES prob for a leg ticker: live mid first, fill-time mark fallback.
+// CAREFUL: legMids store the mid in OUR-side terms (the opposite of the buyer's
+// leg side — see the price loop), so flip back to YES terms via the leg's side.
+// Reading midC as a YES prob fed the live model inverted ML inputs (2026-06-12,
+// caught when Bosnia scored and the conditional fit pinned at its boundary).
 function _legYesProbNow(ticker) {
   for (const p of state.positions) {
     const lm = p.legMids?.[ticker];
-    if (lm && lm.midC != null) return Math.min(1, Math.max(0, lm.midC / 100));
+    if (lm && lm.midC != null) {
+      const leg = (p.legs || []).find((l) => l.ticker === ticker);
+      const buyerYes = !leg || (leg.side || "yes").toLowerCase() === "yes";
+      const v = Math.min(1, Math.max(0, lm.midC / 100));
+      return buyerYes ? 1 - v : v;   // buyer yes => our (stored) side is NO
+    }
   }
   for (const f of state.fillRows) {
     for (const l of (f.legs || [])) {
@@ -2811,6 +2820,10 @@ function soccerScoreProbs(gameKey, teams, N, liveCond) {
       s = _bisect(-sLim, sLim,
                   (sv) => pA - _pCondResult(curMargin, (muRem + sv) / 2, (muRem - sv) / 2, "away"));
     }
+    // A solver pinned at its boundary means the ML and totals inputs are
+    // inconsistent (bad/stale/inverted mid) — drop the lean rather than
+    // publish a "this team never scores again" distribution.
+    if (Math.abs(s) >= sLim * 0.97) s = 0;
     const lhR = Math.max(0.01, (muRem + s) / 2), laR = Math.max(0.01, (muRem - s) / 2);
     const probs = Array.from({ length: N }, (_, a) =>
       Array.from({ length: N }, (_, h) =>
