@@ -3295,6 +3295,57 @@ function renderRiskGridHtml(grid) {
     </div>`;
 }
 
+// ── Top-5 scoreline summary strip (2026-06-12) ──────────────────────────────
+// Compact card-level read of the soccer book: the five most likely final
+// scores as flag chips (green = pays us, red = costs us) plus the probability
+// mass split between winning and losing scorelines. Pure derivation from the
+// same cells+probs the risk grid uses; reflects the LIVE book (not the scrub).
+function renderScoreSummaryHtml(grid) {
+  if (!grid || grid.kind !== "score" || !grid.probs) return "";
+  const { scores, cells, probs, reach, teams, logoKey, league } = grid;
+  const [away, home] = teams;
+  const homeName = NATIONAL_TEAMS[home] || home;
+  const awayName = NATIONAL_TEAMS[away] || away;
+  const N = scores.length;
+  const items = [];
+  let pw = 0, pl = 0, tot = 0;
+  for (let a = 0; a < N; a++) {
+    for (let h = 0; h < N; h++) {
+      if (reach && !reach[a][h]) continue;
+      const p = probs[a][h], pnl = cells[a][h];
+      tot += p;
+      if (pnl > 0.005) pw += p;
+      else if (pnl < -0.005) pl += p;
+      items.push({ h, a, p, pnl });
+    }
+  }
+  if (!tot) return "";
+  items.sort((x, y) => y.p - x.p);
+  const flag = (ab) => {
+    const u = teamLogoUrl(logoKey || "wcup", ab, { league });
+    return u ? `<img class="rg-t5flag" src="${u}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+             : `<span class="rg-t5abbr">${escapeHtml(ab)}</span>`;
+  };
+  const chips = items.slice(0, 5).map((it) => {
+    const cls = it.pnl > 0.005 ? " pos" : it.pnl < -0.005 ? " neg" : "";
+    const tip = `${homeName} ${it.h} – ${awayName} ${it.a}: ${(it.p * 100).toFixed(1)}% chance → ${it.pnl >= 0 ? "+" : "−"}$${Math.abs(it.pnl).toFixed(2)} for us`;
+    return `<span class="rg-t5chip${cls}" title="${escapeHtml(tip)}">`
+      + `${flag(home)}<b>${it.h}–${it.a}</b>${flag(away)}`
+      + `<span class="rg-t5p">${(it.p * 100).toFixed(0)}%</span>`
+      + `<span class="rg-t5d">${it.pnl >= 0 ? "+" : "−"}$${Math.abs(it.pnl).toFixed(0)}</span></span>`;
+  }).join("");
+  const pwn = (pw / tot) * 100, pln = (pl / tot) * 100;
+  return `
+    <div class="rg-t5">
+      <span class="rg-t5lab" title="the five most likely final scores (model fit from live mids) and what each pays us">most likely:</span>
+      ${chips}
+      <span class="rg-t5split" title="probability mass of scorelines where the book profits vs loses (remainder ≈ flat)">
+        <span class="rg-sw pos"></span>${pwn.toFixed(0)}% pay us
+        <span class="rg-sw neg"></span>${pln.toFixed(0)}% cost us
+      </span>
+    </div>`;
+}
+
 // ── Risk-grid FILL SCRUBBER (2026-06-12) ────────────────────────────────────
 // A slider above each grid replays how the book built: position k shows the
 // grid with only the first k fills touching the game. Dots on the track mark
@@ -4384,8 +4435,10 @@ function renderGameCards() {
     // information better: full outcome envelope, expected mark, live ✕,
     // hedge shape). computeRiskGrid returns null when a card has no
     // game-level legs, which renders as nothing. Wrapped with the fill
-    // scrubber (2026-06-12) when the game has 2+ fills to replay.
-    const riskGridHtml = renderGridWithScrubber(g, treeLive);
+    // scrubber (2026-06-12) when the game has 2+ fills to replay, topped by
+    // the most-likely-scores summary strip (soccer only).
+    const scoreSummaryHtml = renderScoreSummaryHtml(computeRiskGrid(g, state.positions, treeLive));
+    const riskGridHtml = scoreSummaryHtml + renderGridWithScrubber(g, treeLive);
 
     return `
       <div class="game-card${collapsed ? " collapsed" : ""}" data-game-key="${escapeHtml(g.key)}">
