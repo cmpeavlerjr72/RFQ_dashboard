@@ -3076,12 +3076,21 @@ function renderGridWithScrubber(g, treeLive) {
       + `title="fill ${i + 1}: ${t} · ${legs} leg${legs > 1 ? "s" : ""} · $${(Number(f.cost_paid_dollars) || 0).toFixed(2)}"></span>`;
   }).join("");
 
+  const atLive = idx >= events.length;
   return `
     <div class="rg-scrub-zone" data-game-key="${escapeHtml(g.key)}">
       <div class="rg-scrub">
         <div class="rg-scrub-track">${dots}</div>
-        <input type="range" min="1" max="${events.length}" step="1" value="${idx}"
-               aria-label="replay book build by fill">
+        <div class="rg-scrub-controls">
+          <button type="button" class="rg-scrub-btn" data-step="-1" title="previous fill"
+                  ${idx <= 1 ? "disabled" : ""}>◀</button>
+          <input type="range" min="1" max="${events.length}" step="1" value="${idx}"
+                 aria-label="replay book build by fill">
+          <button type="button" class="rg-scrub-btn" data-step="1" title="next fill"
+                  ${atLive ? "disabled" : ""}>▶</button>
+          <button type="button" class="rg-scrub-btn rg-scrub-now" data-now="1"
+                  title="jump to the current book" ${atLive ? "disabled" : ""}>current</button>
+        </div>
         <div class="rg-scrub-label">${_scrubLabel(events, idx)}</div>
       </div>
       <div class="rg-scrub-body">${_scrubGridHtml(g, treeLive, events, idx)}</div>
@@ -3094,14 +3103,31 @@ function wireGridScrubbers(wrap) {
     const ctx = _gridScrubCtx.get(key);
     const inp = zone.querySelector('input[type="range"]');
     if (!ctx || !inp) return;
-    inp.addEventListener("input", () => {
-      const idx = Math.max(1, Math.min(ctx.events.length, Number(inp.value) || 1));
-      // Remember replay positions; "now" clears the entry so new fills extend the range.
-      if (idx >= ctx.events.length) delete state.gridScrub[key];
+    const N = ctx.events.length;
+    const setIdx = (raw) => {
+      const idx = Math.max(1, Math.min(N, Number(raw) || 1));
+      // Remember replay positions; "current" clears the entry so new fills extend the range.
+      if (idx >= N) delete state.gridScrub[key];
       else state.gridScrub[key] = idx;
+      inp.value = String(idx);
       zone.querySelector(".rg-scrub-body").innerHTML = _scrubGridHtml(ctx.g, ctx.treeLive, ctx.events, idx);
       zone.querySelector(".rg-scrub-label").innerHTML = _scrubLabel(ctx.events, idx);
       zone.querySelectorAll(".rg-scrub-dot").forEach((d, i) => d.classList.toggle("on", i < idx));
+      const atLive = idx >= N;
+      zone.querySelector('[data-step="-1"]').disabled = idx <= 1;
+      zone.querySelector('[data-step="1"]').disabled = atLive;
+      zone.querySelector("[data-now]").disabled = atLive;
+    };
+    inp.addEventListener("input", () => setIdx(inp.value));
+    zone.querySelectorAll("[data-step]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        setIdx((Number(inp.value) || 1) + Number(btn.getAttribute("data-step")));
+      });
+    });
+    zone.querySelector("[data-now]").addEventListener("click", (e) => {
+      e.stopPropagation();
+      setIdx(N);
     });
     // Don't let drags on the slider toggle the card collapse.
     inp.addEventListener("click", (e) => e.stopPropagation());

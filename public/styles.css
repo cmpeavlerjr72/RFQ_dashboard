@@ -1394,9 +1394,18 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
   transform: translateX(-50%); background: var(--muted-2); opacity: .45;
 }
 .rg-scrub-dot.on { background: #4f8cff; opacity: .95; }
+.rg-scrub-controls { display: flex; align-items: center; gap: 6px; }
 .rg-scrub input[type="range"] {
-  width: 100%; margin: 0; height: 16px; cursor: pointer; accent-color: #4f8cff;
+  flex: 1; width: 100%; margin: 0; height: 16px; cursor: pointer; accent-color: #4f8cff;
 }
+.rg-scrub-btn {
+  background: transparent; border: 1px solid var(--muted-2); color: var(--muted);
+  border-radius: 4px; font-size: 10px; line-height: 1; padding: 3px 7px;
+  cursor: pointer; flex: 0 0 auto;
+}
+.rg-scrub-btn:hover:not(:disabled) { color: inherit; border-color: #4f8cff; }
+.rg-scrub-btn:disabled { opacity: .35; cursor: default; }
+.rg-scrub-now { font-weight: 700; letter-spacing: .03em; }
 .rg-scrub-label { font-size: 10px; color: var(--muted); margin-top: 1px; }
 .rg-scrub-replay {
   font-weight: 800; color: #d97706; letter-spacing: .04em; margin-right: 3px;
