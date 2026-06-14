@@ -712,3 +712,27 @@ export async function getRecap(account: string, startEt: string, endEt: string, 
     ttlFor(endEt),
   );
 }
+
+// "Overall" recap = every real account's recap rows concatenated and
+// re-aggregated, so the totals/daily/breakdowns reflect the whole book.
+export async function getRecapOverall(
+  accounts: string[], startEt: string, endEt: string, force = false,
+): Promise<RecapResult> {
+  const results = await Promise.all(
+    accounts.map((a) => getRecap(a, startEt, endEt, force).catch(() => null)));
+  const ok = results.filter(Boolean) as RecapResult[];
+  const rows = ok.flatMap((r) => r.parlays || []);
+  rows.sort((a, b) => (b.first_fill_iso || "").localeCompare(a.first_fill_iso || ""));
+  return {
+    start_et: startEt,
+    end_et: endEt,
+    agg: aggregateAll(rows),
+    parlays: rows,
+    daily: buildDaily(rows, startEt, endEt),
+    sport_breakdown: buildSportBreakdown(rows),
+    leg_count_breakdown: buildLegCountBreakdown(rows),
+    fetched_at: new Date().toISOString(),
+    pages_fills: ok.reduce((s, r) => s + (r.pages_fills || 0), 0),
+    pages_settlements: ok.reduce((s, r) => s + (r.pages_settlements || 0), 0),
+  } as RecapResult;
+}

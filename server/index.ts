@@ -22,6 +22,7 @@ import {
   cacheStats as kalshiCacheStats,
   resolveAccount,
   listAccounts,
+  DEFAULT_ACCOUNT,
 } from "./kalshi.js";
 import {
   getScoreboard,
@@ -33,7 +34,7 @@ import {
   boxscoreCacheStats,
   rosterCacheStats,
 } from "./espn.js";
-import { getRecap } from "./recap.js";
+import { getRecap, getRecapOverall } from "./recap.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
 import { DASH_ACCOUNTS, byDashboardLabel } from "./accounts.js";
@@ -58,15 +59,25 @@ app.use(express.json({ limit: "1mb" }));
 let upstreamCallCount = 0;
 let lastError: { ts: number; msg: string } | null = null;
 
+// "Overall" = a virtual account that aggregates every real account (MP+TP+ROTH):
+// summed balance, merged positions, concatenated fills. It has no creds, so the
+// account-independent lookups (markets/rfq/recover) sign as the default account.
+const OVERALL = "Overall";
+const REAL_ACCOUNTS = DASH_ACCOUNTS.map((a) => a.dashboardLabel);
+function isOverall(a: string): boolean { return a === OVERALL; }
 // Which Kalshi account a request targets. Read from ?account=, validated and
-// defaulted to MVPeav by resolveAccount() so missing/garbage values are safe.
+// defaulted to MVPeav by resolveAccount(); "Overall" passes through verbatim.
 function acct(req: Request): string {
-  return resolveAccount(req.query.account as string | undefined);
+  const raw = String(req.query.account || "");
+  return raw === OVERALL ? OVERALL : resolveAccount(raw);
 }
+// For account-independent reads (market price, RFQ legs) under Overall, sign as
+// a single real account — the data is the same regardless of which.
+function signAcct(a: string): string { return isOverall(a) ? DEFAULT_ACCOUNT : a; }
 
-// Frontend uses this to populate the account switcher.
+// Frontend uses this to populate the account switcher (+ the Overall aggregate).
 app.get("/api/accounts", (_req, res) => {
-  res.json({ accounts: listAccounts() });
+  res.json({ accounts: [...listAccounts(), OVERALL] });
 });
 
 // Live FotMob match-momentum per WC game (keyed by Kalshi chunk, +=home).
@@ -92,10 +103,41 @@ app.get("/api/health", (_req, res) => {
 // Kalshi endpoints
 // ----------------------------------------------------------------------------
 
+// Overall = sum balance + portfolio_value across every real account.
+async function combinedBalance() {
+  const bals = await Promise.all(REAL_ACCOUNTS.map((a) => getBalance(a).catch(() => ({}))));
+  const bal = bals.reduce((s, b: any) => s + (Number(b.balance) || 0), 0);
+  const pv = bals.reduce((s, b: any) => s + (Number(b.portfolio_value) || 0), 0);
+  return { balance: bal, portfolio_value: pv, balance_dollars: (bal / 100).toFixed(4),
+           updated_ts: Math.floor(Date.now() / 1000) };
+}
+
+// Overall = merge every real account's (already taker-filtered) positions,
+// summing size + exposure for any parlay held in more than one account.
+async function combinedPositions(force: boolean) {
+  const all = await Promise.all(REAL_ACCOUNTS.map((a) => getPositions(a, force).catch(() => ({}))));
+  const byTicker = new Map<string, any>();
+  const events: any[] = [];
+  for (const p of all as any[]) {
+    for (const m of (p.market_positions || [])) {
+      const prev = byTicker.get(m.ticker);
+      if (prev) {
+        prev.position_fp = String((Number(prev.position_fp) || 0) + (Number(m.position_fp) || 0));
+        prev.position = (Number(prev.position) || 0) + (Number(m.position) || 0);
+        prev.market_exposure_dollars =
+          (Number(prev.market_exposure_dollars) || 0) + (Number(m.market_exposure_dollars) || 0);
+      } else { byTicker.set(m.ticker, { ...m }); }
+    }
+    for (const e of (p.event_positions || [])) events.push(e);
+  }
+  return { market_positions: [...byTicker.values()], event_positions: events, cursor: "" };
+}
+
 app.get("/api/kalshi/balance", async (req, res, next) => {
   try {
     upstreamCallCount++;
-    res.json(await getBalance(acct(req)));
+    const a = acct(req);
+    res.json(isOverall(a) ? await combinedBalance() : await getBalance(a));
   } catch (e) { next(e); }
 });
 
@@ -103,7 +145,8 @@ app.get("/api/kalshi/positions", async (req, res, next) => {
   try {
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
-    res.json(await getPositions(acct(req), force));
+    const a = acct(req);
+    res.json(isOverall(a) ? await combinedPositions(force) : await getPositions(a, force));
   } catch (e) { next(e); }
 });
 
@@ -111,7 +154,7 @@ app.get("/api/kalshi/market/:ticker", async (req, res, next) => {
   try {
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
-    res.json(await getMarket(acct(req), req.params.ticker, force));
+    res.json(await getMarket(signAcct(acct(req)), req.params.ticker, force));
   } catch (e) { next(e); }
 });
 
@@ -123,7 +166,7 @@ app.post("/api/kalshi/markets", async (req, res, next) => {
       return res.status(400).json({ error: "max 100 tickers per request" });
     }
     upstreamCallCount++;
-    res.json(await getMarketsBatch(acct(req), tickers));
+    res.json(await getMarketsBatch(signAcct(acct(req)), tickers));
   } catch (e) { next(e); }
 });
 
@@ -131,14 +174,14 @@ app.post("/api/kalshi/markets", async (req, res, next) => {
 app.get("/api/kalshi/event-markets/:eventTicker", async (req, res, next) => {
   try {
     upstreamCallCount++;
-    res.json(await getEventMarkets(acct(req), req.params.eventTicker));
+    res.json(await getEventMarkets(signAcct(acct(req)), req.params.eventTicker));
   } catch (e) { next(e); }
 });
 
 app.get("/api/kalshi/rfq/:rfqId", async (req, res, next) => {
   try {
     upstreamCallCount++;
-    res.json(await getRfqLegs(acct(req), req.params.rfqId));
+    res.json(await getRfqLegs(signAcct(acct(req)), req.params.rfqId));
   } catch (e) { next(e); }
 });
 
@@ -147,7 +190,18 @@ app.get("/api/kalshi/rfq/:rfqId", async (req, res, next) => {
 app.get("/api/kalshi/recover/:ticker", async (req, res, next) => {
   try {
     upstreamCallCount++;
-    res.json(await recoverParlay(acct(req), req.params.ticker));
+    const a = acct(req);
+    if (isOverall(a)) {
+      // The parlay may belong to any real account — try each, take the first hit.
+      for (const label of REAL_ACCOUNTS) {
+        try {
+          const r: any = await recoverParlay(label, req.params.ticker);
+          if (r && Array.isArray(r.legs) && r.legs.length) return res.json(r);
+        } catch { /* try next account */ }
+      }
+      return res.json({ legs: [] });
+    }
+    res.json(await recoverParlay(a, req.params.ticker));
   } catch (e) { next(e); }
 });
 
@@ -283,20 +337,26 @@ async function hfFills(account: string): Promise<any[]> {
   }
 }
 
-app.get("/api/fills", async (req, res) => {
-  const account = acct(req);
+// One real account's fills — local file if present (home), else the HF mirror.
+async function fetchAccountFills(account: string): Promise<any[]> {
   const fillsPath = fillsPathFor(account);
-  if (!fs.existsSync(fillsPath)) {
-    // Deployed instance: no local fill logs — serve the HF mirror.
-    const fills = await hfFills(account);
-    return res.json({ fills, count: fills.length, source: "hf" });
-  }
+  if (!fs.existsSync(fillsPath)) return await hfFills(account);
   try {
-    const text = fs.readFileSync(fillsPath, "utf-8");
-    const lines = text.split("\n").filter(Boolean);
-    const fills = lines.map((l) => {
-      try { return JSON.parse(l); } catch { return null; }
-    }).filter(Boolean);
+    return fs.readFileSync(fillsPath, "utf-8").split("\n").filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+  } catch { return []; }
+}
+
+app.get("/api/fills", async (req, res) => {
+  try {
+    const account = acct(req);
+    if (isOverall(account)) {
+      const per = await Promise.all(REAL_ACCOUNTS.map((a) => fetchAccountFills(a)));
+      const fills = per.flat();
+      return res.json({ fills, count: fills.length, source: "overall" });
+    }
+    const fills = await fetchAccountFills(account);
     res.json({ fills, count: fills.length });
   } catch (e: any) {
     res.status(500).json({ error: String(e?.message || e) });
@@ -314,7 +374,10 @@ app.get("/api/recap", async (req, res, next) => {
     if (!start) return res.status(400).json({ error: "start=YYYY-MM-DD required" });
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
-    const payload = await getRecap(acct(req), start, end, force);
+    const a = acct(req);
+    const payload = isOverall(a)
+      ? await getRecapOverall(REAL_ACCOUNTS, start, end, force)
+      : await getRecap(a, start, end, force);
     res.json(payload);
   } catch (e) { next(e); }
 });
