@@ -6,7 +6,7 @@
 // time falls inside [startEt 00:00, endEt 24:00) — i.e., the day we took the
 // risk, regardless of when it later settled.
 
-import { getJson, getMarketsBatch, DEFAULT_ACCOUNT } from "./kalshi.js";
+import { getJson, getMarketsBatch, accountOwnerTakes } from "./kalshi.js";
 import { TTLCache } from "./cache.js";
 
 // ----------------------------------------------------------------------------
@@ -659,12 +659,12 @@ export async function getRecap(account: string, startEt: string, endEt: string, 
       const isExcluded = (tk: string): boolean =>
         EXCLUDED_TICKER_PREFIXES.some((p) => tk.startsWith(p));
 
-      // On the secondary (TP) account the owner places his own bets, which fill
-      // as TAKER orders. Those are not our maker activity and must not pollute
-      // the recap — drop every taker fill there. The MP (default) account is our
-      // pure maker book, so we leave it untouched (a stray taker there would be a
-      // real cost we want to keep visible). 2026-06-03.
-      const excludeTakers = account !== DEFAULT_ACCOUNT;
+      // On the brother's account (GPeavT) the owner places his own bets, which
+      // fill as TAKER orders. Those are not our maker activity and must not
+      // pollute the recap — drop every taker fill there. MP (default) and ROTH
+      // are pure-maker books, left untouched (a stray taker there would be a real
+      // cost we want to keep visible). 2026-06-03; ownerTakes flag 2026-06-14.
+      const excludeTakers = accountOwnerTakes(account);
 
       const byParlay = new Map<string, KalshiFill[]>();
       for (const f of fills) {

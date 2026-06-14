@@ -18,9 +18,15 @@ services:
         sync: false
       - key: KALSHI_PRIVATE_KEY_SECOND
         sync: false
+      # Third account (ROTH) — World-Cup-only book. Set in the Render dashboard.
+      - key: KALSHI_API_KEY_ID_ROTH
+        sync: false
+      - key: KALSHI_PRIVATE_KEY_ROTH
+        sync: false
       # Render's free tier supports Secret Files. If you prefer files over
       # inline PEMs:
       #   1) upload each .pem under "Secret Files" in the Render dashboard
-      #   2) set KALSHI_PRIVATE_KEY_PATH=/etc/secrets/kalshi.pem  (MVPeav)
-      #      and KALSHI_PRIVATE_KEY_PATH_SECOND=/etc/secrets/kalshi_second.pem (TGPeav)
-      #   3) leave the inline KALSHI_PRIVATE_KEY / KALSHI_PRIVATE_KEY_SECOND unset
+      #   2) set KALSHI_PRIVATE_KEY_PATH=/etc/secrets/kalshi.pem  (MVPeav),
+      #      KALSHI_PRIVATE_KEY_PATH_SECOND=/etc/secrets/kalshi_second.pem (TGPeav),
+      #      and KALSHI_PRIVATE_KEY_PATH_ROTH=/etc/secrets/kalshi_roth.pem (ROTH)
+      #   3) leave the matching inline KALSHI_PRIVATE_KEY* vars unset

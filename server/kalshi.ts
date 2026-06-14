@@ -42,6 +42,10 @@ interface AccountConfig {
   keyId: string;     // env var holding the API key id
   inline: string;    // env var holding the inline PEM (optional)
   keyPath: string;   // env var holding the PEM file path (optional)
+  // True only for an account the OWNER also trades manually (taker fills). When
+  // set, getPositions() drops taker-acquired tickers so the view shows only our
+  // maker book. MP/ROTH are pure-maker (false); GPeavT is the brother's account.
+  ownerTakes?: boolean;
 }
 
 const ACCOUNTS: Record<string, AccountConfig> = {
@@ -54,6 +58,14 @@ const ACCOUNTS: Record<string, AccountConfig> = {
     keyId: "KALSHI_API_KEY_ID_SECOND",
     inline: "KALSHI_PRIVATE_KEY_SECOND",
     keyPath: "KALSHI_PRIVATE_KEY_PATH_SECOND",
+    ownerTakes: true,   // brother's account: also carries his own taker trades
+  },
+  // Third account (ROTH) — `_ROTH` suffix, matching the runner's .env + the
+  // notifier's "ROTH" label. World-Cup-only book on the trading side.
+  ROTH: {
+    keyId: "KALSHI_API_KEY_ID_ROTH",
+    inline: "KALSHI_PRIVATE_KEY_ROTH",
+    keyPath: "KALSHI_PRIVATE_KEY_PATH_ROTH",
   },
 };
 
@@ -65,6 +77,12 @@ export function isValidAccount(a: string): boolean {
 
 export function listAccounts(): string[] {
   return Object.keys(ACCOUNTS);
+}
+
+/** True if the OWNER also trades this account manually (taker fills that must be
+ *  excluded from our maker book). Only GPeavT; MP/ROTH are pure-maker. */
+export function accountOwnerTakes(account: string): boolean {
+  return !!ACCOUNTS[resolveAccount(account)]?.ownerTakes;
 }
 
 /** Normalise an arbitrary account input to a known account, defaulting safely. */
@@ -360,8 +378,10 @@ export async function getPositions(account: string, force = false): Promise<any>
       // fill as TAKER orders, sometimes even on KXMVE parlay markets (so the
       // KXMVE filter above doesn't catch them). Drop any position that was
       // acquired purely as a taker so the live view shows only our maker book.
-      // MP (default) is our pure maker account, left untouched. 2026-06-03.
-      if (account !== DEFAULT_ACCOUNT && raw && Array.isArray(raw.market_positions)) {
+      // MP (default) and ROTH are pure-maker accounts, left untouched. Only an
+      // account flagged ownerTakes (GPeavT) carries the owner's manual taker
+      // trades that must be stripped. 2026-06-03; ownerTakes flag 2026-06-14.
+      if (ACCOUNTS[account]?.ownerTakes && raw && Array.isArray(raw.market_positions)) {
         try {
           const takerTk = await takerOnlyTickers(account);
           if (takerTk.size) {
