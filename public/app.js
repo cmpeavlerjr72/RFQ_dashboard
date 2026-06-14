@@ -7,6 +7,7 @@ import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker,
          allCompetitions, athleteCodeCandidates,
          NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
 import { NATIONAL_TEAMS } from "/national_teams.js";
+import { teamBarColors } from "/team_colors.js";
 import { initAccountPicker, withAccount } from "/account.js";
 
 const $ = (id) => document.getElementById(id);
@@ -3639,7 +3640,9 @@ function renderMomentumHtml(g) {
   const W = 360, H = 56, mid = H / 2;
   const maxM = Math.max(90, ...data.map((p) => p.minute));
   const maxAbs = Math.max(30, ...data.map((p) => Math.abs(p.value)));
-  const homeCol = "#1f77b4", awayCol = "#e0512f";
+  // Per-team bar colors (home pushes UP, away DOWN), with a clash fallback so
+  // two similar-colored teams stay distinguishable.
+  const { home: homeCol, away: awayCol } = teamBarColors(mom.home_code, mom.away_code);
   const bw = Math.max(1.0, (W / maxM) * 0.9);
   let bars = "";
   for (const p of data) {
@@ -3647,7 +3650,7 @@ function renderMomentumHtml(g) {
     const h = (Math.abs(p.value) / maxAbs) * (mid - 3);
     const y = p.value >= 0 ? mid - h : mid;
     bars += `<rect x="${(x - bw / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${bw.toFixed(2)}" `
-      + `height="${Math.max(0.4, h).toFixed(2)}" fill="${p.value >= 0 ? homeCol : awayCol}" opacity="0.85"/>`;
+      + `height="${Math.max(0.4, h).toFixed(2)}" fill="${p.value >= 0 ? homeCol : awayCol}" opacity="0.9"/>`;
   }
   const curX = (data[data.length - 1].minute / maxM) * W;
   const htX = (45 / maxM) * W;
@@ -3659,12 +3662,12 @@ function renderMomentumHtml(g) {
   };
   const clock = escapeHtml(mom.clock || "");
   const score = Array.isArray(mom.score) ? `${mom.score[0]}–${mom.score[1]}` : "";
+  // Home team on TOP (its bars rise up), away on BOTTOM (bars drop down).
   return `
     <div class="mom-card">
-      <div class="mom-head">
+      <div class="mom-row">
         <span class="mom-team" style="color:${homeCol}">${flag(mom.home_code)}${homeName}</span>
         <span class="mom-mid">match momentum${score ? ` · ${score}` : ""}${clock ? ` · ${clock}` : ""}</span>
-        <span class="mom-team away" style="color:${awayCol}">${awayName}${flag(mom.away_code)}</span>
       </div>
       <svg class="mom-svg" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
         ${bars}
@@ -3672,6 +3675,9 @@ function renderMomentumHtml(g) {
         <line x1="${htX.toFixed(1)}" y1="2" x2="${htX.toFixed(1)}" y2="${H - 2}" stroke="rgba(140,140,150,.3)" stroke-width="0.4" stroke-dasharray="2 2"/>
         <line x1="${curX.toFixed(1)}" y1="2" x2="${curX.toFixed(1)}" y2="${H - 2}" stroke="rgba(0,0,0,.45)" stroke-width="0.6"/>
       </svg>
+      <div class="mom-row">
+        <span class="mom-team" style="color:${awayCol}">${flag(mom.away_code)}${awayName}</span>
+      </div>
     </div>`;
 }
 

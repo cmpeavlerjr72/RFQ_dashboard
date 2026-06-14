@@ -1446,10 +1446,12 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .rg-t5split b.pos { color: #2ea35f; }
 .rg-t5split b.neg { color: #d4365c; }
 
-/* Live FotMob match-momentum strip */
+/* Live FotMob match-momentum strip — home team on top (bars up), away below */
 .mom-card { margin: 12px 0 4px; }
-.mom-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 700; margin-bottom: 3px; gap: 8px; }
+.mom-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 700; gap: 8px; }
+.mom-row:first-child { margin-bottom: 2px; }
+.mom-row:last-child { margin-top: 2px; }
 .mom-team { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.mom-mid { color: var(--muted-2, #8a8a93); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; text-align: center; }
-.mom-flag { width: 14px; height: 14px; border-radius: 2px; object-fit: cover; }
+.mom-mid { color: var(--muted-2, #8a8a93); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.mom-flag { width: 15px; height: 15px; border-radius: 2px; object-fit: cover; }
 .mom-svg { display: block; width: 100%; background: rgba(128,128,140,0.05); border-radius: 4px; }
