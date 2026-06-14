@@ -175,17 +175,20 @@ async function refresh() {
   state.fetching = true;
   setStatus("fetching", "fetching");
   try {
-    const [bal, pos, fills, starts] = await Promise.all([
+    const [bal, pos, fills, starts, momentum] = await Promise.all([
       api("/api/kalshi/balance"),
       api("/api/kalshi/positions"),
       api("/api/fills"),
       // soccer kickoff times (Kalshi milestone feed) — defensive: a failure here
       // must never break the dashboard, so fall back to an empty map.
       api("/api/start-times").catch(() => ({ starts: {} })),
+      // Live FotMob match-momentum (account-independent; non-fatal).
+      fetch("/api/momentum").then((r) => r.json()).catch(() => ({ games: {} })),
     ]);
 
     state.soccerStarts = (starts && starts.starts) || {};
     state.soccerScores = (starts && starts.scores) || {};
+    state.momentum = (momentum && momentum.games) || {};
     state.balance = bal;
     state.fillsByParlay = {};
     for (const f of (fills.fills || [])) {
@@ -3621,6 +3624,57 @@ function wireGridScrubbers(wrap) {
   });
 }
 
+// Live FotMob match-momentum bar strip for a soccer game card. Per-minute series
+// mirrored FotMob->HF (sandbox/fotmob_momentum_feed.py); value +=home pushing
+// (bars up, home color), -=away (bars down). Keyed by the Kalshi chunk so it
+// joins the card directly. Returns "" when there's no momentum for this game.
+function renderMomentumHtml(g) {
+  const parts = (g.key || "").split("|");        // [sport, DATE, TEAMS]
+  const chunk = (parts[1] || "") + (parts[2] || "");
+  const mom = state.momentum && state.momentum[chunk];
+  if (!mom) return "";
+  const data = (mom.momentum || []).filter(
+    (p) => p && typeof p.value === "number" && p.minute != null);
+  if (data.length < 3) return "";
+  const W = 360, H = 56, mid = H / 2;
+  const maxM = Math.max(90, ...data.map((p) => p.minute));
+  const maxAbs = Math.max(30, ...data.map((p) => Math.abs(p.value)));
+  const homeCol = "#1f77b4", awayCol = "#e0512f";
+  const bw = Math.max(1.0, (W / maxM) * 0.9);
+  let bars = "";
+  for (const p of data) {
+    const x = (p.minute / maxM) * W;
+    const h = (Math.abs(p.value) / maxAbs) * (mid - 3);
+    const y = p.value >= 0 ? mid - h : mid;
+    bars += `<rect x="${(x - bw / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${bw.toFixed(2)}" `
+      + `height="${Math.max(0.4, h).toFixed(2)}" fill="${p.value >= 0 ? homeCol : awayCol}" opacity="0.85"/>`;
+  }
+  const curX = (data[data.length - 1].minute / maxM) * W;
+  const htX = (45 / maxM) * W;
+  const homeName = escapeHtml(mom.home_name || (g.teams || [])[1] || "Home");
+  const awayName = escapeHtml(mom.away_name || (g.teams || [])[0] || "Away");
+  const flag = (ab) => {
+    const u = teamLogoUrl(g.sportLogoKey || "wcup", ab, { league: g.league });
+    return u ? `<img class="mom-flag" src="${u}" alt="${escapeHtml(ab || "")}" onerror="this.style.display='none'">` : "";
+  };
+  const clock = escapeHtml(mom.clock || "");
+  const score = Array.isArray(mom.score) ? `${mom.score[0]}–${mom.score[1]}` : "";
+  return `
+    <div class="mom-card">
+      <div class="mom-head">
+        <span class="mom-team" style="color:${homeCol}">${flag(mom.home_code)}${homeName}</span>
+        <span class="mom-mid">match momentum${score ? ` · ${score}` : ""}${clock ? ` · ${clock}` : ""}</span>
+        <span class="mom-team away" style="color:${awayCol}">${awayName}${flag(mom.away_code)}</span>
+      </div>
+      <svg class="mom-svg" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
+        ${bars}
+        <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="rgba(140,140,150,.55)" stroke-width="0.5"/>
+        <line x1="${htX.toFixed(1)}" y1="2" x2="${htX.toFixed(1)}" y2="${H - 2}" stroke="rgba(140,140,150,.3)" stroke-width="0.4" stroke-dasharray="2 2"/>
+        <line x1="${curX.toFixed(1)}" y1="2" x2="${curX.toFixed(1)}" y2="${H - 2}" stroke="rgba(0,0,0,.45)" stroke-width="0.6"/>
+      </svg>
+    </div>`;
+}
+
 function renderGameCards() {
   const wrap = $("game-cards");
   const cards = aggregateGameCards();
@@ -4582,6 +4636,7 @@ function renderGameCards() {
     // the most-likely-scores summary strip (soccer only).
     const scoreSummaryHtml = renderScoreSummaryHtml(computeRiskGrid(g, state.positions, treeLive));
     const riskGridHtml = scoreSummaryHtml + renderGridWithScrubber(g, treeLive);
+    const momentumHtml = renderMomentumHtml(g);
 
     return `
       <div class="game-card${collapsed ? " collapsed" : ""}" data-game-key="${escapeHtml(g.key)}">
@@ -4628,6 +4683,7 @@ function renderGameCards() {
         <div class="game-card-body">
           ${bodyContent || `<div class="empty">no pending legs</div>`}
           ${resolvedNote}
+          ${momentumHtml}
           ${riskGridHtml}
         </div>`}
       </div>

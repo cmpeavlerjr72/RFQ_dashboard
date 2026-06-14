@@ -37,6 +37,7 @@ import { getRecap } from "./recap.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
 import { DASH_ACCOUNTS, byDashboardLabel } from "./accounts.js";
+import { getMomentum } from "./momentum.js";
 
 // Load .env from dashboard/.env (next to package.json)
 const __filename = fileURLToPath(import.meta.url);
@@ -66,6 +67,12 @@ function acct(req: Request): string {
 // Frontend uses this to populate the account switcher.
 app.get("/api/accounts", (_req, res) => {
   res.json({ accounts: listAccounts() });
+});
+
+// Live FotMob match-momentum per WC game (keyed by Kalshi chunk, +=home).
+app.get("/api/momentum", async (_req, res) => {
+  try { res.json(await getMomentum()); }
+  catch { res.json({ games: {} }); }
 });
 
 app.get("/api/health", (_req, res) => {
