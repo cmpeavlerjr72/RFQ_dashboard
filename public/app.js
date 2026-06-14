@@ -2762,7 +2762,7 @@ function _pCondResult(curMargin, lh, la, cmp) {
 // live over-X price is P(remaining >= X - curTotal), the live ML price is
 // P(curMargin + remaining-difference > 0). A full-match refit misreads those
 // same mids (it puts mass below the current score and ignores the clock).
-function soccerScoreProbs(gameKey, teams, N, liveCond) {
+function soccerScoreProbs(gameKey, teams, Na, Nh, liveCond) {
   // Find this game's chunk + GAME-series prefix from any held leg.
   let chunk = null, gameSeries = null;
   outer:
@@ -2786,8 +2786,8 @@ function soccerScoreProbs(gameKey, teams, N, liveCond) {
   if (liveCond && liveCond.curH != null && liveCond.curA != null) {
     const { curH, curA } = liveCond;
     if (liveCond.final) {                       // settled: all mass on the final
-      const probs = Array.from({ length: N }, (_, a) =>
-        Array.from({ length: N }, (_, h) => (a === curA && h === curH ? 1 : 0)));
+      const probs = Array.from({ length: Na }, (_, a) =>
+        Array.from({ length: Nh }, (_, h) => (a === curA && h === curH ? 1 : 0)));
       return { probs, lh: 0, la: 0, live: true };
     }
     const fracLeft = liveCond.fracLeft != null
@@ -2841,8 +2841,8 @@ function soccerScoreProbs(gameKey, teams, N, liveCond) {
       s = contradictsLeader ? 0 : Math.sign(s) * sLim;
     }
     const lhR = Math.max(0.01, (muRem + s) / 2), laR = Math.max(0.01, (muRem - s) / 2);
-    const probs = Array.from({ length: N }, (_, a) =>
-      Array.from({ length: N }, (_, h) =>
+    const probs = Array.from({ length: Na }, (_, a) =>
+      Array.from({ length: Nh }, (_, h) =>
         (h >= curH && a >= curA)
           ? _poisPmf(lhR, h - curH) * _poisPmf(laR, a - curA) : 0));
     return { probs, lh: lhR, la: laR, live: true };
@@ -2878,8 +2878,8 @@ function soccerScoreProbs(gameKey, teams, N, liveCond) {
     }
   }
   const lh = (mu + s) / 2, la = (mu - s) / 2;
-  const probs = Array.from({ length: N }, (_, a) =>
-    Array.from({ length: N }, (_, h) => _poisPmf(la, a) * _poisPmf(lh, h)));
+  const probs = Array.from({ length: Na }, (_, a) =>
+    Array.from({ length: Nh }, (_, h) => _poisPmf(la, a) * _poisPmf(lh, h)));
   return { probs, lh, la };
 }
 
@@ -2912,9 +2912,9 @@ function _bisect(lo, hi, fn) {
 // back-to-front; tick labels sit on the bar centers; axis titles carry flags.
 let _evSvgUid = 0;   // unique clipPath ids across the multiple SVGs on a page
 
-function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell, flags) {
+function _evSurfaceSvg(na, nh, cells, probs, maxEv, awayName, homeName, markCell, flags) {
   _evSvgUid++;
-  const N = scores.length;
+  // na = away rows, nh = home cols (rectangular; score value == index).
   const ux = 26, uy = 14, Z = 46;          // iso step + max bar height (px)
   const k = 0.36;                          // bar footprint half-fraction of a cell
   const cx = 185, cy = 64;
@@ -2927,10 +2927,10 @@ function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell
 
   // z=0 floor: cell diamonds (so empty cells still read as the floor plane)
   let base = "";
-  for (let s = 0; s <= 2 * (N - 1); s++) {
-    for (let h = 0; h < N; h++) {
+  for (let s = 0; s <= (na - 1) + (nh - 1); s++) {
+    for (let h = 0; h < nh; h++) {
       const a = s - h;
-      if (a < 0 || a >= N) continue;
+      if (a < 0 || a >= na) continue;
       const [x, y] = C(h, a);
       const d = [[x, y - 2 * k * uy], [x + 2 * k * ux, y], [x, y + 2 * k * uy], [x - 2 * k * ux, y]];
       base += `<polygon points="${d.map(fmt).join(" ")}"/>`;
@@ -2940,11 +2940,13 @@ function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell
 
   // tick labels centered on the OUTER cells of each axis row/column
   let labels = "";
-  for (let i = 0; i < N; i++) {
+  for (let i = 0; i < nh; i++) {            // home (x) ticks
     const [hx, hy] = C(i, -0.95);          // just outside the a=0 edge
+    labels += `<text x="${hx.toFixed(1)}" y="${(hy + 2.5).toFixed(1)}" text-anchor="middle">${i}</text>`;
+  }
+  for (let i = 0; i < na; i++) {            // away (y) ticks
     const [ax, ay] = C(-0.95, i);          // just outside the h=0 edge
-    labels += `<text x="${hx.toFixed(1)}" y="${(hy + 2.5).toFixed(1)}" text-anchor="middle">${scores[i]}</text>`
-            + `<text x="${ax.toFixed(1)}" y="${(ay + 2.5).toFixed(1)}" text-anchor="middle">${scores[i]}</text>`;
+    labels += `<text x="${ax.toFixed(1)}" y="${(ay + 2.5).toFixed(1)}" text-anchor="middle">${i}</text>`;
   }
   out.push(`<g font-size="8.5" fill="rgba(150,150,162,.95)">${labels}</g>`);
 
@@ -2954,13 +2956,13 @@ function _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName, markCell
     return `${img}<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${arrowAfter ? "end" : "start"}" font-size="9" font-weight="700" fill="rgba(150,150,162,.95)">${escapeHtml(name)} ${arrowAfter ? "→" : ""}</text>`
       + (arrowAfter ? "" : `<text x="${(x - 8).toFixed(1)}" y="${y.toFixed(1)}" text-anchor="end" font-size="9" font-weight="700" fill="rgba(150,150,162,.95)">←</text>`);
   };
-  const [htx, hty] = C(N - 0.4, -2.0);
-  const [atx, aty] = C(-2.0, N - 0.4);
+  const [htx, hty] = C(nh - 0.4, -2.0);
+  const [atx, aty] = C(-2.0, na - 0.4);
   out.push(`<g>${title(htx, hty, homeName, flags && flags.home, true)}${title(atx, aty, awayName, flags && flags.away, false)}</g>`);
 
   // bars, painter's order (back to front)
   const cellsOrder = [];
-  for (let h = 0; h < N; h++) for (let a = 0; a < N; a++) cellsOrder.push([h, a]);
+  for (let h = 0; h < nh; h++) for (let a = 0; a < na; a++) cellsOrder.push([h, a]);
   cellsOrder.sort((q, r) => (q[0] + q[1]) - (r[0] + r[1]));
   let bars = "";
   for (const [h, a] of cellsOrder) {
@@ -3050,8 +3052,6 @@ function computeRiskGrid(g, parlays, live) {
   // parity-impossible holes only existed because of the projection). Every
   // score×score cell is a real outcome; the draw band is just the diagonal.
   if (isSoccer) {
-    const NS = 6;                         // 0..5 goals per team (6x6 = 36 cells)
-    const scores = Array.from({ length: NS }, (_, i) => i);
     // Team codes: from any ML/spread leg if held (parseTeamsFromChunk,
     // [away, home]), else split the game chunk directly — soccer chunks are
     // HOME-FIRST (2026-06-11 fix), so away = second code.
@@ -3070,41 +3070,42 @@ function computeRiskGrid(g, parlays, live) {
     }
     const [away, home] = teams;
     const inProgress = !!(live && live.total != null && live.margin != null && !live.final);
+    const haveScore = !!(live && live.total != null && live.margin != null);
     // Current per-team scores recovered from (margin=h−a, total=a+h).
-    const curH = inProgress ? Math.round((live.total + live.margin) / 2) : null;
-    const curA = inProgress ? Math.round((live.total - live.margin) / 2) : null;
+    const curH = haveScore ? Math.round((live.total + live.margin) / 2) : null;
+    const curA = haveScore ? Math.round((live.total - live.margin) / 2) : null;
+    // DYNAMIC PER-AXIS SIZE: default 0..5, but once a team's CURRENT (or final)
+    // score reaches the axis midpoint (3), grow that axis's top by 1 per goal so
+    // the live score never falls off the grid (Germany 6-1 used to clamp at 5).
+    // Each axis sizes to ITS OWN team's score (rectangular), capped at 11.
+    const axisMax = (cur) => Math.min(11, Math.max(5, (cur || 0) + 3));
+    const scoresH = Array.from({ length: (haveScore ? axisMax(curH) : 5) + 1 }, (_, i) => i);
+    const scoresA = Array.from({ length: (haveScore ? axisMax(curA) : 5) + 1 }, (_, i) => i);
     // Reachability is exact and simple in score space: goals only increase.
-    const reach = scores.map((a) =>
-      scores.map((h) => !inProgress || (a >= curA && h >= curH)));
+    const reach = scoresA.map((a) =>
+      scoresH.map((h) => !inProgress || (a >= curA && h >= curH)));
     let maxAbs = 0;
-    const cells = scores.map((a, ri) => scores.map((h, ci) => {
+    const cells = scoresA.map((a) => scoresH.map((h) => {
       const asg = { margin: h - a, total: a + h,
                     winner: h > a ? home : a > h ? away : "__DRAW__",
                     btts: a > 0 && h > 0 };
       const pnl = _treeNodeExpected(ours, g.key, asg);
-      if (reach[ri][ci] && Math.abs(pnl) > maxAbs) maxAbs = Math.abs(pnl);
+      if (reach[a][h] && Math.abs(pnl) > maxAbs) maxAbs = Math.abs(pnl);
       return pnl;
     }));
-    let mark = null;
-    if (live && live.margin != null && live.total != null) {
-      const h = Math.round((live.total + live.margin) / 2);
-      const a = Math.round((live.total - live.margin) / 2);
-      mark = { a, h, final: !!live.final };
-    }
+    const mark = haveScore ? { a: curA, h: curH, final: !!live.final } : null;
     // Cell probabilities for the $/% toggle — display-grade Poisson fit from
     // live mids; null (toggle hidden) when the fit has nothing to chew on.
     // Once live, switch to the conditional model: current score + Poisson of
     // the REMAINING goals (rates read conditionally off the in-game mids).
-    let liveCond = null;
-    if (live && live.total != null && live.margin != null) {
-      liveCond = { curH: Math.round((live.total + live.margin) / 2),
-                   curA: Math.round((live.total - live.margin) / 2),
-                   fracLeft: live.fracRemaining != null ? live.fracRemaining : null,
-                   final: !!live.final };
-    }
+    const liveCond = haveScore
+      ? { curH, curA, fracLeft: live.fracRemaining != null ? live.fracRemaining : null,
+          final: !!live.final }
+      : null;
     let prob = null;
-    try { prob = soccerScoreProbs(g.key, [away, home], NS, liveCond); } catch (_) { prob = null; }
-    return { kind: "score", scores, cells, reach, maxAbs, teams, mark,
+    try { prob = soccerScoreProbs(g.key, [away, home], scoresA.length, scoresH.length, liveCond); }
+    catch (_) { prob = null; }
+    return { kind: "score", scoresA, scoresH, cells, reach, maxAbs, teams, mark,
              probs: prob ? prob.probs : null, lambdas: prob ? [prob.lh, prob.la] : null,
              probsLive: !!(prob && prob.live),
              gameKey: g.key, logoKey: g.sportLogoKey, league: g.league };
@@ -3206,7 +3207,7 @@ function computeRiskGrid(g, parlays, live) {
 // Ticks are plain 0..5; each axis carries a flag + country-name title. The
 // diagonal is the draw band.
 function renderScoreGridHtml(grid) {
-  const { scores, cells, reach, maxAbs, mark, teams, logoKey, league, probs } = grid;
+  const { scoresA, scoresH, cells, reach, maxAbs, mark, teams, logoKey, league, probs } = grid;
   const [away, home] = teams;
   const awayName = NATIONAL_TEAMS[away] || away;
   const homeName = NATIONAL_TEAMS[home] || home;
@@ -3254,18 +3255,18 @@ function renderScoreGridHtml(grid) {
     return v >= 9.5 ? s + Math.round(v) : s + v.toFixed(1);
   };
   const dollar = (v) => { const r = Math.round(v); return r > 0 ? "+" + r : "" + r; };
-  const N = scores.length;
-  const top = N - 1;
-  // Live/final mark cell (scores beyond the grid edge clamp to the last cell).
+  const Na = scoresA.length, Nh = scoresH.length;   // rows (away) × cols (home)
+  const topA = Na - 1;
+  // Live/final mark cell (the dynamic axes keep it on-grid; clamp defensively).
   let markA = -1, markH = -1;
   if (mark) {
-    markA = Math.min(top, Math.max(0, mark.a));
-    markH = Math.min(top, Math.max(0, mark.h));
+    markA = Math.min(Na - 1, Math.max(0, mark.a));
+    markH = Math.min(Nh - 1, Math.max(0, mark.h));
   }
   let rows = "";
-  for (let a = top; a >= 0; a--) {          // top row = most away goals; 0 lands at the bottom
+  for (let a = topA; a >= 0; a--) {         // top row = most away goals; 0 lands at the bottom
     let cellsHtml = `<div class="rg-ylab" title="${escapeHtml(awayName)} scores ${a}">${a}</div>`;
-    for (let h = 0; h < N; h++) {
+    for (let h = 0; h < Nh; h++) {
       const isDraw = a === h;
       const drawCls = isDraw ? " rg-draw" : "";
       if (reach && !reach[a][h]) {
@@ -3293,7 +3294,7 @@ function renderScoreGridHtml(grid) {
     rows += `<div class="rg-row">${cellsHtml}</div>`;
   }
   let xlabs = `<div class="rg-corner"></div>`;
-  for (let h = 0; h < N; h++) xlabs += `<div class="rg-xlab">${scores[h]}</div>`;
+  for (let h = 0; h < Nh; h++) xlabs += `<div class="rg-xlab">${scoresH[h]}</div>`;
   rows += `<div class="rg-row rg-xrow">${xlabs}</div>`;
   const toggle = probs ? `
         <span class="rg-view-toggle" data-game-key="${escapeHtml(grid.gameKey)}">
@@ -3326,7 +3327,7 @@ function renderScoreGridHtml(grid) {
     : "expected $ P&L by final score";
   const flagUrl = (ab) => teamLogoUrl(logoKey || "wcup", ab, { league }) || null;
   const body = evView
-    ? _evSurfaceSvg(scores, cells, probs, maxEv, awayName, homeName,
+    ? _evSurfaceSvg(Na, Nh, cells, probs, maxEv, awayName, homeName,
                     mark ? { a: markA, h: markH, final: !!mark.final } : null,
                     { home: flagUrl(home), away: flagUrl(away) })
     : `
@@ -3335,7 +3336,7 @@ function renderScoreGridHtml(grid) {
           ${flag(away)}
           <span class="rg-axis-name">${escapeHtml(awayName)}</span>
         </div>
-        <div class="rg-grid" style="--rg-n:${N}">${rows}</div>
+        <div class="rg-grid" style="--rg-n:${Nh}">${rows}</div>
       </div>
       <div class="rg-xtitle" title="${escapeHtml(homeName)} goals (x-axis)">${flag(home)}<span class="rg-axis-name-x">${escapeHtml(homeName)}</span></div>`;
   return `
@@ -3426,15 +3427,14 @@ function renderRiskGridHtml(grid) {
 // same cells+probs the risk grid uses; reflects the LIVE book (not the scrub).
 function renderScoreSummaryHtml(grid) {
   if (!grid || grid.kind !== "score" || !grid.probs) return "";
-  const { scores, cells, probs, reach, teams, logoKey, league } = grid;
+  const { cells, probs, reach, teams, logoKey, league } = grid;
   const [away, home] = teams;
   const homeName = NATIONAL_TEAMS[home] || home;
   const awayName = NATIONAL_TEAMS[away] || away;
-  const N = scores.length;
   const items = [];
   let pw = 0, pl = 0, tot = 0, evw = 0, evl = 0;
-  for (let a = 0; a < N; a++) {
-    for (let h = 0; h < N; h++) {
+  for (let a = 0; a < probs.length; a++) {            // away rows
+    for (let h = 0; h < probs[a].length; h++) {       // home cols
       if (reach && !reach[a][h]) continue;
       const p = probs[a][h], pnl = cells[a][h];
       tot += p;
