@@ -3040,8 +3040,17 @@ function computeRiskGrid(g, parlays, live) {
     // [away, home]), else split the game chunk directly — soccer chunks are
     // HOME-FIRST (2026-06-11 fix), so away = second code.
     if (!teams) {
-      const m = /^\d{2}[A-Z]{3}\d{2}(?:\d{4})?([A-Z]{6})$/.exec(g.key || "");
-      teams = m ? [m[1].slice(3), m[1].slice(0, 3)] : ["AWAY", "HOME"];
+      // No ML/spread leg held (e.g. a total/BTTS-only card), so `teams` was
+      // never set above. Derive it from the game key. g.key is the pipe-
+      // delimited "sport|DATE|TEAMS" from legGameGroupKey — the old regex
+      // expected a bare "26JUN14CIVECU" chunk and so NEVER matched the key,
+      // leaving every total/BTTS-only soccer card stuck on the AWAY/HOME
+      // fallback (no flags, literal "AWAY"/"HOME" axis labels). Rebuild the
+      // date+teams chunk and run it through the same home-first-aware splitter
+      // the ML/spread path uses. 2026-06-14.
+      const parts = (g.key || "").split("|");   // [sport, DATE, TEAMS]
+      teams = parseTeamsFromChunk((parts[1] || "") + (parts[2] || ""), g.sport)
+        || ["AWAY", "HOME"];
     }
     const [away, home] = teams;
     const inProgress = !!(live && live.total != null && live.margin != null && !live.final);
