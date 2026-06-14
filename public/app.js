@@ -2805,8 +2805,14 @@ function soccerScoreProbs(gameKey, teams, N, liveCond) {
     if (muRem == null) muRem = 2.5 * fracLeft;  // decayed league-average fallback
     // Staleness guard: thin in-game books can leave the total mid frozen at
     // pregame levels; never let the implied REMAINING goals exceed a generous
-    // tempo allowance for the time actually left on the clock.
-    muRem = Math.max(0.05, Math.min(muRem, 3.2 * fracLeft));
+    // tempo allowance for the time actually left on the clock. 5.0/match (was
+    // 3.2): 3.2 truncated legit high-scoring games — a WC game with a ~5.5
+    // pregame total sitting 1-1 at 29' implies ~3.5 remaining, which 3.2*fracLeft
+    // clamped to ~2.1, lowering the reachable home-win prob below the live ML and
+    // forcing the supremacy solver to pin (-> equal split, see below). A stale
+    // frozen mid late in a low-scoring game still implies far more than
+    // 5*fracLeft, so the guard keeps working.
+    muRem = Math.max(0.05, Math.min(muRem, 5.0 * fracLeft));
     // remaining supremacy from the live ML (home first, away as backup —
     // P(draw) is non-monotone in s, so TIE can't anchor a bisection)
     let s = 0;
@@ -2820,10 +2826,20 @@ function soccerScoreProbs(gameKey, teams, N, liveCond) {
       s = _bisect(-sLim, sLim,
                   (sv) => pA - _pCondResult(curMargin, (muRem + sv) / 2, (muRem - sv) / 2, "away"));
     }
-    // A solver pinned at its boundary means the ML and totals inputs are
-    // inconsistent (bad/stale/inverted mid) — drop the lean rather than
-    // publish a "this team never scores again" distribution.
-    if (Math.abs(s) >= sLim * 0.97) s = 0;
+    // Pinned solver: the live ML's win-prob isn't reachable within the
+    // remaining-goal budget. For a LEGIT heavy favorite (Germany vs Curacao)
+    // that's expected — HOLD the max tilt (underdog scores ~never) rather than
+    // equal-splitting, which handed a 90%-favorite's opponent a ~coin-flip to
+    // win from level (the old bug published Germany 35% / Curacao 35% at 1-1).
+    // Only neutralize to an even split when the pin would make the team that is
+    // currently AHEAD stop scoring — the inverted/stale-mid signature this guard
+    // was first added for (a trailing team mispriced as the favorite).
+    if (Math.abs(s) >= sLim * 0.97) {
+      const pinHome = s > 0;   // home gets ~all remaining goals (away ~stops)
+      const contradictsLeader =
+        (pinHome && curMargin < 0) || (!pinHome && curMargin > 0);
+      s = contradictsLeader ? 0 : Math.sign(s) * sLim;
+    }
     const lhR = Math.max(0.01, (muRem + s) / 2), laR = Math.max(0.01, (muRem - s) / 2);
     const probs = Array.from({ length: N }, (_, a) =>
       Array.from({ length: N }, (_, h) =>
