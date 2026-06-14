@@ -250,6 +250,7 @@ const HF_FILLS_BASE =
 const HF_FILLS_NAME: Record<string, string> = {
   MVPeav: "fills_mvpeav.jsonl.gz",
   GPeavT: "fills_gpeavt.jsonl.gz",
+  ROTH: "fills_roth.jsonl.gz",
 };
 // 20s (was 60): the home box now mirrors fills EVENT-DRIVEN (notifier kicks
 // the sync on each verified fill, q5min task is just a backstop), so the
