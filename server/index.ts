@@ -36,6 +36,7 @@ import {
 import { getRecap } from "./recap.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
+import { DASH_ACCOUNTS, byDashboardLabel } from "./accounts.js";
 
 // Load .env from dashboard/.env (next to package.json)
 const __filename = fileURLToPath(import.meta.url);
@@ -221,21 +222,15 @@ app.get("/api/roster", async (req, res, next) => {
 // This file is only an optional fast-path for the live open-positions panel —
 // positions + leg recovery come from Kalshi regardless (see kalshi.ts), so a
 // missing file just yields {fills: []}, exactly like the deployed MVPeav case.
+// Account -> fills file + env override come from the registry (accounts.json):
+// the override var is FILLS_PATH<env_suffix>, matching the credential vars
+// (MVPeav -> FILLS_PATH, GPeavT -> FILLS_PATH_SECOND, ROTH -> FILLS_PATH_ROTH).
 function fillsPathFor(account: string): string {
-  if (account === "MVPeav") {
-    return process.env.FILLS_PATH
-      ? path.resolve(process.cwd(), process.env.FILLS_PATH)
-      : path.resolve(__dirname, "..", "..", "data", "fills.jsonl");
-  }
-  if (account === "GPeavT") {
-    return process.env.FILLS_PATH_SECOND
-      ? path.resolve(process.cwd(), process.env.FILLS_PATH_SECOND)
-      : path.resolve(__dirname, "..", "..", "data", "fills_second.jsonl");
-  }
-  // Suffix convention for any future accounts: FILLS_PATH_<ACCOUNT-UPPER>
-  const envVar = `FILLS_PATH_${account.toUpperCase()}`;
+  const a = byDashboardLabel(account);
+  const fillsFile = a ? a.fillsFile : `fills_${account.toLowerCase()}.jsonl`;
+  const envVar = `FILLS_PATH${a ? a.envSuffix : "_" + account.toUpperCase()}`;
   if (process.env[envVar]) return path.resolve(process.cwd(), process.env[envVar]!);
-  return path.resolve(__dirname, "..", "..", "data", `fills_${account.toLowerCase()}.jsonl`);
+  return path.resolve(__dirname, "..", "..", "data", fillsFile);
 }
 
 // Deployed (Render) fallback: the home box mirrors both fill logs, gzipped,
@@ -247,11 +242,10 @@ function fillsPathFor(account: string): string {
 // or missing repo file -> {fills: []}, the pre-existing deployed behavior.
 const HF_FILLS_BASE =
   "https://huggingface.co/datasets/mvpeav/kalshi-rfq-fills/resolve/main";
-const HF_FILLS_NAME: Record<string, string> = {
-  MVPeav: "fills_mvpeav.jsonl.gz",
-  GPeavT: "fills_gpeavt.jsonl.gz",
-  ROTH: "fills_roth.jsonl.gz",
-};
+// account dashboard label -> gzipped name on the HF mirror (from accounts.json).
+const HF_FILLS_NAME: Record<string, string> = Object.fromEntries(
+  DASH_ACCOUNTS.filter((a) => a.hfName).map((a) => [a.dashboardLabel, a.hfName]),
+);
 // 20s (was 60): the home box now mirrors fills EVENT-DRIVEN (notifier kicks
 // the sync on each verified fill, q5min task is just a backstop), so the
 // server cache is the next-largest term in corr-chip latency on Render.

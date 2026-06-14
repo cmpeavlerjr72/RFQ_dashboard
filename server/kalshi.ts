@@ -10,6 +10,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { DASH_ACCOUNTS, envVarsFor, defaultDashboardLabel } from "./accounts.js";
 
 import { TTLCache, fetchJsonWithTimeout } from "./cache.js";
 
@@ -48,28 +49,20 @@ interface AccountConfig {
   ownerTakes?: boolean;
 }
 
-const ACCOUNTS: Record<string, AccountConfig> = {
-  MVPeav: {
-    keyId: "KALSHI_API_KEY_ID",
-    inline: "KALSHI_PRIVATE_KEY",
-    keyPath: "KALSHI_PRIVATE_KEY_PATH",
-  },
-  GPeavT: {
-    keyId: "KALSHI_API_KEY_ID_SECOND",
-    inline: "KALSHI_PRIVATE_KEY_SECOND",
-    keyPath: "KALSHI_PRIVATE_KEY_PATH_SECOND",
-    ownerTakes: true,   // brother's account: also carries his own taker trades
-  },
-  // Third account (ROTH) — `_ROTH` suffix, matching the runner's .env + the
-  // notifier's "ROTH" label. World-Cup-only book on the trading side.
-  ROTH: {
-    keyId: "KALSHI_API_KEY_ID_ROTH",
-    inline: "KALSHI_PRIVATE_KEY_ROTH",
-    keyPath: "KALSHI_PRIVATE_KEY_PATH_ROTH",
-  },
-};
+// Built from the shared account fact sheet (accounts.json). Each account's
+// env-var names are derived from its suffix (matching the runner's .env), so
+// adding an account is a JSON edit — no code change here.
+const ACCOUNTS: Record<string, AccountConfig> = Object.fromEntries(
+  DASH_ACCOUNTS.map((a) => {
+    const ev = envVarsFor(a);
+    return [a.dashboardLabel, {
+      keyId: ev.keyId, inline: ev.inline, keyPath: ev.keyPath,
+      ownerTakes: a.ownerTakes,
+    }];
+  }),
+);
 
-export const DEFAULT_ACCOUNT = "MVPeav";
+export const DEFAULT_ACCOUNT = defaultDashboardLabel();
 
 export function isValidAccount(a: string): boolean {
   return Object.prototype.hasOwnProperty.call(ACCOUNTS, a);

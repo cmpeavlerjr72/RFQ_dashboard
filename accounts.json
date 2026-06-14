@@ -1,0 +1,44 @@
+{
+  "_doc": "ACCOUNT REGISTRY — the single fact sheet for every Kalshi account the system trades. To add an account: (1) add an entry here, (2) mirror this file into the dashboard repo (Temp/rfq_dashboard_clone/accounts.json — it must match), (3) add the KALSHI_API_KEY_ID<env_suffix> + private key (KALSHI_PRIVATE_KEY_PATH<env_suffix> or inline) to .env on the box AND in the Render dashboard UI. No base-file code edits needed. Fields: key=load_settings/config label; marker=short tag (logs, fills suffix, sport policy, route 'acct'); label=Telegram/notifier display; dashboard_label=dashboard UI account name; env_suffix=KALSHI_*<suffix>; fills_file=local fill log; hf_name=gzipped name on the private HF fills mirror; allowed_sports=[] means all, else every leg's parse_leg sport must be in it; blocked_sports=reject if any leg's sport is in it; owner_takes=true only for an account the owner also trades manually (taker fills excluded from our maker book); cap_fractions=per-account dollar caps as a fraction of bankroll. Sport codes are parse_leg per-league codes (wc=World Cup, atp/wta=tennis).",
+  "accounts": [
+    {
+      "key": "primary",
+      "marker": "mp",
+      "label": "MP",
+      "dashboard_label": "MVPeav",
+      "env_suffix": "",
+      "fills_file": "fills.jsonl",
+      "hf_name": "fills_mvpeav.jsonl.gz",
+      "allowed_sports": [],
+      "blocked_sports": ["atp", "wta"],
+      "owner_takes": false,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    },
+    {
+      "key": "second",
+      "marker": "tp",
+      "label": "TP",
+      "dashboard_label": "GPeavT",
+      "env_suffix": "_SECOND",
+      "fills_file": "fills_second.jsonl",
+      "hf_name": "fills_gpeavt.jsonl.gz",
+      "allowed_sports": [],
+      "blocked_sports": [],
+      "owner_takes": true,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    },
+    {
+      "key": "roth",
+      "marker": "roth",
+      "label": "ROTH",
+      "dashboard_label": "ROTH",
+      "env_suffix": "_ROTH",
+      "fills_file": "fills_roth.jsonl",
+      "hf_name": "fills_roth.jsonl.gz",
+      "allowed_sports": ["wc"],
+      "blocked_sports": [],
+      "owner_takes": false,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    }
+  ]
+}
