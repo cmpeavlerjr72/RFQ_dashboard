@@ -2433,28 +2433,50 @@ function computeGameNetting(positions, gameKey) {
 }
 
 // Portfolio-wide worst-case net loss — our TRUE risk across the whole book.
-// Games are independent (their variables can't offset each other), so the
-// portfolio worst case is the sum of each game's worst-case net loss. We bucket
-// every parlay into a single "home" game (its first parseable leg) so each
-// dollar of cost is counted exactly once — unlike the per-game cards, which
-// attribute a cross-game parlay's full cost to EVERY game it touches (useful
-// for the per-card "if this game goes bad" view, but it double-counts if you
-// sum them). Result is therefore guaranteed ≤ cost paid, and equals cost paid
-// when nothing is hedged. Within each game, dual-direction (over+under) flow
-// nets down exactly as the quoter's worst_case_net_loss does.
+// 2026-06-14 FIX: the old version bucketed each parlay into its FIRST leg's
+// game and summed per-game worst cases. That severed a CROSS-MATCH parlay's
+// offset against the other game it touches and OVERSTATED risk (a Roth
+// Sweden+CIV book read $44.02 vs a true joint worst case of $32.91, matching
+// the Sweden card). Fix: union games linked by a shared parlay into connected
+// components; a single-game component scopes to that game (identical to before)
+// while a multi-game component uses computeGameNetting(pos, null) = portfolio
+// scope so the cross-match nets across BOTH games. Verified against the live
+// book in sandbox/_netting_test.js. Independent components stay additive.
 function computePortfolioNetting() {
-  const byGame = new Map();
-  for (const p of state.positions) {
-    const cost = p.cost || 0, qty = p.qty || 0;
-    let gk = null;
-    for (const l of (p.legs || [])) { const k = legGameGroupKey(l.ticker); if (k) { gk = k; break; } }
-    const key = gk || "__nogame__";
-    if (!byGame.has(key)) byGame.set(key, []);
-    byGame.get(key).push({ contracts: qty, costPer: qty > 0 ? cost / qty : 0, legs: p.legs });
+  const parlays = state.positions.map((p) => ({
+    contracts: p.qty || 0,
+    costPer: (p.qty > 0 ? (p.cost || 0) / p.qty : 0),
+    legs: p.legs || [],
+    games: [...new Set((p.legs || []).map((l) => legGameGroupKey(l.ticker)).filter(Boolean))],
+  }));
+  // union-find over game keys; a cross-match parlay unions the games it spans.
+  const parent = new Map();
+  const find = (x) => {
+    if (!parent.has(x)) parent.set(x, x);
+    let r = x; while (parent.get(r) !== r) r = parent.get(r);
+    while (parent.get(x) !== r) { const nx = parent.get(x); parent.set(x, r); x = nx; }
+    return r;
+  };
+  const union = (a, b) => { parent.set(find(a), find(b)); };
+  for (const p of parlays) {
+    const gs = p.games.length ? p.games : ["__nogame__"];
+    gs.forEach(find);
+    for (let i = 1; i < gs.length; i++) union(gs[0], gs[i]);
+  }
+  const comps = new Map();
+  for (const p of parlays) {
+    const root = find((p.games.length ? p.games : ["__nogame__"])[0]);
+    if (!comps.has(root)) comps.set(root, []);
+    comps.get(root).push(p);
   }
   let worstCase = 0, gross = 0, bestCase = 0, grossWin = 0;
-  for (const [key, pos] of byGame) {
-    const net = computeGameNetting(pos, key === "__nogame__" ? null : key);
+  for (const [root, pos] of comps) {
+    const games = new Set();
+    for (const p of pos) for (const g of p.games) games.add(g);
+    // 1 game -> scope to it (identical to per-game netting); 2+ -> null = joint
+    // scope so a cross-match parlay nets across every game it touches.
+    const scope = (games.size === 1 && root !== "__nogame__") ? root : null;
+    const net = computeGameNetting(pos, scope);
     worstCase += net.worstCase;
     gross += net.gross;
     bestCase += net.bestCase;       // realistic max gain (offsets can't all win)
