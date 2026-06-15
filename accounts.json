@@ -1,8 +1,9 @@
 {
-  "_doc": "ACCOUNT REGISTRY — the single fact sheet for every Kalshi account the system trades. To add an account: (1) add an entry here, (2) mirror this file into the dashboard repo (Temp/rfq_dashboard_clone/accounts.json — it must match), (3) add the KALSHI_API_KEY_ID<env_suffix> + private key (KALSHI_PRIVATE_KEY_PATH<env_suffix> or inline) to .env on the box AND in the Render dashboard UI. No base-file code edits needed. Fields: key=load_settings/config label; marker=short tag (logs, fills suffix, sport policy, route 'acct'); label=Telegram/notifier display; dashboard_label=dashboard UI account name; env_suffix=KALSHI_*<suffix>; fills_file=local fill log; hf_name=gzipped name on the private HF fills mirror; allowed_sports=[] means all, else every leg's parse_leg sport must be in it; blocked_sports=reject if any leg's sport is in it; owner_takes=true only for an account the owner also trades manually (taker fills excluded from our maker book); cap_fractions=per-account dollar caps as a fraction of bankroll. Sport codes are parse_leg per-league codes (wc=World Cup, atp/wta=tennis).",
+  "_doc": "ACCOUNT REGISTRY (dashboard mirror of kalshi-rfq/config/accounts.json). The dashboard server filters these by the PORTFOLIO env var so ONE codebase serves both books as two Render services: MVPeav (PORTFOLIO=peavler) and Sim2Win (PORTFOLIO=heuermann). Fields mirror config/accounts.json; `portfolio` = isolation domain (absent => peavler). The Heuermann entries below are present so the Sim2Win instance renders its (empty) account shell BEFORE the live accounts exist — they carry NO creds until KALSHI_API_KEY_ID_HEU1/_HEU2/_HEU3 are set in that Render service, and show empty until the heuermann HF fills repo has data. Keep this in sync with config/accounts.json.",
   "accounts": [
     {
       "key": "primary",
+      "portfolio": "peavler",
       "marker": "mp",
       "label": "MP",
       "dashboard_label": "MVPeav",
@@ -16,6 +17,7 @@
     },
     {
       "key": "second",
+      "portfolio": "peavler",
       "marker": "tp",
       "label": "TP",
       "dashboard_label": "GPeavT",
@@ -29,6 +31,7 @@
     },
     {
       "key": "roth",
+      "portfolio": "peavler",
       "marker": "roth",
       "label": "ROTH",
       "dashboard_label": "ROTH",
@@ -36,6 +39,48 @@
       "fills_file": "fills_roth.jsonl",
       "hf_name": "fills_roth.jsonl.gz",
       "allowed_sports": ["wc"],
+      "blocked_sports": [],
+      "owner_takes": false,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    },
+    {
+      "key": "heu1",
+      "portfolio": "heuermann",
+      "marker": "heu1",
+      "label": "HEU1",
+      "dashboard_label": "Sim2Win-1",
+      "env_suffix": "_HEU1",
+      "fills_file": "fills_heu1.jsonl",
+      "hf_name": "fills_heu1.jsonl.gz",
+      "allowed_sports": [],
+      "blocked_sports": [],
+      "owner_takes": false,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    },
+    {
+      "key": "heu2",
+      "portfolio": "heuermann",
+      "marker": "heu2",
+      "label": "HEU2",
+      "dashboard_label": "Sim2Win-2",
+      "env_suffix": "_HEU2",
+      "fills_file": "fills_heu2.jsonl",
+      "hf_name": "fills_heu2.jsonl.gz",
+      "allowed_sports": [],
+      "blocked_sports": [],
+      "owner_takes": false,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    },
+    {
+      "key": "heu3",
+      "portfolio": "heuermann",
+      "marker": "heu3",
+      "label": "HEU3",
+      "dashboard_label": "Sim2Win-3",
+      "env_suffix": "_HEU3",
+      "fills_file": "fills_heu3.jsonl",
+      "hf_name": "fills_heu3.jsonl.gz",
+      "allowed_sports": [],
       "blocked_sports": [],
       "owner_takes": false,
       "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}

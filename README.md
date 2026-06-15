@@ -1,71 +1,90 @@
-# RFQ dashboard
+# Kalshi RFQ dashboard
 
-Express proxy + static HTML page that shows Kalshi positions, parlay legs,
-and live game state — without hammering Kalshi or ESPN. The server signs
-Kalshi requests in Node (RSA-PSS-SHA256) and caches every upstream call with
-adaptive TTLs, so even with multiple viewers the proxy makes ~120 Kalshi
-calls/hour total.
+Local Express proxy + static HTML page that shows your live Kalshi book without
+hammering Kalshi or ESPN. Mirrors the polite-caching pattern from `Monte-Site`.
 
-## Local dev
+## Architecture
+
+```
+browser ─► Express server ─► (cached) ─► Kalshi /portfolio/*
+                          └─► (cached) ─► Kalshi /markets/<ticker>
+                          └─► (disk cache) ─► Kalshi /communications/rfqs/*
+                          └─► (cached) ─► ESPN scoreboards
+                          └─► reads ─► data/fills.jsonl (written by the runners)
+```
+
+Browser only ever talks to `localhost:8090`. The server signs Kalshi requests
+in Node (RSA-PSS-SHA256, same as `src/quote_client.py`), caches with adaptive
+TTLs, and serves the static frontend.
+
+## TTLs
+
+| Source                            | TTL                                     |
+|-----------------------------------|------------------------------------------|
+| `/portfolio/balance`              | 30 s                                     |
+| `/portfolio/positions`            | 30 s                                     |
+| `/markets/<ticker>`               | 60 s                                     |
+| `/communications/rfqs/<rfq_id>`   | permanent (memory + disk: `data/dashboard_cache/rfq_legs/`) |
+| ESPN scoreboard                   | 20 s when live games, 120 s otherwise (matches Monte-Site) |
+| `data/fills.jsonl`                | re-read on each `/api/fills` hit (file is tiny) |
+
+`?fresh=1` query param on any endpoint forces a refetch for one cycle.
+
+## Bandwidth budget at steady state
+
+One open browser tab + 5 active games:
+- Kalshi: ~120 calls/hour
+- ESPN: ~180 calls/hour
+
+100 tabs open simultaneously: still ~120/hour Kalshi and ~180/hour ESPN
+(server cache fans out one upstream call to every viewer).
+
+## Setup
 
 ```sh
+cd dashboard
 npm install
 cp .env.example .env
-# edit .env with your KALSHI_API_KEY_ID and either KALSHI_PRIVATE_KEY (PEM contents)
-# or KALSHI_PRIVATE_KEY_PATH (path to .pem file)
-npm run dev
+# edit .env to set KALSHI_API_KEY_ID + KALSHI_PRIVATE_KEY_PATH
+npm run dev          # tsx watch — auto-restart on save
+# or
+npm run build && npm start
 ```
 
 Open <http://localhost:8090>.
 
-## Deploy to Render (free web service)
+## Endpoints
 
-1. Connect this repo as a new Render web service.
-2. Pick the **free** plan; runtime auto-detects as Node.
-3. Build command: `npm ci && npm run build`
-4. Start command: `npm start`
-5. Set env vars:
-   - `KALSHI_ENV` = `PROD`
-   - `KALSHI_API_KEY_ID` = your Kalshi API key id
-   - `KALSHI_PRIVATE_KEY` = the entire `.pem` contents (newlines as `\n`),
-     **OR** upload `kalshi.pem` as a Render Secret File at `/etc/secrets/kalshi.pem`
-     and set `KALSHI_PRIVATE_KEY_PATH=/etc/secrets/kalshi.pem`.
+| Endpoint                                | Purpose                                       |
+|-----------------------------------------|-----------------------------------------------|
+| `GET /api/health`                       | cache stats, upstream call count, last error  |
+| `GET /api/kalshi/balance`               | cash + portfolio value                        |
+| `GET /api/kalshi/positions[?fresh=1]`   | open positions                                |
+| `GET /api/kalshi/market/:ticker`        | per-parlay yes_bid/yes_ask/last_price         |
+| `POST /api/kalshi/markets`              | batch market lookup, body `{tickers:[...]}`   |
+| `GET /api/kalshi/rfq/:rfq_id`           | RFQ legs (disk-cached forever)                |
+| `GET /api/scoreboard?sport=mlb&date=…`  | ESPN scoreboard, adaptive TTL                 |
+| `GET /api/fills`                        | reads `data/fills.jsonl`                      |
 
-`render.yaml` at the repo root preconfigures the build/start commands; you only
-need to fill in the secret env vars.
+## How fills get into the dashboard
 
-## ⚠️ Auth before exposing publicly
+The Python runners write to `data/fills.jsonl` via `src/position_db.py`
+immediately after a successful confirm. Schema is in that file's docstring.
 
-This proxy holds your signed Kalshi credentials. Anyone who can reach the URL
-can query your portfolio (positions, balance, RFQ legs). They cannot place
-trades — there is no order endpoint exposed — but the read-only data is
-sensitive.
+To populate from existing run logs:
+```sh
+python sandbox/backfill_fills_to_hf.py
+```
 
-Before pinning the Render URL anywhere, add **basic auth or an IP allowlist**.
-The simplest approach is a few lines of Express middleware reading `BASIC_AUTH_USER`
-and `BASIC_AUTH_PASS` env vars; happy to add this on request.
+If `HF_TOKEN` is set, the same module mirrors `fills.jsonl` to a Hugging Face
+dataset (default `cmpeavlerjr/kalshi-rfq-fills`) on a 5-second debounced
+schedule. The dashboard does NOT read from HF directly — it reads the local
+file. HF is the ship-it-public mirror.
 
-## API endpoints
+## Deploy notes (later)
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/health` | cache stats, upstream call count, last error |
-| `GET /api/kalshi/balance` | cash + portfolio value |
-| `GET /api/kalshi/positions[?fresh=1]` | open positions |
-| `GET /api/kalshi/market/:ticker` | per-parlay yes_bid/yes_ask/last_price |
-| `POST /api/kalshi/markets` | batch market lookup, body `{tickers:[...]}` (max 100/request) |
-| `GET /api/kalshi/rfq/:rfq_id` | RFQ legs (disk-cached forever) |
-| `GET /api/scoreboard?sport=nba&date=YYYYMMDD` | ESPN scoreboard, adaptive TTL |
-| `GET /api/fills` | reads `FILLS_PATH` if set; else empty array |
-
-## Cache TTLs
-
-| Source | TTL |
-|---|---|
-| `/portfolio/balance` | 30 s |
-| `/portfolio/positions` | 30 s |
-| `/markets/<ticker>` | 60 s |
-| `/communications/rfqs/<rfq_id>` | permanent (memory + disk) |
-| ESPN scoreboard | 20 s when live games, 120 s otherwise |
-
-Add `?fresh=1` on any endpoint to force a refetch for one cycle.
+- Move static frontend to Vercel / HF Spaces (cheap CDN)
+- Move Express server to Render / Fly / Railway with the Kalshi private key in
+  the secrets store, port 8090
+- Frontend reads from the deployed server URL instead of `localhost:8090`
+- Add basic auth or IP allowlist on the proxy since it has signed Kalshi access

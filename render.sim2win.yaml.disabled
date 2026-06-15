@@ -1,0 +1,43 @@
+# Render service reference for the SECOND dashboard: Sim2Win (Heuermann book).
+# SAME codebase/repo as the MVPeav dashboard (render.yaml.disabled) — the two
+# services differ ONLY by env, so they can never drift in functionality. Create
+# a NEW Render web service from the same repo and set the env vars below.
+#
+# (This file is .disabled like the MVPeav one — Render is configured via its UI,
+#  not auto-applied. It's the checklist of what to set.)
+services:
+  - type: web
+    name: sim2win-dashboard
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    envVars:
+      # ── what makes this the Sim2Win/Heuermann instance ──
+      - key: PORTFOLIO
+        value: heuermann            # scopes the dashboard to heuermann accounts only
+      - key: HF_FILLS_REPO
+        value: mvpeav/kalshi-rfq-fills-heuermann   # its own private fills mirror
+      - key: DASH_TITLE
+        value: Sim2Win Dashboard    # browser tab title (DASH_BRAND defaults to "Sim2Win")
+      - key: KALSHI_ENV
+        value: PROD
+      - key: HF_TOKEN              # read access to the heuermann fills dataset
+        sync: false
+      # ── Heuermann account creds (set in the Render UI when the 3 accounts exist;
+      #    until then the dashboard renders the Sim2Win shell with empty cards) ──
+      - key: KALSHI_API_KEY_ID_HEU1
+        sync: false
+      - key: KALSHI_PRIVATE_KEY_HEU1     # inline PEM (or KALSHI_PRIVATE_KEY_PATH_HEU1 via Secret Files)
+        sync: false
+      - key: KALSHI_API_KEY_ID_HEU2
+        sync: false
+      - key: KALSHI_PRIVATE_KEY_HEU2
+        sync: false
+      - key: KALSHI_API_KEY_ID_HEU3
+        sync: false
+      - key: KALSHI_PRIVATE_KEY_HEU3
+        sync: false
+# The EXISTING MVPeav service needs NO changes — PORTFOLIO defaults to "peavler"
+# and HF_FILLS_REPO defaults to mvpeav/kalshi-rfq-fills, so it is byte-identical.
+# (Optionally set PORTFOLIO=peavler + DASH_TITLE="MVPeav Dashboard" there to be explicit.)

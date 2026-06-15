@@ -37,7 +37,7 @@ import {
 import { getRecap, getRecapOverall } from "./recap.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
-import { DASH_ACCOUNTS, byDashboardLabel } from "./accounts.js";
+import { DASH_ACCOUNTS, byDashboardLabel, PORTFOLIO } from "./accounts.js";
 import { getMomentum } from "./momentum.js";
 
 // Load .env from dashboard/.env (next to package.json)
@@ -46,6 +46,15 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const PORT = Number(process.env.PORT || 8090);
+// Branding for THIS instance (the front-end reads /api/config). Two Render
+// services, one codebase: MVPeav (peavler) and Sim2Win (heuermann). Override via
+// DASH_BRAND / DASH_TITLE env; defaults derive from PORTFOLIO so peavler is
+// unchanged ("MVPeav Dashboard").
+const DASH_BRAND = process.env.DASH_BRAND ||
+  (PORTFOLIO === "peavler" ? "MVPeav"
+    : PORTFOLIO === "heuermann" ? "Sim2Win"
+    : PORTFOLIO);
+const DASH_TITLE = process.env.DASH_TITLE || `${DASH_BRAND} Dashboard`;
 
 const app = express();
 app.use(cors());
@@ -78,6 +87,12 @@ function signAcct(a: string): string { return isOverall(a) ? DEFAULT_ACCOUNT : a
 // Frontend uses this to populate the account switcher (+ the Overall aggregate).
 app.get("/api/accounts", (_req, res) => {
   res.json({ accounts: [...listAccounts(), OVERALL] });
+});
+
+// Per-instance branding/identity so the SAME front-end renders as MVPeav or
+// Sim2Win purely from env (no code fork). brand.js reads this on every page.
+app.get("/api/config", (_req, res) => {
+  res.json({ portfolio: PORTFOLIO, brand: DASH_BRAND, title: DASH_TITLE });
 });
 
 // Live FotMob match-momentum per WC game (keyed by Kalshi chunk, +=home).
@@ -301,8 +316,12 @@ function fillsPathFor(account: string): string {
 // This is what lets the deployed dashboard show fill-enriched parlay cards
 // (fill timestamps + the corr-adjusted win%/EV chip, 2026-06-11). No token
 // or missing repo file -> {fills: []}, the pre-existing deployed behavior.
+// HF fills repo is PER PORTFOLIO so each book's dashboard reads only its own
+// fills (Sim2Win sets HF_FILLS_REPO=mvpeav/kalshi-rfq-fills-heuermann). Default
+// is peavler's repo, so MVPeav is unchanged.
+const HF_FILLS_REPO = process.env.HF_FILLS_REPO || "mvpeav/kalshi-rfq-fills";
 const HF_FILLS_BASE =
-  "https://huggingface.co/datasets/mvpeav/kalshi-rfq-fills/resolve/main";
+  `https://huggingface.co/datasets/${HF_FILLS_REPO}/resolve/main`;
 // account dashboard label -> gzipped name on the HF mirror (from accounts.json).
 const HF_FILLS_NAME: Record<string, string> = Object.fromEntries(
   DASH_ACCOUNTS.filter((a) => a.hfName).map((a) => [a.dashboardLabel, a.hfName]),
@@ -444,7 +463,9 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 app.listen(PORT, () => {
   console.log(`kalshi-dashboard listening on http://localhost:${PORT}`);
+  console.log(`  Portfolio:   ${PORTFOLIO}  (${DASH_TITLE})`);
   console.log(`  Kalshi env:  ${process.env.KALSHI_ENV || "PROD"}`);
-  console.log(`  Accounts:    ${listAccounts().join(", ")}`);
-  console.log(`  Fills file:  ${fillsPathFor("MVPeav")} (MVPeav)`);
+  console.log(`  HF fills:    ${HF_FILLS_REPO}`);
+  console.log(`  Accounts:    ${listAccounts().join(", ") || "(none yet)"}`);
+  console.log(`  Fills file:  ${fillsPathFor(DEFAULT_ACCOUNT)} (${DEFAULT_ACCOUNT})`);
 });
