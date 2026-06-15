@@ -783,6 +783,14 @@ const ESPN_TO_KALSHI_ABBR = {
   // Soccer: ESPN club codes diverge from Kalshi's. Keyed by the per-league
   // sport code (legSport). Add entries as encountered.
   ligue1: { NICE: "NIC", ASSE: "STE" },  // Ligue 1 barrage 2026-05-29
+  // National teams: ESPN uses its own 3-letter codes; Kalshi diverges for a few.
+  // Without a map entry the card never matches its ESPN event, so it drops to a
+  // kickoff-only panel with no flag / country name / record (confirmed live
+  // 2026-06-15 on IRN/IRI = IRINZL). Scanned the upcoming fifa.world fixtures
+  // for the rest of the divergences. ESPN -> Kalshi:
+  //   IRN -> IRI (Iran), ALG -> DZA (Algeria), HAI -> HTI (Haiti)
+  wcup: { IRN: "IRI", ALG: "DZA", HAI: "HTI" },
+  intlfriendly: { IRN: "IRI", ALG: "DZA", HAI: "HTI" },
 };
 function normAbbrForKalshi(espnAbbr, sport) {
   if (!espnAbbr) return espnAbbr;
