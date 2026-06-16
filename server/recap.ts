@@ -6,7 +6,7 @@
 // time falls inside [startEt 00:00, endEt 24:00) — i.e., the day we took the
 // risk, regardless of when it later settled.
 
-import { getJson, getMarketsBatch, accountOwnerTakes } from "./kalshi.js";
+import { getJson, getMarketsBatch, accountOwnerTakes, getBalance, getPositions } from "./kalshi.js";
 import { TTLCache } from "./cache.js";
 
 // ----------------------------------------------------------------------------
@@ -139,10 +139,42 @@ export interface SportBreakdownRow {
   by_type: BreakdownTypeRow[];  // present types only, ordered player then game
 }
 
+// Account-growth block: takes the recap's settled realized P&L (the "growth",
+// attributed by FILL date — a bet filled 6/15 that settles 6/16 counts for 6/15)
+// and expresses it as a % of the account balance at the START of the period.
+//
+// The anchor is the REALIZED balance = cash + cost basis of open positions
+// (Σ market_exposure), NOT equity. Equity marks open positions to market, so it
+// drifts with live odds; the realized balance holds open bets at the price we
+// paid, so it changes ONLY when a position settles. (It also equals the runner's
+// own --bankroll figure.) That makes the reconstruction exact:
+//   starting_balance = realized_balance_now − realized P&L of every parlay
+//                      FIRST-FILLED on/after the period start (to now)
+// rolls the current balance back to what it was at the period start, after any
+// pre-period fills had settled — with no mark-to-market term to approximate.
+// Then:
+//   growth_pct      = growth_dollars / starting_balance
+//   avg_daily_pct   = compounded daily rate over the window's ET days
+//   doubling_days   = ln(2) / ln(1 + daily_rate)
+export interface BalanceGrowth {
+  current_balance: number | null;    // $ now = cash + open-position cost basis; null if fetch failed
+  realized_since_start: number;      // $ realized P&L of settled parlays first-filled >= period start (to now)
+  starting_balance: number | null;   // $ account value at period start; null without balance
+  ending_balance: number | null;     // starting_balance + growth_dollars
+  growth_dollars: number;            // = agg.realized_pnl (settled P&L over the period)
+  growth_pct: number | null;         // 100 * growth_dollars / starting_balance
+  n_days: number;                    // ET days in [start, end] inclusive
+  avg_daily_pct: number | null;      // compounded daily growth rate, %
+  avg_daily_dollars: number;         // growth_dollars / n_days
+  doubling_days: number | null;      // projected days to double at avg_daily_pct
+  has_balance: boolean;              // false when the live balance fetch failed
+}
+
 export interface RecapResult {
   start_et: string;             // YYYY-MM-DD
   end_et: string;               // YYYY-MM-DD (inclusive)
   agg: RecapAgg;
+  balance_growth: BalanceGrowth;
   parlays: ParlayRow[];         // sorted by first_fill desc
   daily: DailyRow[];            // one row per ET day in range, asc; with cumulative cols
   sport_breakdown: SportBreakdownRow[];  // sorted by # parlays desc
@@ -289,6 +321,74 @@ function buildDaily(rows: ParlayRow[], startEt: string, endEt: string): DailyRow
     });
   }
   return out;
+}
+
+/** Build the account-growth block from the period's settled P&L + a starting
+ *  balance reconstructed from current equity and realized-P&L-since-start. */
+function makeBalanceGrowth(
+  startEt: string,
+  endEt: string,
+  growthDollars: number,
+  currentBalance: number | null,
+  realizedSinceStart: number,
+  hasBalance: boolean,
+): BalanceGrowth {
+  const nDays = dateRangeEt(startEt, endEt).length;
+  const startingBalance =
+    hasBalance && currentBalance != null ? currentBalance - realizedSinceStart : null;
+  const endingBalance = startingBalance != null ? startingBalance + growthDollars : null;
+  const growthPct =
+    startingBalance != null && startingBalance > 0 ? (100 * growthDollars) / startingBalance : null;
+
+  let avgDailyPct: number | null = null;
+  let doublingDays: number | null = null;
+  if (
+    startingBalance != null && startingBalance > 0 &&
+    endingBalance != null && endingBalance > 0 && nDays > 0
+  ) {
+    const dailyRate = Math.pow(endingBalance / startingBalance, 1 / nDays) - 1;
+    avgDailyPct = dailyRate * 100;
+    if (dailyRate > 1e-9) doublingDays = Math.log(2) / Math.log(1 + dailyRate);
+  }
+
+  return {
+    current_balance: hasBalance ? currentBalance : null,
+    realized_since_start: realizedSinceStart,
+    starting_balance: startingBalance,
+    ending_balance: endingBalance,
+    growth_dollars: growthDollars,
+    growth_pct: growthPct,
+    n_days: nDays,
+    avg_daily_pct: avgDailyPct,
+    avg_daily_dollars: nDays > 0 ? growthDollars / nDays : growthDollars,
+    doubling_days: doublingDays,
+    has_balance: hasBalance,
+  };
+}
+
+/** Live REALIZED balance ($) = available cash + cost basis of open positions
+ *  (Σ market_exposure over our KXMVE book). Holding open bets at cost (not MTM)
+ *  means this only moves on settlement — the right anchor for settled-P&L growth,
+ *  and it matches the runner's --bankroll. Returns null on any failure so the
+ *  recap still renders (growth block degrades to "balance unavailable"). */
+async function fetchRealizedBalanceDollars(account: string): Promise<number | null> {
+  try {
+    const [bal, pos] = await Promise.all([
+      getBalance(account),
+      getPositions(account).catch(() => null),
+    ]);
+    if (!bal) return null;
+    const cashDollars = (bal as any).balance_dollars != null
+      ? Number((bal as any).balance_dollars)
+      : (Number((bal as any).balance) || 0) / 100;
+    if (!Number.isFinite(cashDollars)) return null;
+    const openCostDollars = ((pos as any)?.market_positions || []).reduce(
+      (s: number, p: any) => s + (Number(p?.market_exposure_dollars) || 0), 0,
+    );
+    return cashDollars + openCostDollars;
+  } catch {
+    return null;
+  }
 }
 
 function aggregateParlay(parlayTicker: string, fills: KalshiFill[], settle?: KalshiSettlement): ParlayRow {
@@ -681,14 +781,22 @@ export async function getRecap(account: string, startEt: string, endEt: string, 
         if (s.ticker) settleByTk.set(s.ticker, s);
       }
 
+      // Build in-window rows, and in the same pass accumulate the realized P&L
+      // of EVERY settled parlay first-filled on/after the period start (no upper
+      // bound — fills between the window end and "now" count too). That sum,
+      // subtracted from current equity, reconstructs the starting balance.
       const rows: ParlayRow[] = [];
+      let realizedSinceStart = 0;
       for (const [tk, parlayFills] of byParlay) {
         const firstMs = Math.min(
           ...parlayFills.map((f) => parseIsoMs(f.created_time) ?? Infinity)
         );
         if (!Number.isFinite(firstMs)) continue;
-        if (firstMs < startUtcMs || firstMs >= endUtcMs) continue;
-        rows.push(aggregateParlay(tk, parlayFills, settleByTk.get(tk)));
+        if (firstMs < startUtcMs) continue;   // first-filled before the period — excluded from both
+        const row = aggregateParlay(tk, parlayFills, settleByTk.get(tk));
+        if (row.pnl != null) realizedSinceStart += row.pnl;
+        if (firstMs >= endUtcMs) continue;    // after the window — counts for since-start only
+        rows.push(row);
       }
       rows.sort((a, b) => b.first_fill_iso.localeCompare(a.first_fill_iso));
 
@@ -696,10 +804,18 @@ export async function getRecap(account: string, startEt: string, endEt: string, 
       // for the lifetime of the recapCache entry (60s/5min).
       await enrichLegs(account, rows);
 
+      // Account-growth: anchor the period's settled P&L to the starting balance.
+      const currentBalance = await fetchRealizedBalanceDollars(account);
+      const agg = aggregateAll(rows);
+      const balanceGrowth = makeBalanceGrowth(
+        startEt, endEt, agg.realized_pnl, currentBalance, realizedSinceStart, currentBalance != null,
+      );
+
       return {
         start_et: startEt,
         end_et: endEt,
-        agg: aggregateAll(rows),
+        agg,
+        balance_growth: balanceGrowth,
         parlays: rows,
         daily: buildDaily(rows, startEt, endEt),
         sport_breakdown: buildSportBreakdown(rows),
@@ -723,10 +839,22 @@ export async function getRecapOverall(
   const ok = results.filter(Boolean) as RecapResult[];
   const rows = ok.flatMap((r) => r.parlays || []);
   rows.sort((a, b) => (b.first_fill_iso || "").localeCompare(a.first_fill_iso || ""));
+  const agg = aggregateAll(rows);
+
+  // Overall growth = sum of per-account balance / realized-since-start, re-derived
+  // through makeBalanceGrowth so the % / doubling math is consistent.
+  const anyBalance = ok.some((r) => r.balance_growth?.has_balance);
+  const sumBalance = ok.reduce((s, r) => s + (r.balance_growth?.current_balance ?? 0), 0);
+  const sumSince = ok.reduce((s, r) => s + (r.balance_growth?.realized_since_start ?? 0), 0);
+  const balanceGrowth = makeBalanceGrowth(
+    startEt, endEt, agg.realized_pnl, anyBalance ? sumBalance : null, sumSince, anyBalance,
+  );
+
   return {
     start_et: startEt,
     end_et: endEt,
-    agg: aggregateAll(rows),
+    agg,
+    balance_growth: balanceGrowth,
     parlays: rows,
     daily: buildDaily(rows, startEt, endEt),
     sport_breakdown: buildSportBreakdown(rows),

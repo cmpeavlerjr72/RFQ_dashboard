@@ -235,6 +235,9 @@ function render(data) {
     ? `<div class="kpi-sub muted" title="Avg winning parlay pays +${fmtMoney(a.avg_win, false)}; avg loser costs ${fmtMoney(a.avg_loss, false)}. Long-NO collects small premiums against big tails, so this is < 1× and you need a high win rate to clear it.">${sizeRatio.toFixed(2)}× win:loss size</div>`
     : "";
 
+  // Account growth (starting balance → ending balance) — the headline block.
+  renderBalanceGrowth(data);
+
   $("summary").innerHTML = [
     kpi("Money risked", fmtMoney(a.cash_deployed)),
     kpi("Net P&amp;L <small>(settled only)</small>", fmtMoney(a.realized_pnl, true), pnlClass(a.realized_pnl)),
@@ -555,6 +558,138 @@ function renderLogoStrip(parlay) {
   // Trailing leg-count chip helps when same-game collapses many legs to 1-2 logos
   const chip = `<span class="leg-count">${legs.length}-leg</span>`;
   return `<div class="logo-strip">${imgs.join("")}${chip}</div>`;
+}
+
+// ---------- account growth (starting → ending balance) ----------
+// Format a day count as a human duration for the doubling-time KPI.
+function fmtDuration(days) {
+  if (days == null || !isFinite(days) || days <= 0) return "—";
+  if (days < 1) return "<1 day";
+  if (days < 90) return `${days.toFixed(days < 10 ? 1 : 0)} days`;
+  const yrs = days / 365;
+  return yrs < 10 ? `${yrs.toFixed(1)} yr` : `${Math.round(yrs)} yr`;
+}
+
+function renderBalanceGrowth(data) {
+  const wrap = $("growth-wrap");
+  const g = data.balance_growth;
+  if (!g) { wrap.style.display = "none"; wrap.innerHTML = ""; return; }
+  wrap.style.display = "block";
+
+  const dayLabel = data.start_et === data.end_et
+    ? data.start_et : `${data.start_et} → ${data.end_et}`;
+  const nDays = g.n_days || 1;
+  const growthCls = pnlClass(g.growth_dollars);
+  const pctCls = pnlClass(g.growth_pct);
+
+  const startVal = g.has_balance ? fmtMoney(g.starting_balance) : `<span class="muted">n/a</span>`;
+  const endVal = g.has_balance ? fmtMoney(g.ending_balance) : `<span class="muted">n/a</span>`;
+  const noBalance = g.has_balance ? "" :
+    `<div class="kpi-sub muted">live balance unavailable — can't anchor starting balance</div>`;
+
+  const kpis = [
+    kpi("Starting balance", startVal, "",
+      g.has_balance
+        ? `<div class="kpi-sub muted" title="Realized balance now (cash + cost basis of open positions) minus all settled P&amp;L from bets first-filled on/after ${data.start_et}.">account value at period start</div>`
+        : noBalance),
+    kpi("Ending balance", endVal, g.has_balance ? growthCls : "",
+      g.has_balance ? `<div class="kpi-sub muted">start + settled growth</div>` : ""),
+    kpi("Growth <small>(settled $)</small>", fmtMoney(g.growth_dollars, true), growthCls,
+      `<div class="kpi-sub muted">realized P&amp;L over period</div>`),
+    kpi("Growth %", g.growth_pct != null ? fmtPct(g.growth_pct) : "-", pctCls,
+      g.has_balance && g.starting_balance
+        ? `<div class="kpi-sub muted" title="Growth ÷ starting balance">on ${fmtMoney(g.starting_balance)} starting</div>`
+        : ""),
+    kpi("Avg growth / day", g.avg_daily_pct != null ? fmtPct(g.avg_daily_pct) : "-", pnlClass(g.avg_daily_pct),
+      `<div class="kpi-sub muted">compounded over ${nDays} day${nDays === 1 ? "" : "s"}</div>`),
+    kpi("Doubling time", fmtDuration(g.doubling_days), "",
+      `<div class="kpi-sub muted" title="Projected days to double the account at the average daily growth rate, compounded.">at current daily rate</div>`),
+  ].join("");
+
+  wrap.innerHTML = `
+    <div class="row section-head">
+      <h2>Account Growth</h2>
+      <span class="hint">${dayLabel} · settled P&amp;L as % of the balance at the start of the period · attributed by fill date</span>
+    </div>
+    <div class="summary growth-kpis">${kpis}</div>
+    ${balanceChartSvg(data, g)}
+  `;
+}
+
+// Running-balance line: anchor at starting_balance, add each ET day's cumulative
+// settled P&L. Reuses data.daily (same fill-date attribution as every other KPI).
+function balanceChartSvg(data, g) {
+  if (!g.has_balance || g.starting_balance == null) return "";
+  const daily = data.daily || [];
+  if (!daily.length) return "";
+  const start = g.starting_balance;
+  const series = [{ date: data.start_et, bal: start, pnl: 0, isStart: true }];
+  for (const d of daily) {
+    series.push({
+      date: d.date,
+      bal: start + (d.cum_realized_pnl || 0),
+      pnl: d.realized_pnl || 0,
+      isStart: false,
+    });
+  }
+  const n = series.length;
+
+  const W = 1000, H = 240;
+  const padL = 64, padR = 16, padT = 16, padB = 34;
+  const inW = W - padL - padR, inH = H - padT - padB;
+
+  const bals = series.map((s) => s.bal);
+  let yMin = Math.min(...bals), yMax = Math.max(...bals);
+  if (yMin === yMax) { yMin -= 1; yMax += 1; }
+  const span = yMax - yMin;
+  yMin -= span * 0.12; yMax += span * 0.12;
+
+  const xFor = (i) => padL + (n === 1 ? inW / 2 : (i / (n - 1)) * inW);
+  const yFor = (v) => padT + inH - ((v - yMin) / (yMax - yMin)) * inH;
+
+  const path = series
+    .map((s, i) => `${i === 0 ? "M" : "L"}${xFor(i).toFixed(1)},${yFor(s.bal).toFixed(1)}`)
+    .join(" ");
+
+  const dots = series.map((s, i) => {
+    const cx = xFor(i), cy = yFor(s.bal);
+    const cls = s.isStart ? "dot pending"
+      : s.pnl > 0 ? "dot pos" : s.pnl < 0 ? "dot neg" : "dot pending";
+    const tip = s.isStart
+      ? `${s.date}: start $${s.bal.toFixed(2)}`
+      : `${s.date}: ${s.pnl >= 0 ? "+" : "-"}$${Math.abs(s.pnl).toFixed(2)} → balance $${s.bal.toFixed(2)}`;
+    return `<circle class="${cls}" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3.5"><title>${escapeHtml(tip)}</title></circle>`;
+  }).join("");
+
+  const yTicks = [];
+  for (let t = 0; t < 5; t++) {
+    const v = yMin + (t / 4) * (yMax - yMin);
+    const yy = yFor(v);
+    yTicks.push(`<g class="tick"><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yy.toFixed(1)}"/><text x="${padL - 6}" y="${yy.toFixed(1)}" text-anchor="end" dominant-baseline="central">$${v.toFixed(0)}</text></g>`);
+  }
+
+  const xLabels = [];
+  const step = Math.max(1, Math.ceil(n / 8));
+  for (let i = 0; i < n; i += step) {
+    xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 10).toFixed(1)}" text-anchor="middle">${shortDate(series[i].date)}</text>`);
+  }
+  if ((n - 1) % step !== 0) {
+    xLabels.push(`<text x="${xFor(n - 1).toFixed(1)}" y="${(H - 10).toFixed(1)}" text-anchor="middle">${shortDate(series[n - 1].date)}</text>`);
+  }
+
+  const endBal = series[n - 1].bal;
+  const pctTxt = g.growth_pct != null ? `${g.growth_pct >= 0 ? "+" : ""}${g.growth_pct.toFixed(1)}%` : "";
+  return `
+    <div class="chart-wrap">
+      <svg class="roi-chart balance-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        <g class="axis-y">${yTicks.join("")}</g>
+        <path class="line" d="${path}"/>
+        <g class="dots">${dots}</g>
+        <g class="axis-x">${xLabels.join("")}</g>
+      </svg>
+      <div class="chart-caption">Account balance by ET day — $${start.toFixed(2)} starting → $${endBal.toFixed(2)} ending${pctTxt ? ` (${pctTxt})` : ""}. Growth = settled P&amp;L attributed by fill date; open positions excluded.</div>
+    </div>
+  `;
 }
 
 // ---------- cumulative ROI chart ----------
