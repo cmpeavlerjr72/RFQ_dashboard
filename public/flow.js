@@ -1,13 +1,81 @@
-// Flow tab — pull /api/flow (10-min rollup cells) for an ET date and render the
-// intraday flow chart (stacked by sport), the filled-flow chart, summary KPIs,
-// and sport/game/stat leaderboards. One toggle flips every metric between
-// $ risked and # RFQs.
+// Flow tab — pull /api/flow (10-min rollup cells) for an ET date and render:
+//   1. summary KPIs
+//   2. game-by-game flow (busiest first): each game's moneyline as an intraday
+//      stacked bar by team/tie (momentum-style colors + flags), with a trend KPI
+//      and a click-to-expand spread / total / BTTS breakdown
+//   3. the all-day flow stacked by sport, the filled-flow chart, leaderboards
+// One toggle flips every metric between $ risked and # RFQs.
+
+import { teamBarColors } from "/team_colors.js";
+import { teamLogoUrl } from "/labels.js";
+import { NATIONAL_TEAMS } from "/national_teams.js";
+import { MLB_TEAMS, NHL_TEAMS, NBA_TEAMS } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
 
+// ---- game/team helpers (shared by the per-game charts) -----------------------
+const NATIONAL = new Set(["WC", "INTLFRIENDLY"]);
+
+// parse_leg sport -> the key teamLogoUrl() expects for flags/logos
+function logoKeyFor(sport) {
+  const s = (sport || "").toUpperCase();
+  if (s === "WC") return "wcup";
+  if (s === "INTLFRIENDLY") return "intlfriendly";
+  if (s === "SOCCER") return "soccer";
+  return s.toLowerCase();   // mlb / wnba / nba / nhl / atp / wta / ipl
+}
+
+function teamName(sport, code) {
+  const s = (sport || "").toUpperCase();
+  if (NATIONAL.has(s)) return NATIONAL_TEAMS[code] || code;
+  if (s === "MLB") return MLB_TEAMS[code] || code;
+  if (s === "NHL") return NHL_TEAMS[code] || code;
+  if (s === "NBA") return NBA_TEAMS[code] || code;
+  return code;
+}
+
+// hashed fallback color for non-national team codes (national use TEAM_COLORS)
+function hashColor(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return `hsl(${h} 60% 52%)`;
+}
+const TIE_COLOR = "#7c8794";
+
+// Decide home/away from the game token. Soccer/national tokens are HOME-first
+// (26JUN16ARGDZA = ARG home); US sports are AWAY-first (26JUN161845KCWSH = KC
+// away). teamCodes = the non-TIE moneyline sides for this game.
+function orient(sport, game, teamCodes) {
+  const codes = teamCodes.filter((c) => c && c !== "TIE");
+  if (codes.length < 2) return { home: codes[0] || "", away: codes[1] || "" };
+  const idx = (c) => { const i = game.indexOf(c); return i < 0 ? 1e9 : i; };
+  const ordered = [...codes].sort((a, b) => idx(a) - idx(b));   // first-in-token first
+  const s = (sport || "").toUpperCase();
+  const awayFirst = !(NATIONAL.has(s) || s === "SOCCER");
+  return awayFirst
+    ? { home: ordered[1], away: ordered[0] }
+    : { home: ordered[0], away: ordered[1] };
+}
+
+function mlSideColors(sport, home, away) {
+  if (NATIONAL.has((sport || "").toUpperCase())) {
+    const { home: hc, away: ac } = teamBarColors(home, away);
+    return { [home]: hc, [away]: ac, TIE: TIE_COLOR };
+  }
+  return { [home]: hashColor(home || "H"), [away]: hashColor(away || "A"), TIE: TIE_COLOR };
+}
+
+function flagImg(sport, code) {
+  const u = teamLogoUrl(logoKeyFor(sport), code);
+  return u
+    ? `<img class="gx-flag" src="${u}" alt="${escapeHtml(code)}" onerror="this.style.display='none'">`
+    : "";
+}
+
 const state = {
   data: null,
-  metric: "risk",   // "risk" ($) | "rfqs" (count)
+  metric: "risk",            // "risk" ($) | "rfqs" (count)
+  expandedGames: new Set(),  // game tokens with the spread/total/BTTS panel open
 };
 
 // Stable-ish sport colors; unknown sports fall back to a hashed hue.
@@ -106,6 +174,7 @@ function render() {
   ].join("");
 
   if (!d.rows.length) {
+    $("games-wrap").style.display = "none";
     $("flow-chart-wrap").style.display = "none";
     $("filled-chart-wrap").style.display = "none";
     $("leaderboard-wrap").style.display = "none";
@@ -113,12 +182,201 @@ function render() {
     return;
   }
 
+  renderGames();
   renderFlowChart();
   renderFilledChart();
   renderLeaderboards();
 
   $("footer-text").textContent =
     `${fmtInt(s.quoted_rfqs)} quoted · ${fmtMoney(s.quoted_risk)} risked · ${fmtInt(s.filled_rfqs)} filled (${fmtPct(s.conversion_pct)})`;
+}
+
+// ---- game-by-game flow -------------------------------------------------------
+const avg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
+
+// Pivot a game's cells for one market into a per-bucket stack.
+function pivotMarket(cells, market) {
+  const sel = cells.filter((c) => c.market === market);
+  const buckets = [...new Set(sel.map((c) => c.bucket))].sort((a, b) => a - b);
+  const sides = [...new Set(sel.map((c) => c.side))];
+  const byBucket = new Map(buckets.map((b) => [b, new Map()]));
+  let tot = 0, rfqs = 0, filled = 0;
+  for (const c of sel) {
+    const v = valOf(c.r);
+    const m = byBucket.get(c.bucket);
+    m.set(c.side, (m.get(c.side) || 0) + v);
+    tot += v; rfqs += c.r.rfqs; filled += c.r.filled_rfqs;
+  }
+  return { buckets, sides, byBucket, tot, rfqs, filled };
+}
+
+// Is the per-bucket flow rising / cooling / steady over the game's quoting window?
+function trendOf(buckets, byBucket) {
+  const totals = buckets.map((b) => {
+    let t = 0; for (const v of byBucket.get(b).values()) t += v; return t;
+  });
+  if (totals.length < 4) return { label: "—", cls: "muted", arrow: "" };
+  const k = Math.max(1, Math.floor(totals.length / 3));
+  const early = avg(totals.slice(0, k)), late = avg(totals.slice(-k));
+  const ratio = early > 0 ? late / early : (late > 0 ? 2 : 1);
+  if (ratio >= 1.25) return { label: "rising", cls: "pos", arrow: "▲" };
+  if (ratio <= 0.8) return { label: "cooling", cls: "neg", arrow: "▼" };
+  return { label: "steady", cls: "muted", arrow: "▬" };
+}
+
+function renderGames() {
+  const wrap = $("games-wrap");
+  const rows = state.data.rows.filter((r) => r.dim === "game_side");
+  if (!rows.length) { wrap.style.display = "none"; return; }
+
+  const games = new Map();
+  for (const r of rows) {
+    const [sport, game, market, side] = r.key.split("|");
+    let g = games.get(game);
+    if (!g) { g = { sport, game, cells: [], tot: 0 }; games.set(game, g); }
+    g.cells.push({ market, side, bucket: r.bucket_ts, r });
+    g.tot += valOf(r);
+  }
+  const ranked = [...games.values()].sort((a, b) => b.tot - a.tot);
+  if (!ranked.length) { wrap.style.display = "none"; return; }
+
+  wrap.style.display = "block";
+  $("games-hint").textContent =
+    `moneyline flow per game, busiest first · ${metricLabel()} · click a game for spread / total / BTTS`;
+  $("games-list").innerHTML = ranked.map(gameCardHtml).join("");
+}
+
+function gameCardHtml(g) {
+  const ml = pivotMarket(g.cells, "ML");
+  const teamCodes = ml.sides.filter((s) => s !== "TIE");
+  const { home, away } = orient(g.sport, g.game, teamCodes);
+  const colorMap = mlSideColors(g.sport, home, away);
+  const colorOf = (k) => colorMap[k] || hashColor(k);
+  const hasTie = ml.sides.includes("TIE");
+  const stackKeys = [home, ...(hasTie ? ["TIE"] : []), away].filter((k) => ml.sides.includes(k));
+
+  const chart = ml.buckets.length
+    ? gameStackSvg(ml.buckets, stackKeys, ml.byBucket, colorOf)
+    : `<div class="muted" style="padding:8px">no moneyline flow</div>`;
+  const trend = trendOf(ml.buckets, ml.byBucket);
+  const conv = ml.rfqs > 0 ? (100 * ml.filled) / ml.rfqs : 0;
+  const hName = teamName(g.sport, home), aName = teamName(g.sport, away);
+
+  const legend = stackKeys.map((k) => {
+    const nm = k === "TIE" ? "Draw" : teamName(g.sport, k);
+    return `<span class="gx-lg"><span class="gx-sw" style="background:${colorOf(k)}"></span>${escapeHtml(nm)}</span>`;
+  }).join("");
+
+  const expanded = state.expandedGames.has(g.game);
+  return `
+  <div class="gx-card${expanded ? " open" : ""}" data-game="${escapeHtml(g.game)}">
+    <div class="gx-head">
+      <div class="gx-match">
+        ${flagImg(g.sport, home)}<span class="gx-team" style="color:${colorOf(home)}">${escapeHtml(hName)}</span>
+        <span class="gx-vs">vs</span>
+        <span class="gx-team" style="color:${colorOf(away)}">${escapeHtml(aName)}</span>${flagImg(g.sport, away)}
+        <span class="gx-sport">${escapeHtml(g.sport)}</span>
+      </div>
+      <div class="gx-kpis">
+        <span class="gx-kpi"><b>${fmtMetric(ml.tot)}</b> ML</span>
+        <span class="gx-kpi">conv <b>${fmtPct(conv)}</b></span>
+        <span class="gx-kpi ${trend.cls}">${trend.arrow} ${trend.label}</span>
+        <span class="gx-toggle">${expanded ? "▾" : "▸"} markets</span>
+      </div>
+    </div>
+    <div class="gx-chart">${chart}<div class="gx-legend">${legend}</div></div>
+    <div class="gx-details">${expanded ? marketsDetailHtml(g, { home, away, colorMap }) : ""}</div>
+  </div>`;
+}
+
+function sideLabel(market, side, sport) {
+  if (market === "TOTAL") return `O ${side}`;
+  if (market === "BTTS") return "Both score";
+  if (market === "SPREAD") {
+    const m = side.match(/^([A-Z]+)(\d+)$/);
+    return m ? `${teamName(sport, m[1])} ${m[2]}` : side;
+  }
+  return side;
+}
+
+function detailColorOf(market, ctx) {
+  if (market === "SPREAD") {
+    return (s) => {
+      if (ctx.home && s.startsWith(ctx.home)) return ctx.colorMap[ctx.home];
+      if (ctx.away && s.startsWith(ctx.away)) return ctx.colorMap[ctx.away];
+      return hashColor(s);
+    };
+  }
+  if (market === "TOTAL") {
+    const pal = ["#1e6fd4", "#2f9e44", "#f59f00", "#e8590c", "#c2255c", "#7048e8", "#0c8599", "#495057"];
+    return (s) => pal[(parseInt(s, 10) || 0) % pal.length];
+  }
+  return () => "#2dd4bf";   // BTTS
+}
+
+function orderSides(market, sides) {
+  if (market === "TOTAL") return [...sides].sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
+  return [...sides].sort();
+}
+
+function marketsDetailHtml(g, ctx) {
+  const html = ["SPREAD", "TOTAL", "BTTS"].map((mkt) => {
+    const p = pivotMarket(g.cells, mkt);
+    if (!p.buckets.length) return "";
+    const colorOf = detailColorOf(mkt, ctx);
+    const sides = orderSides(mkt, p.sides);
+    const chart = gameStackSvg(p.buckets, sides, p.byBucket, colorOf, { H: 96 });
+    const legend = sides.map((s) =>
+      `<span class="gx-lg"><span class="gx-sw" style="background:${colorOf(s)}"></span>${escapeHtml(sideLabel(mkt, s, g.sport))}</span>`
+    ).join("");
+    const titles = { SPREAD: "Spread", TOTAL: "Total", BTTS: "Both teams to score" };
+    return `<div class="gx-sub">
+      <div class="gx-sub-head">${titles[mkt]} · ${fmtMetric(p.tot)}</div>
+      ${chart}<div class="gx-legend">${legend}</div>
+    </div>`;
+  }).join("");
+  return html || `<div class="muted" style="padding:6px 2px">no spread / total / BTTS flow for this game</div>`;
+}
+
+function gameStackSvg(buckets, stackKeys, byBucket, colorOf, opts = {}) {
+  const W = opts.W || 560, H = opts.H || 118, padL = opts.padL || 46, padR = 8, padT = 8, padB = 18;
+  const inW = W - padL - padR, inH = H - padT - padB, n = buckets.length;
+  let yMax = 0;
+  for (const b of buckets) {
+    let t = 0; const m = byBucket.get(b);
+    for (const k of stackKeys) t += m.get(k) || 0;
+    if (t > yMax) yMax = t;
+  }
+  yMax = yMax || 1;
+  const bw = Math.max(1, (inW / n) * 0.84);
+  const xFor = (i) => padL + (i + 0.5) * (inW / n);
+  const yFor = (v) => padT + inH - (v / yMax) * inH;
+
+  let bars = "";
+  buckets.forEach((b, i) => {
+    const m = byBucket.get(b); let acc = 0; const cx = xFor(i) - bw / 2;
+    for (const k of stackKeys) {
+      const v = m.get(k) || 0;
+      if (v <= 0) continue;
+      const y0 = yFor(acc), y1 = yFor(acc + v);
+      bars += `<rect x="${cx.toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - y1).toFixed(1)}" fill="${colorOf(k)}"><title>${etHM(b)} · ${escapeHtml(k)}: ${fmtMetric(v)}</title></rect>`;
+      acc += v;
+    }
+  });
+
+  const yTicks = [];
+  for (let t = 0; t <= 2; t++) {
+    const v = (t / 2) * yMax, yy = yFor(v);
+    yTicks.push(`<g class="tick"><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yy.toFixed(1)}"/><text x="${padL - 5}" y="${yy.toFixed(1)}" text-anchor="end" dominant-baseline="central">${fmtMetric(v)}</text></g>`);
+  }
+  const xLabels = [];
+  const step = Math.max(1, Math.ceil(n / 6));
+  for (let i = 0; i < n; i += step) {
+    xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle">${etHM(buckets[i])}</text>`);
+  }
+  return `<svg class="roi-chart flow-bars gx-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g><g class="axis-x">${xLabels.join("")}</g>
+  </svg>`;
 }
 
 // ---- stacked-by-sport flow chart ----
@@ -319,6 +577,17 @@ $("metric-toggle").addEventListener("click", (e) => {
   }
   if (state.data) render();
 });
+// Click a game card (anywhere but the chart) to expand its market breakdown.
+$("games-list").addEventListener("click", (e) => {
+  if (e.target.closest(".gx-chart")) return;
+  const card = e.target.closest(".gx-card");
+  if (!card) return;
+  const game = card.dataset.game;
+  if (state.expandedGames.has(game)) state.expandedGames.delete(game);
+  else state.expandedGames.add(game);
+  renderGames();
+});
+
 $("refresh-btn").addEventListener("click", () => loadFlow({ force: true }));
 $("flow-date").addEventListener("change", () => loadFlow());
 
