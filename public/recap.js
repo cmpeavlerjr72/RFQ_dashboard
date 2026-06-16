@@ -173,6 +173,7 @@ async function loadRecap({ force = false } = {}) {
     state.data = await r.json();
     await flagsP;
     render(state.data);
+    loadClv(start);                 // independent; degrades on its own
     setStatus("loaded", "live");
   } catch (e) {
     setStatus(`error: ${e.message || e}`, "error");
@@ -974,3 +975,82 @@ initAccountPicker((newAccount) => {
 });
 
 setStatus("ready");
+
+// ---- CLV vs Pinnacle close (separate /api/clv fetch; degrades on its own) ----
+// Closing fair comes from the Python Dixon-Coles producer (clv_sync.py), so this
+// is a standalone fetch keyed to the start date. Hidden when there's no covered
+// soccer book for the day.
+async function loadClv(date) {
+  const wrap = $("clv-wrap");
+  try {
+    const r = await fetch(withAccount(`/api/clv?date=${date}`));
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    renderClv(await r.json(), date);
+  } catch {
+    wrap.style.display = "none";
+    wrap.innerHTML = "";
+  }
+}
+
+function fmtCents(n) { return (n >= 0 ? "+" : "") + n.toFixed(2) + "¢"; }
+function fmtPp(n) { return (n >= 0 ? "+" : "") + n.toFixed(1) + "pp"; }
+
+function clvMetricKpi(label, m, tip) {
+  if (!m) return kpi(label, "-", "");
+  const sub = m.pct_stake != null ? `${fmtPct(m.pct_stake)} of stake` : "";
+  return kpi(label, `${fmtCents(m.cents_per_contract)}/ct`, pnlClass(m.cents_per_contract),
+    `<div class="kpi-sub muted" title="${escapeHtml(tip)}">${sub}</div>`);
+}
+
+const CLV_TIPS = {
+  net: "Value of the positions we took, per Pinnacle's closing fair, minus what we paid — variance-free. It measures price quality, NOT whether bets won. Positive = we sold above the sharp close. = markup + drift.",
+  markup: "The edge we built into our price (vig + correlation + surface adjustment) vs our own fair at fill time.",
+  drift: "How the closing line moved relative to our fill-time fair. Negative = the market drifted toward the parlay buyer after we filled (mild adverse selection / toxic flow).",
+  gap: "Our leg fair vs Pinnacle's closing fair (yes side). + = we priced the outcome MORE likely than the close. ML/Total are fit directly to Pinnacle; Spread/BTTS closes are derived from the fitted scoreline model.",
+};
+
+function renderClv(d, date) {
+  const wrap = $("clv-wrap");
+  if (!d || !d.available || !d.kpi) { wrap.style.display = "none"; wrap.innerHTML = ""; return; }
+  wrap.style.display = "block";
+  const k = d.kpi, cov = d.coverage;
+  const kpis = [
+    clvMetricKpi("Net CLV vs close", k.net, CLV_TIPS.net),
+    clvMetricKpi("Markup we added", k.markup, CLV_TIPS.markup),
+    clvMetricKpi("Line drift (post-fill)", k.drift, CLV_TIPS.drift),
+  ].join("");
+  const games = d.games.map(clvGameNode).filter(Boolean).join("");
+  const covPct = cov.pct_stake != null ? fmtPct(cov.pct_stake, false) : "-";
+  wrap.innerHTML = `
+    <div class="row section-head">
+      <h2>CLV vs Pinnacle close</h2>
+      <span class="hint">${escapeHtml(date)} · how far our prices beat the sharpest closing line, variance-free · ${cov.n_covered}/${cov.n_parlays} parlays priced (${covPct} of stake)${d.source === "hf" ? " · via HF" : ""}</span>
+    </div>
+    <div class="summary clv-kpis">${kpis}</div>
+    <div class="clv-tree">${games || '<div class="empty">no covered games for this day</div>'}</div>
+  `;
+}
+
+function clvGameNode(g) {
+  if (!g.kpi) return "";
+  const net = g.kpi.net;
+  const cls = pnlClass(net.cents_per_contract);
+  const bts = g.bettypes.map((b) => {
+    const flag = Math.abs(b.gap_pp) >= 4 ? " clv-bt-flag" : "";
+    const gcls = b.gap_pp >= 0 ? "pos" : "neg";
+    return `<div class="clv-bt${flag}" title="${escapeHtml(CLV_TIPS.gap)}">
+      <span class="clv-bt-type">${escapeHtml(b.type)}</span>
+      <span class="clv-bt-gap ${gcls}">${fmtPp(b.gap_pp)}</span>
+      <span class="clv-bt-detail muted">ours ${(b.our_p * 100).toFixed(0)}% vs close ${(b.close_p * 100).toFixed(0)}% · ${b.n} leg${b.n === 1 ? "" : "s"}</span>
+    </div>`;
+  }).join("");
+  return `<details class="clv-game">
+    <summary>
+      <span class="clv-game-label">${escapeHtml(g.label)}</span>
+      <span class="clv-game-net ${cls}">${fmtCents(net.cents_per_contract)}/ct</span>
+      <span class="clv-game-sub muted">${net.pct_stake != null ? fmtPct(net.pct_stake) : ""} · $${g.kpi.stake.toFixed(0)} · ${g.kpi.n} parlay${g.kpi.n === 1 ? "" : "s"}</span>
+    </summary>
+    <div class="clv-bts">${bts || '<div class="muted">no per-leg breakdown</div>'}</div>
+  </details>`;
+}
+

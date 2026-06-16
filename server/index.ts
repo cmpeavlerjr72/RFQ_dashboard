@@ -36,6 +36,7 @@ import {
 } from "./espn.js";
 import { getRecap, getRecapOverall } from "./recap.js";
 import { getFlow } from "./flow.js";
+import { getClv } from "./clv.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
 import { DASH_ACCOUNTS, byDashboardLabel, PORTFOLIO } from "./accounts.js";
@@ -393,6 +394,21 @@ app.get("/api/flow", async (req, res, next) => {
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
     res.json(await getFlow(date, force));
+  } catch (e) { next(e); }
+});
+
+// CLV vs Pinnacle close (recap tab). Maps the selected account (dashboardLabel /
+// Overall) to the producer's account keys, scoped to THIS dashboard's portfolio.
+app.get("/api/clv", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "").trim();
+    const force = String(req.query.fresh || "") === "1";
+    const a = acct(req);
+    const keys = isOverall(a)
+      ? DASH_ACCOUNTS.map((x) => x.key)
+      : ([byDashboardLabel(a)?.key].filter(Boolean) as string[]);
+    upstreamCallCount++;
+    res.json(await getClv(date, keys, a, force));
   } catch (e) { next(e); }
 });
 

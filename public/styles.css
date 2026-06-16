@@ -1509,3 +1509,50 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 @media (max-width: 720px) {
   #games-list { grid-template-columns: 1fr; }
 }
+
+
+/* ---- CLV vs Pinnacle close (recap tab) ---- */
+.clv-wrap { margin-top: 8px; }
+.clv-kpis { margin-bottom: 12px; }
+.clv-kpis .kpi .value.pos { color: var(--pos); }
+.clv-kpis .kpi .value.neg { color: var(--neg); }
+.clv-tree { display: flex; flex-direction: column; gap: 6px; }
+.clv-game {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: var(--shadow); overflow: hidden;
+}
+.clv-game > summary {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 10px 14px; cursor: pointer; list-style: none;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.clv-game > summary::-webkit-details-marker { display: none; }
+.clv-game > summary::before {
+  content: "\25B8"; color: var(--muted-2); font-size: 11px;
+  display: inline-block; transition: transform 0.12s ease;
+}
+.clv-game[open] > summary::before { transform: rotate(90deg); }
+.clv-game-label { font-weight: 600; min-width: 88px; }
+.clv-game-net { font-weight: 700; }
+.clv-game-net.pos { color: var(--pos); }
+.clv-game-net.neg { color: var(--neg); }
+.clv-game-sub { font-size: 12px; margin-left: auto; }
+.clv-bts {
+  border-top: 1px solid var(--border); background: var(--bg);
+  padding: 4px 14px 8px 34px;
+}
+.clv-bt {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 5px 0; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px; border-bottom: 1px dashed var(--border);
+}
+.clv-bt:last-child { border-bottom: none; }
+.clv-bt-type { min-width: 62px; font-weight: 600; }
+.clv-bt-gap { min-width: 54px; font-weight: 600; }
+.clv-bt-gap.pos { color: var(--pos); }
+.clv-bt-gap.neg { color: var(--neg); }
+.clv-bt-detail { font-size: 12px; }
+.clv-bt-flag .clv-bt-gap {
+  background: var(--warn-bg); color: var(--warn);
+  border-radius: 4px; padding: 0 5px;
+}
