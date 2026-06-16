@@ -42,6 +42,62 @@ function hashColor(s) {
 }
 const TIE_COLOR = "#7c8794";
 
+// [primary, secondary] per US-league team, mirroring team_colors.js's approach
+// for national sides. Secondary is used when two teams in a match clash. Codes
+// include the alternate Kalshi abbreviations we see in tickers (AZ/ARI, ATH/OAK,
+// CWS/CHW, SF/SFG, SD/SDP, TB/TBR).
+const MLB_COLORS = {
+  ARI: ["#A71930", "#30CED8"], AZ: ["#A71930", "#30CED8"],
+  ATH: ["#003831", "#EFB21E"], OAK: ["#003831", "#EFB21E"],
+  ATL: ["#CE1141", "#13274F"], BAL: ["#DF4601", "#000000"],
+  BOS: ["#BD3039", "#0C2340"], CHC: ["#0E3386", "#CC3433"],
+  CHW: ["#27251F", "#C4CED4"], CWS: ["#27251F", "#C4CED4"],
+  CIN: ["#C6011F", "#000000"], CLE: ["#0C2340", "#E50022"],
+  COL: ["#5A3B81", "#C4CED4"], DET: ["#0C2340", "#FA4616"],
+  HOU: ["#EB6E1F", "#002D62"], KC: ["#004687", "#BD9B60"],
+  LAA: ["#BA0021", "#003263"], LAD: ["#005A9C", "#EF3E42"],
+  MIA: ["#00A3E0", "#EF3340"], MIL: ["#12284B", "#FFC52F"],
+  MIN: ["#002B5C", "#D31145"], NYM: ["#FF5910", "#002D72"],
+  NYY: ["#0C2340", "#C4CED4"], PHI: ["#E81828", "#284898"],
+  PIT: ["#FDB827", "#27251F"], SD: ["#2F241D", "#FFC425"], SDP: ["#2F241D", "#FFC425"],
+  SF: ["#FD5A1E", "#27251F"], SFG: ["#FD5A1E", "#27251F"],
+  SEA: ["#005C5C", "#0C2C56"], STL: ["#C41E3A", "#0C2340"],
+  TB: ["#092C5C", "#8FBCE6"], TBR: ["#092C5C", "#8FBCE6"],
+  TEX: ["#003278", "#C0111F"], TOR: ["#134A8E", "#E8291C"],
+  WSH: ["#AB0003", "#14225A"],
+};
+const WNBA_COLORS = {
+  ATL: ["#C8102E", "#1A1A1A"], CHI: ["#418FDE", "#FDD023"],
+  CONN: ["#F05023", "#0A2240"], DAL: ["#002B5C", "#C4D600"],
+  IND: ["#002D62", "#FDBB30"], LV: ["#000000", "#C8102E"],
+  LA: ["#552583", "#FDB927"], MIN: ["#266092", "#79BC43"],
+  NY: ["#6ECEB2", "#000000"], PHX: ["#201747", "#E56020"],
+  SEA: ["#2C5234", "#FDB927"], WAS: ["#002B5C", "#E03A3E"], WSH: ["#002B5C", "#E03A3E"],
+  GS: ["#7E5F9E", "#000000"], GSV: ["#7E5F9E", "#000000"], TOR: ["#B40028", "#1A1A1A"],
+};
+function colorTableFor(sport) {
+  const s = (sport || "").toUpperCase();
+  if (s === "MLB") return MLB_COLORS;
+  if (s === "WNBA") return WNBA_COLORS;
+  return null;
+}
+const _rgb = (h) => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+const _dist = (a, b) => { const x = _rgb(a), y = _rgb(b); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]); };
+const CLASH = 110;
+// Pick readable colors for two teams from a [primary,secondary] table, falling
+// the away team back to its secondary (then home's) when the primaries clash.
+function resolvePair(table, home, away) {
+  const h = table[home] || [hashColor(home || "H"), hashColor((home || "H") + "2")];
+  const a = table[away] || [hashColor(away || "A"), hashColor((away || "A") + "2")];
+  let hc = h[0], ac = a[0];
+  if (_dist(hc, ac) < CLASH) {
+    if (_dist(hc, a[1]) >= CLASH) ac = a[1];
+    else if (_dist(h[1], ac) >= CLASH) hc = h[1];
+    else ac = a[1];
+  }
+  return { home: hc, away: ac };
+}
+
 // Decide home/away from the game token. Soccer/national tokens are HOME-first
 // (26JUN16ARGDZA = ARG home); US sports are AWAY-first (26JUN161845KCWSH = KC
 // away). teamCodes = the non-TIE moneyline sides for this game.
@@ -58,11 +114,16 @@ function orient(sport, game, teamCodes) {
 }
 
 function mlSideColors(sport, home, away) {
-  if (NATIONAL.has((sport || "").toUpperCase())) {
-    const { home: hc, away: ac } = teamBarColors(home, away);
-    return { [home]: hc, [away]: ac, TIE: TIE_COLOR };
+  const s = (sport || "").toUpperCase();
+  let pair;
+  if (NATIONAL.has(s)) {
+    pair = teamBarColors(home, away);
+  } else {
+    const tbl = colorTableFor(s);
+    pair = tbl ? resolvePair(tbl, home, away)
+               : { home: hashColor(home || "H"), away: hashColor(away || "A") };
   }
-  return { [home]: hashColor(home || "H"), [away]: hashColor(away || "A"), TIE: TIE_COLOR };
+  return { [home]: pair.home, [away]: pair.away, TIE: TIE_COLOR };
 }
 
 function flagImg(sport, code) {
@@ -289,9 +350,19 @@ function gameCardHtml(g) {
   </div>`;
 }
 
+// Friendly names for the player-prop stat codes (folded into each game card).
+const STAT_LABELS = {
+  HRR: "Hits+Runs+RBI", HIT: "Hits", KS: "Strikeouts", HR: "Home runs",
+  TB: "Total bases", RFI: "Run 1st inning", RBI: "RBIs", SB: "Stolen bases",
+  PTS: "Points", REB: "Rebounds", AST: "Assists", "3PT": "3-pointers",
+};
+const PROP_PALETTE = ["#1e6fd4", "#2f9e44", "#f59f00", "#e8590c", "#c2255c",
+  "#7048e8", "#0c8599", "#e8590c", "#495057", "#d6336c"];
+
 function sideLabel(market, side, sport) {
   if (market === "TOTAL") return `O ${side}`;
   if (market === "BTTS") return "Both score";
+  if (market === "PROP") return STAT_LABELS[side] || side;
   if (market === "SPREAD") {
     const m = side.match(/^([A-Z]+)(\d+)$/);
     return m ? `${teamName(sport, m[1])} ${m[2]}` : side;
@@ -308,34 +379,38 @@ function detailColorOf(market, ctx) {
     };
   }
   if (market === "TOTAL") {
-    const pal = ["#1e6fd4", "#2f9e44", "#f59f00", "#e8590c", "#c2255c", "#7048e8", "#0c8599", "#495057"];
-    return (s) => pal[(parseInt(s, 10) || 0) % pal.length];
+    return (s) => PROP_PALETTE[(parseInt(s, 10) || 0) % PROP_PALETTE.length];
+  }
+  if (market === "PROP") {
+    return (s) => PROP_PALETTE[Math.abs(hashCode(s)) % PROP_PALETTE.length];
   }
   return () => "#2dd4bf";   // BTTS
 }
+function hashCode(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 
 function orderSides(market, sides) {
   if (market === "TOTAL") return [...sides].sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
   return [...sides].sort();
 }
 
+const MARKET_TITLES = { SPREAD: "Spread", TOTAL: "Total", BTTS: "Both teams to score", PROP: "Player props (by stat)" };
+
 function marketsDetailHtml(g, ctx) {
-  const html = ["SPREAD", "TOTAL", "BTTS"].map((mkt) => {
+  const html = ["SPREAD", "TOTAL", "BTTS", "PROP"].map((mkt) => {
     const p = pivotMarket(g.cells, mkt);
     if (!p.buckets.length) return "";
     const colorOf = detailColorOf(mkt, ctx);
     const sides = orderSides(mkt, p.sides);
-    const chart = gameStackSvg(p.buckets, sides, p.byBucket, colorOf, { H: 96 });
+    const chart = gameStackSvg(p.buckets, sides, p.byBucket, colorOf, { H: 150 });
     const legend = sides.map((s) =>
       `<span class="gx-lg"><span class="gx-sw" style="background:${colorOf(s)}"></span>${escapeHtml(sideLabel(mkt, s, g.sport))}</span>`
     ).join("");
-    const titles = { SPREAD: "Spread", TOTAL: "Total", BTTS: "Both teams to score" };
     return `<div class="gx-sub">
-      <div class="gx-sub-head">${titles[mkt]} · ${fmtMetric(p.tot)}</div>
+      <div class="gx-sub-head">${MARKET_TITLES[mkt]} · ${fmtMetric(p.tot)}</div>
       ${chart}<div class="gx-legend">${legend}</div>
     </div>`;
   }).join("");
-  return html || `<div class="muted" style="padding:6px 2px">no spread / total / BTTS flow for this game</div>`;
+  return html || `<div class="muted" style="padding:6px 2px">no other markets quoted for this game</div>`;
 }
 
 function gameStackSvg(buckets, stackKeys, byBucket, colorOf, opts = {}) {
@@ -374,7 +449,7 @@ function gameStackSvg(buckets, stackKeys, byBucket, colorOf, opts = {}) {
   for (let i = 0; i < n; i += step) {
     xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle">${etHM(buckets[i])}</text>`);
   }
-  return `<svg class="roi-chart flow-bars gx-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+  return `<svg class="roi-chart flow-bars gx-svg" viewBox="0 0 ${W} ${H}">
     <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g><g class="axis-x">${xLabels.join("")}</g>
   </svg>`;
 }
@@ -469,7 +544,7 @@ function stackedBarSvg(buckets, stackKeys, byBucket) {
     xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 9).toFixed(1)}" text-anchor="middle">${etHM(buckets[i])}</text>`);
   }
 
-  return `<svg class="roi-chart flow-bars" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+  return `<svg class="roi-chart flow-bars" viewBox="0 0 ${W} ${H}">
     <g class="axis-y">${yTicks.join("")}</g>
     <g class="bars">${bars}</g>
     <g class="axis-x">${xLabels.join("")}</g>
@@ -513,7 +588,7 @@ function filledBarSvg(all) {
   for (let i = 0; i < n; i += step) {
     xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 9).toFixed(1)}" text-anchor="middle">${etHM(all[i].bucket_ts)}</text>`);
   }
-  return `<svg class="roi-chart flow-bars" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+  return `<svg class="roi-chart flow-bars" viewBox="0 0 ${W} ${H}">
     <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g><g class="axis-x">${xLabels.join("")}</g>
   </svg>
   <div class="chart-caption">Flow that filled, by the window it was quoted in · ${metricLabel()} (own scale).</div>`;
@@ -523,10 +598,9 @@ function filledBarSvg(all) {
 function renderLeaderboards() {
   const wrap = $("leaderboard-wrap");
   wrap.style.display = "block";
-  wrap.innerHTML =
-    leaderboardTable("By sport", "sport") +
-    leaderboardTable("By game", "game") +
-    leaderboardTable("By stat", "stat");
+  // Per-game and per-stat flow now live inside the game cards above; only the
+  // cross-game sport rollup remains as a table.
+  wrap.innerHTML = leaderboardTable("By sport", "sport");
 }
 
 function leaderboardTable(title, dim) {
@@ -577,9 +651,8 @@ $("metric-toggle").addEventListener("click", (e) => {
   }
   if (state.data) render();
 });
-// Click a game card (anywhere but the chart) to expand its market breakdown.
+// Click anywhere on a game card to expand/collapse its market breakdown.
 $("games-list").addEventListener("click", (e) => {
-  if (e.target.closest(".gx-chart")) return;
   const card = e.target.closest(".gx-card");
   if (!card) return;
   const game = card.dataset.game;
