@@ -6,7 +6,7 @@
 //   3. the all-day flow stacked by sport, the filled-flow chart, leaderboards
 // One toggle flips every metric between $ risked and # RFQs.
 
-import { teamBarColors } from "/team_colors.js";
+import { teamBarColors, TEAM_COLORS } from "/team_colors.js";
 import { teamLogoUrl } from "/labels.js";
 import { NATIONAL_TEAMS } from "/national_teams.js";
 import { MLB_TEAMS, NHL_TEAMS, NBA_TEAMS } from "/teams.js";
@@ -346,7 +346,7 @@ function gameCardHtml(g) {
       </div>
     </div>
     <div class="gx-chart">${chart}<div class="gx-legend">${legend}</div></div>
-    <div class="gx-details">${expanded ? marketsDetailHtml(g, { home, away, colorMap }) : ""}</div>
+    <div class="gx-details">${expanded ? marketsDetailHtml(g, { sport: g.sport, home, away, colorMap }) : ""}</div>
   </div>`;
 }
 
@@ -370,13 +370,47 @@ function sideLabel(market, side, sport) {
   return side;
 }
 
-function detailColorOf(market, ctx) {
+// The two identity colors [primary, secondary] for a team, used to give the
+// same team's multiple spread lines distinct shades.
+function teamPair(sport, code) {
+  const s = (sport || "").toUpperCase();
+  if (NATIONAL.has(s)) return TEAM_COLORS[code] || [hashColor(code || "X"), hashColor((code || "X") + "2")];
+  const tbl = colorTableFor(s);
+  if (tbl && tbl[code]) return tbl[code];
+  return [hashColor(code || "X"), hashColor((code || "X") + "2")];
+}
+function lighten(hex, amt) {
+  if (typeof hex !== "string" || hex[0] !== "#") return hex;   // skip hsl fallbacks
+  const [r, g, b] = _rgb(hex);
+  const f = (c) => Math.round(c + (255 - c) * amt);
+  return `#${[f(r), f(g), f(b)].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+}
+// k-th distinct shade for one team: primary, secondary, then lightened variants.
+function shadeRamp(pair, k) {
+  if (k === 0) return pair[0];
+  if (k === 1) return pair[1];
+  return lighten(pair[k % 2], 0.2 * Math.floor(k / 2));
+}
+
+// Returns side -> color for one market's stacked sub-chart.
+function detailColorFn(market, ctx, sides) {
   if (market === "SPREAD") {
-    return (s) => {
-      if (ctx.home && s.startsWith(ctx.home)) return ctx.colorMap[ctx.home];
-      if (ctx.away && s.startsWith(ctx.away)) return ctx.colorMap[ctx.away];
-      return hashColor(s);
-    };
+    // Group the lines by team and give each line its own shade so stacked
+    // same-team spreads (FRA2, FRA3, ...) read as distinct bands.
+    const byTeam = {};
+    for (const s of sides) {
+      const m = s.match(/^([A-Z]+)(\d+)$/);
+      const team = m ? m[1] : s;
+      (byTeam[team] = byTeam[team] || []).push(s);
+    }
+    const map = {};
+    for (const team of Object.keys(byTeam)) {
+      const lines = byTeam[team].sort(
+        (a, b) => (parseInt(a.replace(/\D/g, ""), 10) || 0) - (parseInt(b.replace(/\D/g, ""), 10) || 0));
+      const pair = teamPair(ctx.sport, team);
+      lines.forEach((s, i) => { map[s] = shadeRamp(pair, i); });
+    }
+    return (s) => map[s] || hashColor(s);
   }
   if (market === "TOTAL") {
     return (s) => PROP_PALETTE[(parseInt(s, 10) || 0) % PROP_PALETTE.length];
@@ -399,8 +433,8 @@ function marketsDetailHtml(g, ctx) {
   const html = ["SPREAD", "TOTAL", "BTTS", "PROP"].map((mkt) => {
     const p = pivotMarket(g.cells, mkt);
     if (!p.buckets.length) return "";
-    const colorOf = detailColorOf(mkt, ctx);
     const sides = orderSides(mkt, p.sides);
+    const colorOf = detailColorFn(mkt, ctx, sides);
     const chart = gameStackSvg(p.buckets, sides, p.byBucket, colorOf, { H: 150 });
     const legend = sides.map((s) =>
       `<span class="gx-lg"><span class="gx-sw" style="background:${colorOf(s)}"></span>${escapeHtml(sideLabel(mkt, s, g.sport))}</span>`
