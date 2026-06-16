@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kalshi RFQ — Flow</title>
+<link rel="stylesheet" href="/styles.css" />
+<script defer src="/brand.js"></script>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Kalshi RFQ — Flow</h1>
+    <nav class="nav-links">
+      <a href="/">Live</a>
+      <a href="/recap.html">Recap</a>
+      <a href="/comparison.html">Comparison</a>
+      <a href="/flow.html" class="active">Flow</a>
+      <a href="/lines.html">Lines</a>
+    </nav>
+    <div class="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">idle</span>
+    </div>
+  </div>
+  <div class="row controls">
+    <label class="recap-date">
+      Date
+      <input type="date" id="flow-date" />
+    </label>
+    <div class="metric-toggle" id="metric-toggle" role="group" aria-label="metric">
+      <button data-metric="risk" class="active">$ risked</button>
+      <button data-metric="rfqs"># RFQs</button>
+    </div>
+    <button id="refresh-btn" title="Force refresh (bypass cache)">Refresh</button>
+    <span class="meta" id="meta-text"></span>
+  </div>
+  <div class="row">
+    <span class="hint">RFQ flow we quoted through the day (10-min buckets, ET), with the quoted&rarr;filled funnel. Toggle $ risked vs RFQ count.</span>
+  </div>
+</header>
+
+<main>
+  <section class="summary" id="summary"></section>
+
+  <section id="flow-chart-wrap" class="chart-wrap" style="display:none">
+    <div class="row section-head"><h2>Flow through the day</h2><span class="hint" id="flow-chart-hint">stacked by sport</span></div>
+    <div id="flow-chart"></div>
+  </section>
+
+  <section id="filled-chart-wrap" class="chart-wrap" style="display:none">
+    <div class="row section-head"><h2>Filled flow</h2><span class="hint">when quoted flow actually filled — separate scale (fills are a sliver of quotes)</span></div>
+    <div id="filled-chart"></div>
+  </section>
+
+  <section id="leaderboard-wrap" class="breakdown-wrap" style="display:none"></section>
+</main>
+
+<footer>
+  <span id="footer-text">no fetch yet</span>
+</footer>
+
+<script type="module" src="/flow.js"></script>
+</body>
+</html>

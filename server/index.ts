@@ -35,6 +35,7 @@ import {
   rosterCacheStats,
 } from "./espn.js";
 import { getRecap, getRecapOverall } from "./recap.js";
+import { getFlow } from "./flow.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
 import { DASH_ACCOUNTS, byDashboardLabel, PORTFOLIO } from "./accounts.js";
@@ -385,6 +386,15 @@ app.get("/api/fills", async (req, res) => {
 // ----------------------------------------------------------------------------
 // Recap — historical RFQ performance for an ET date or date range
 // ----------------------------------------------------------------------------
+
+app.get("/api/flow", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "").trim();
+    const force = String(req.query.fresh || "") === "1";
+    upstreamCallCount++;
+    res.json(await getFlow(date, force));
+  } catch (e) { next(e); }
+});
 
 app.get("/api/recap", async (req, res, next) => {
   try {
