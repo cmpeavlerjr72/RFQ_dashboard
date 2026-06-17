@@ -1011,46 +1011,58 @@ const CLV_TIPS = {
 
 function renderClv(d, date) {
   const wrap = $("clv-wrap");
-  if (!d || !d.available || !d.kpi) { wrap.style.display = "none"; wrap.innerHTML = ""; return; }
+  if (!d || !d.available || !d.coverage || d.coverage.n_kalshi === 0) {
+    wrap.style.display = "none"; wrap.innerHTML = ""; return;
+  }
   wrap.style.display = "block";
   const k = d.kpi, cov = d.coverage;
-  const kpis = [
+  const kpis = k ? [
     clvMetricKpi("Net CLV vs close", k.net, CLV_TIPS.net),
     clvMetricKpi("Markup we added", k.markup, CLV_TIPS.markup),
     clvMetricKpi("Line drift (post-fill)", k.drift, CLV_TIPS.drift),
-  ].join("");
+  ].join("") : '<div class="empty">no parlays had a stored model price to score</div>';
   const games = d.games.map(clvGameNode).filter(Boolean).join("");
-  const covPct = cov.pct_stake != null ? fmtPct(cov.pct_stake, false) : "-";
+  const unpr = cov.n_unpriced
+    ? ` · <span title="Filled on Kalshi but missing our stored model price in the local logs — counted, but no CLV.">${cov.n_unpriced} unpriced</span>`
+    : "";
   wrap.innerHTML = `
     <div class="row section-head">
       <h2>CLV vs Pinnacle close</h2>
-      <span class="hint">${escapeHtml(date)} · how far our prices beat the sharpest closing line, variance-free · ${cov.n_covered}/${cov.n_parlays} parlays priced (${covPct} of stake)${d.source === "hf" ? " · via HF" : ""}</span>
+      <span class="hint">${escapeHtml(date)} · variance-free price quality vs the sharpest close · ${cov.n_priced}/${cov.n_kalshi} Kalshi fills scored${unpr}${d.source === "hf" ? " · via HF" : ""}</span>
     </div>
     <div class="summary clv-kpis">${kpis}</div>
-    <div class="clv-legend muted">Expand a game for its per-bet-type <b>leg gap</b> = our price − Pinnacle's close (+ = we priced the outcome higher than the close). <span class="clv-flag-key">amber</span> = gap ≥4pp, worth a look. Gaps measure price accuracy by market, not P&amp;L.</div>
+    <div class="clv-legend muted">Each game shows its net CLV; expand for the per-bet-type <b>leg gap</b> = value we <span class="pos">gained (+)</span> or <span class="neg">lost (−)</span> vs Pinnacle's close, by market. <span class="clv-flag-key">amber</span> = gap ≥4pp. "Unpriced" = filled on Kalshi but missing a stored model price locally.</div>
     <div class="clv-tree">${games || '<div class="empty">no covered games for this day</div>'}</div>
   `;
 }
 
 function clvGameNode(g) {
-  if (!g.kpi) return "";
-  const net = g.kpi.net;
-  const cls = pnlClass(net.cents_per_contract);
+  const net = g.kpi ? g.kpi.net : null;
+  const cls = net ? pnlClass(net.cents_per_contract) : "";
   const bts = g.bettypes.map((b) => {
     const flag = Math.abs(b.gap_pp) >= 4 ? " clv-bt-flag" : "";
+    const gcls = b.gap_pp >= 0 ? "pos" : "neg";   // gained / lost value
     return `<div class="clv-bt${flag}" title="${escapeHtml(CLV_TIPS.gap)}">
       <span class="clv-bt-type">${escapeHtml(b.type)}</span>
-      <span class="clv-bt-gap">${fmtPp(b.gap_pp)}</span>
+      <span class="clv-bt-gap ${gcls}">${fmtPp(b.gap_pp)}</span>
       <span class="clv-bt-detail muted">ours ${(b.our_p * 100).toFixed(0)}% vs close ${(b.close_p * 100).toFixed(0)}% · ${b.n} leg${b.n === 1 ? "" : "s"}</span>
     </div>`;
   }).join("");
+  const nPriced = g.kpi ? g.kpi.n : 0;
+  const countTxt = `${nPriced} priced${g.n_unpriced ? ` + ${g.n_unpriced} unpriced` : ""}`;
+  const stakeTxt = g.kpi ? `$${g.kpi.stake.toFixed(0)} · ` : "";
+  const netTxt = net ? `${fmtCents(net.cents_per_contract)}/ct` : `<span class="muted">unpriced</span>`;
+  const subPct = net && net.pct_stake != null ? `${fmtPct(net.pct_stake)} · ` : "";
+  const body = bts || `<div class="muted">${g.n_unpriced
+    ? `${g.n_unpriced} parlay${g.n_unpriced === 1 ? "" : "s"} filled but missing a stored model price — can't score.`
+    : "no per-leg breakdown"}</div>`;
   return `<details class="clv-game">
     <summary>
       <span class="clv-game-label">${escapeHtml(g.label)}</span>
-      <span class="clv-game-net ${cls}">${fmtCents(net.cents_per_contract)}/ct</span>
-      <span class="clv-game-sub muted">${net.pct_stake != null ? fmtPct(net.pct_stake) : ""} · $${g.kpi.stake.toFixed(0)} · ${g.kpi.n} parlay${g.kpi.n === 1 ? "" : "s"}</span>
+      <span class="clv-game-net ${cls}">${netTxt}</span>
+      <span class="clv-game-sub muted">${subPct}${stakeTxt}${countTxt}</span>
     </summary>
-    <div class="clv-bts">${bts || '<div class="muted">no per-leg breakdown</div>'}</div>
+    <div class="clv-bts">${body}</div>
   </details>`;
 }
 

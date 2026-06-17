@@ -26,8 +26,8 @@ const ET_UTC_OFFSET_HOURS = 4;
 // ---- raw producer node shapes (see clv_sync.py) ----
 interface PkNode { n: number; ct: number; stake: number; v_net: number; v_markup: number; v_drift: number; }
 interface LkNode { n: number; w: number; gap_w: number; our_w: number; close_w: number; }
-interface GameRaw { kpi: PkNode; bettypes: Record<string, LkNode>; }
-interface AcctRaw { kpi: PkNode; games: Record<string, GameRaw>; coverage: { covered_stake: number; total_stake: number; n_parlays: number; n_covered: number }; }
+interface GameRaw { kpi: PkNode; bettypes: Record<string, LkNode>; n_unpriced?: number; unpriced_stake?: number; }
+interface AcctRaw { kpi: PkNode; games: Record<string, GameRaw>; coverage: { covered_stake: number; total_stake: number; n_priced: number; n_unpriced: number; n_kalshi: number; source?: string }; }
 interface ClvDoc {
   date: string; schema: number; games_modeled: string[];
   game_labels: Record<string, string>; portfolio_of: Record<string, string>;
@@ -38,10 +38,10 @@ interface ClvDoc {
 export interface Metric { cents_per_contract: number; pct_stake: number | null; }
 export interface KpiView { n: number; ct: number; stake: number; net: Metric; markup: Metric; drift: Metric; }
 export interface BetTypeView { type: string; n: number; gap_pp: number; our_p: number; close_p: number; }
-export interface GameView { chunk: string; label: string; kpi: KpiView | null; bettypes: BetTypeView[]; }
+export interface GameView { chunk: string; label: string; kpi: KpiView | null; bettypes: BetTypeView[]; n_unpriced: number; }
 export interface ClvView {
   date: string; available: boolean; view: string; games_modeled: string[];
-  coverage: { pct_stake: number | null; n_covered: number; n_parlays: number };
+  coverage: { pct_stake: number | null; n_priced: number; n_unpriced: number; n_kalshi: number; producer_source: string };
   kpi: KpiView | null; games: GameView[]; source: "local" | "hf" | "empty";
 }
 
@@ -97,22 +97,26 @@ export function viewFromDoc(doc: ClvDoc | null, keys: string[], view: string,
                             source: ClvView["source"], date: string): ClvView {
   const empty: ClvView = {
     date, available: false, view, games_modeled: doc?.games_modeled || [],
-    coverage: { pct_stake: null, n_covered: 0, n_parlays: 0 }, kpi: null, games: [], source,
+    coverage: { pct_stake: null, n_priced: 0, n_unpriced: 0, n_kalshi: 0, producer_source: "" },
+    kpi: null, games: [], source,
   };
   if (!doc) return empty;
   const accts = keys.map((k) => doc.accounts[k]).filter(Boolean) as AcctRaw[];
   if (!accts.length) return empty;
 
   const kpi = pk0();
-  let covStake = 0, totStake = 0, nCov = 0, nPar = 0;
-  const games = new Map<string, { kpi: PkNode; bt: Map<string, LkNode> }>();
+  let covStake = 0, totStake = 0, nPriced = 0, nUnpriced = 0, nKalshi = 0;
+  const srcs = new Set<string>();
+  const games = new Map<string, { kpi: PkNode; bt: Map<string, LkNode>; unpriced: number }>();
   for (const a of accts) {
     pkAdd(kpi, a.kpi);
     covStake += a.coverage.covered_stake; totStake += a.coverage.total_stake;
-    nCov += a.coverage.n_covered; nPar += a.coverage.n_parlays;
+    nPriced += a.coverage.n_priced; nUnpriced += a.coverage.n_unpriced; nKalshi += a.coverage.n_kalshi;
+    if (a.coverage.source) srcs.add(a.coverage.source);
     for (const [chunk, g] of Object.entries(a.games)) {
-      const gg = games.get(chunk) || { kpi: pk0(), bt: new Map<string, LkNode>() };
+      const gg = games.get(chunk) || { kpi: pk0(), bt: new Map<string, LkNode>(), unpriced: 0 };
       pkAdd(gg.kpi, g.kpi);
+      gg.unpriced += g.n_unpriced || 0;
       for (const [t, lk] of Object.entries(g.bettypes || {})) {
         const cur = gg.bt.get(t) || lk0(); lkAdd(cur, lk); gg.bt.set(t, cur);
       }
@@ -120,18 +124,20 @@ export function viewFromDoc(doc: ClvDoc | null, keys: string[], view: string,
     }
   }
   const gameViews: GameView[] = [...games.entries()].map(([chunk, g]) => ({
-    chunk, label: doc.game_labels[chunk] || chunk, kpi: derivePk(g.kpi),
+    chunk, label: doc.game_labels[chunk] || chunk, kpi: derivePk(g.kpi), n_unpriced: g.unpriced,
     bettypes: [...g.bt.entries()]
       .map(([t, lk]) => deriveLk(t, lk))
       .filter((b): b is BetTypeView => !!b)
       .sort((x, y) => BT_ORDER.indexOf(x.type) - BT_ORDER.indexOf(y.type)),
   }))
-    // biggest book first
-    .sort((x, y) => (y.kpi?.stake || 0) - (x.kpi?.stake || 0));
+    // biggest book first (priced stake, then unpriced count)
+    .sort((x, y) => (y.kpi?.stake || 0) - (x.kpi?.stake || 0) || (y.n_unpriced - x.n_unpriced));
 
   return {
     date, available: true, view, games_modeled: doc.games_modeled,
-    coverage: { pct_stake: totStake ? (100 * covStake) / totStake : null, n_covered: nCov, n_parlays: nPar },
+    coverage: { pct_stake: totStake ? (100 * covStake) / totStake : null,
+                n_priced: nPriced, n_unpriced: nUnpriced, n_kalshi: nKalshi,
+                producer_source: [...srcs].join(",") },
     kpi: derivePk(kpi), games: gameViews, source,
   };
 }
