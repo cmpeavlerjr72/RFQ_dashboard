@@ -1027,6 +1027,7 @@ function renderClv(d, date) {
       <span class="hint">${escapeHtml(date)} · how far our prices beat the sharpest closing line, variance-free · ${cov.n_covered}/${cov.n_parlays} parlays priced (${covPct} of stake)${d.source === "hf" ? " · via HF" : ""}</span>
     </div>
     <div class="summary clv-kpis">${kpis}</div>
+    <div class="clv-legend muted">Expand a game for its per-bet-type <b>leg gap</b> = our price − Pinnacle's close (+ = we priced the outcome higher than the close). <span class="clv-flag-key">amber</span> = gap ≥4pp, worth a look. Gaps measure price accuracy by market, not P&amp;L.</div>
     <div class="clv-tree">${games || '<div class="empty">no covered games for this day</div>'}</div>
   `;
 }
@@ -1037,10 +1038,9 @@ function clvGameNode(g) {
   const cls = pnlClass(net.cents_per_contract);
   const bts = g.bettypes.map((b) => {
     const flag = Math.abs(b.gap_pp) >= 4 ? " clv-bt-flag" : "";
-    const gcls = b.gap_pp >= 0 ? "pos" : "neg";
     return `<div class="clv-bt${flag}" title="${escapeHtml(CLV_TIPS.gap)}">
       <span class="clv-bt-type">${escapeHtml(b.type)}</span>
-      <span class="clv-bt-gap ${gcls}">${fmtPp(b.gap_pp)}</span>
+      <span class="clv-bt-gap">${fmtPp(b.gap_pp)}</span>
       <span class="clv-bt-detail muted">ours ${(b.our_p * 100).toFixed(0)}% vs close ${(b.close_p * 100).toFixed(0)}% · ${b.n} leg${b.n === 1 ? "" : "s"}</span>
     </div>`;
   }).join("");
