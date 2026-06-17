@@ -1559,5 +1559,12 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
   border-radius: 4px; padding: 0 5px; font-weight: 600;
 }
 .clv-bt-detail { font-size: 12px; }
+.clv-decomp {
+  font-size: 12px; padding: 2px 0 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.clv-decomp .pos { color: var(--pos); }
+.clv-decomp .neg { color: var(--neg); }
 /* large gap (>=4pp): highlight the whole row, keep the gained/lost color */
 .clv-bt-flag { background: var(--warn-bg); border-radius: 4px; padding-left: 4px; }

@@ -1006,7 +1006,7 @@ const CLV_TIPS = {
   net: "Value of the positions we took, per Pinnacle's closing fair, minus what we paid — variance-free. It measures price quality, NOT whether bets won. Positive = we sold above the sharp close. = markup + drift.",
   markup: "The edge we built into our price (vig + correlation + surface adjustment) vs our own fair at fill time.",
   drift: "How the closing line moved relative to our fill-time fair. Negative = the market drifted toward the parlay buyer after we filled (mild adverse selection / toxic flow).",
-  gap: "Our leg fair vs Pinnacle's closing fair (yes side). + = we priced the outcome MORE likely than the close. ML/Total are fit directly to Pinnacle; Spread/BTTS closes are derived from the fitted scoreline model.",
+  gap: "The LINE-DRIFT piece only: our leg price vs Pinnacle's closing fair (gained +, lost −). It does NOT include the markup/edge we charge — that's why a game can show red gaps but still be net-positive. ML/Total are fit directly to Pinnacle; Spread/BTTS are derived from the fitted scoreline model.",
 };
 
 function renderClv(d, date) {
@@ -1031,7 +1031,7 @@ function renderClv(d, date) {
       <span class="hint">${escapeHtml(date)} · variance-free price quality vs the sharpest close · ${cov.n_priced}/${cov.n_kalshi} Kalshi fills scored${unpr}${d.source === "hf" ? " · via HF" : ""}</span>
     </div>
     <div class="summary clv-kpis">${kpis}</div>
-    <div class="clv-legend muted">Each game shows its net CLV; expand for the per-bet-type <b>leg gap</b> = value we <span class="pos">gained (+)</span> or <span class="neg">lost (−)</span> vs Pinnacle's close, by market. <span class="clv-flag-key">amber</span> = gap ≥4pp. "Unpriced" = filled on Kalshi but missing a stored model price locally.</div>
+    <div class="clv-legend muted"><b>Net CLV = markup + line drift.</b> Markup is the edge we build into our price; line drift is how the closing line moved vs our fair. Expand a game to see that split — the per-bet-type rows are the <b>line-drift piece only</b> (our price vs Pinnacle's close: <span class="pos">gained +</span> / <span class="neg">lost −</span>), so a game can show red gaps yet still be net-positive when the markup covers them. <span class="clv-flag-key">amber</span> = gap ≥4pp. "Unpriced" = filled on Kalshi but missing a stored model price locally.</div>
     <div class="clv-tree">${games || '<div class="empty">no covered games for this day</div>'}</div>
   `;
 }
@@ -1056,13 +1056,19 @@ function clvGameNode(g) {
   const body = bts || `<div class="muted">${g.n_unpriced
     ? `${g.n_unpriced} parlay${g.n_unpriced === 1 ? "" : "s"} filled but missing a stored model price — can't score.`
     : "no per-leg breakdown"}</div>`;
+  const decomp = g.kpi
+    ? `<div class="clv-decomp">net <b class="${cls}">${fmtCents(g.kpi.net.cents_per_contract)}/ct</b>` +
+      ` = markup <span class="${pnlClass(g.kpi.markup.cents_per_contract)}">${fmtCents(g.kpi.markup.cents_per_contract)}</span>` +
+      ` + line drift <span class="${pnlClass(g.kpi.drift.cents_per_contract)}">${fmtCents(g.kpi.drift.cents_per_contract)}</span>` +
+      ` <span class="muted">— the bet-type rows below are the line-drift detail</span></div>`
+    : "";
   return `<details class="clv-game">
     <summary>
       <span class="clv-game-label">${escapeHtml(g.label)}</span>
       <span class="clv-game-net ${cls}">${netTxt}</span>
       <span class="clv-game-sub muted">${subPct}${stakeTxt}${countTxt}</span>
     </summary>
-    <div class="clv-bts">${body}</div>
+    <div class="clv-bts">${decomp}${body}</div>
   </details>`;
 }
 
