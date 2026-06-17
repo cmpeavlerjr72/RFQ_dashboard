@@ -225,6 +225,7 @@ function render() {
   $("meta-text").textContent =
     `${d.date} · ${fmtInt(s.quoted_rfqs)} RFQs quoted · ${s.n_buckets} buckets · ${d.source}`;
 
+  const imp = impossibleTotals();
   $("summary").innerHTML = [
     kpi("RFQs quoted", fmtInt(s.quoted_rfqs), "", `${fmtInt(s.quoted_legs)} legs`),
     kpi("$ risked (quoted)", fmtMoney(s.quoted_risk)),
@@ -232,12 +233,15 @@ function render() {
     kpi("$ filled", fmtMoney(s.filled_risk), "pos"),
     kpi("Conversion", fmtPct(s.conversion_pct), "", "filled ÷ quoted RFQs"),
     kpi("$ fill rate", fmtPct(s.fill_dollar_pct), "", "filled ÷ quoted $"),
+    kpi("🎉 Impossible quoted", fmtInt(imp.rfqs), imp.rfqs ? "pos" : "",
+        `${fmtInt(imp.filled)} won · sure-win NO`),
   ].join("");
 
   if (!d.rows.length) {
     $("games-wrap").style.display = "none";
     $("flow-chart-wrap").style.display = "none";
     $("filled-chart-wrap").style.display = "none";
+    $("impossible-chart-wrap").style.display = "none";
     $("leaderboard-wrap").style.display = "none";
     $("footer-text").textContent = "no flow for this date";
     return;
@@ -246,6 +250,7 @@ function render() {
   renderGames();
   renderFlowChart();
   renderFilledChart();
+  renderImpossibleChart();
   renderLeaderboards();
 
   $("footer-text").textContent =
@@ -626,6 +631,90 @@ function filledBarSvg(all) {
     <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g><g class="axis-x">${xLabels.join("")}</g>
   </svg>
   <div class="chart-caption">Flow that filled, by the window it was quoted in · ${metricLabel()} (own scale).</div>`;
+}
+
+// ---- impossible-parlay (structural sure-win) flow ----
+// The producer tags every quote whose legs form a structurally-impossible parlay
+// (guaranteed-win NO) and emits a dedicated dim="impossible" series: key "ALL"
+// for the whole-day total, plus key=<game> per-game cells. We chart the quoted
+// flow with the filled (won) portion overlaid, and list which games the bots hit.
+function impossibleRows() {
+  return state.data.rows.filter((r) => r.dim === "impossible" && r.key === "ALL");
+}
+function impossibleTotals() {
+  let rfqs = 0, filled = 0, risk = 0, frisk = 0;
+  for (const r of impossibleRows()) {
+    rfqs += r.rfqs; filled += r.filled_rfqs; risk += r.leg_risk; frisk += r.filled_risk;
+  }
+  return { rfqs, filled, risk, frisk };
+}
+
+function renderImpossibleChart() {
+  const wrap = $("impossible-chart-wrap");
+  const all = impossibleRows().sort((a, b) => a.bucket_ts - b.bucket_ts);
+  if (!all.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+  const t = impossibleTotals();
+  $("impossible-chart-hint").textContent =
+    `structural sure-win NO flow · ${metricLabel()} · ${fmtInt(t.rfqs)} quoted / ${fmtInt(t.filled)} won today`;
+  $("impossible-chart").innerHTML = impossibleBarSvg(all);
+
+  // per-game breakdown (aggregate the per-game cells over the day)
+  const byGame = new Map();
+  for (const r of state.data.rows) {
+    if (r.dim !== "impossible" || r.key === "ALL") continue;
+    const a = byGame.get(r.key) || { rfqs: 0, filled_rfqs: 0, leg_risk: 0, filled_risk: 0 };
+    a.rfqs += r.rfqs; a.filled_rfqs += r.filled_rfqs;
+    a.leg_risk += r.leg_risk; a.filled_risk += r.filled_risk;
+    byGame.set(r.key, a);
+  }
+  const ranked = [...byGame.entries()]
+    .sort((x, y) => (state.metric === "risk" ? y[1].leg_risk - x[1].leg_risk : y[1].rfqs - x[1].rfqs));
+  if (!ranked.length) { $("impossible-games").innerHTML = ""; return; }
+  const chips = ranked.map(([game, a]) => {
+    const v = state.metric === "risk" ? a.leg_risk : a.rfqs;
+    const won = a.filled_rfqs > 0 ? ` · <span class="pos">${fmtInt(a.filled_rfqs)} won</span>` : "";
+    return `<span class="lg-item"><b>${escapeHtml(game)}</b> ${fmtMetric(v)}${won}</span>`;
+  }).join("");
+  $("impossible-games").innerHTML = `<div class="flow-legend">${chips}</div>`;
+}
+
+function impossibleBarSvg(all) {
+  const W = 1000, H = 200, padL = 56, padR = 12, padT = 12, padB = 30;
+  const inW = W - padL - padR, inH = H - padT - padB;
+  const n = all.length;
+  const yMax = Math.max(1, ...all.map(valOf));
+  const bw = Math.max(1, (inW / n) * 0.82);
+  const xFor = (i) => padL + (i + 0.5) * (inW / n);
+  const yFor = (v) => padT + inH - (v / yMax) * inH;
+
+  // quoted bar (gold) with the won/filled portion overlaid in green at the base
+  const bars = all.map((r, i) => {
+    const q = valOf(r), f = filledValOf(r), cx = xFor(i) - bw / 2;
+    if (q <= 0) return "";
+    const yq = yFor(q);
+    let s = `<rect x="${cx.toFixed(1)}" y="${yq.toFixed(1)}" width="${bw.toFixed(1)}" height="${(yFor(0) - yq).toFixed(1)}" fill="#fbbf24"><title>${etHM(r.bucket_ts)} · ${fmtMetric(q)} quoted${f > 0 ? `, ${fmtMetric(f)} won` : ""}</title></rect>`;
+    if (f > 0) {
+      const yf = yFor(f);
+      s += `<rect x="${cx.toFixed(1)}" y="${yf.toFixed(1)}" width="${bw.toFixed(1)}" height="${(yFor(0) - yf).toFixed(1)}" fill="var(--pos)"><title>${etHM(r.bucket_ts)} · ${fmtMetric(f)} won</title></rect>`;
+    }
+    return s;
+  }).join("");
+
+  const yTicks = [];
+  for (let t = 0; t <= 4; t++) {
+    const v = (t / 4) * yMax, yy = yFor(v);
+    yTicks.push(`<g class="tick"><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yy.toFixed(1)}"/><text x="${padL - 6}" y="${yy.toFixed(1)}" text-anchor="end" dominant-baseline="central">${fmtMetric(v)}</text></g>`);
+  }
+  const xLabels = [];
+  const step = Math.max(1, Math.ceil(n / 10));
+  for (let i = 0; i < n; i += step) {
+    xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 9).toFixed(1)}" text-anchor="middle">${etHM(all[i].bucket_ts)}</text>`);
+  }
+  return `<svg class="roi-chart flow-bars" viewBox="0 0 ${W} ${H}">
+    <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g><g class="axis-x">${xLabels.join("")}</g>
+  </svg>
+  <div class="chart-caption">Impossible-parlay (sure-win NO) flow quoted per 10-min window (ET) · ${metricLabel()}; <span style="color:var(--pos)">green</span> = the portion we won.</div>`;
 }
 
 // ---- leaderboards (sport / game / stat) ----
