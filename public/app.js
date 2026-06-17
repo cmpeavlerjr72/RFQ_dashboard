@@ -2379,52 +2379,103 @@ function computeGameNetting(positions, gameKey) {
     if (!anyAllSat) offsettingVars.add(v);
   }
 
-  // Enumerate shared vars (>=2 positions) up to the grid budget for the worst case.
-  const shared = [...varPositions.entries()].filter(([, s]) => s.size >= 2)
-    .map(([v]) => v).sort((a, b) => varPositions.get(b).size - varPositions.get(a).size);
-  const enumVars = []; let grid = 1;
-  for (const v of shared) {
-    const n = Math.max(1, candOf(v).length);
-    if (grid * n > _NET_GRID_BUDGET) break;
-    enumVars.push(v); grid *= n;
-  }
-  const cand = {}; for (const v of enumVars) cand[v] = candOf(v);
-  const enumIdx = new Map(enumVars.map((v, i) => [v, i]));
-  // Worst case: a parlay LOSES (-cost) when all its enumerated legs hit (others
-  // assumed to hit too — conservative). Best case: a parlay WINS (+profit)
-  // unless it's fully PINNED to lose — every leg modelled, enumerated, and
-  // hitting; a free (other-game/unmodelled) or failing leg lets it break our
-  // way. Same enumeration, opposite extreme: min net = worst, max net = best.
-  const allHits = (pos, asg) => pos.cons.every((c) =>
-    !enumIdx.has(c.varKey) || _satNet(c, asg[enumIdx.get(c.varKey)]));
-  const voidsBest = (pos, asg) => {
-    if (pos.legCount > pos.cons.length) return true;     // has a free leg
-    for (const c of pos.cons) {
-      if (!enumIdx.has(c.varKey)) return true;
-      if (!_satNet(c, asg[enumIdx.get(c.varKey)])) return true;
-    }
-    return false;                                        // fully pinned to lose
-  };
-
   let bestNet = null, bestGain = null;
-  if (enumVars.length) {
-    const lists = enumVars.map((v) => cand[v]);
-    const total = lists.reduce((a, l) => a * l.length, 1);
-    for (let i = 0; i < total; i++) {
-      const asg = []; let rem = i;
-      for (const l of lists) { asg.push(l[rem % l.length]); rem = Math.floor(rem / l.length); }
-      let netW = 0, netB = 0;
-      for (const pos of posList) {
-        const win = (1 - pos.cp) * pos.c, lose = -pos.cp * pos.c;
-        netW += allHits(pos, asg) ? lose : win;
-        netB += voidsBest(pos, asg) ? win : lose;
+
+  // SOCCER: enumerate REAL integer scorelines (mirrors the runner's
+  // scoreline_worst_case — the number the quoter now caps against) so BOTH the
+  // worst cell (At Risk NET) and best cell (To Win net) are FEASIBLE — not
+  // impossible (margin,total) joints — and reconcile with the risk grid. Single
+  // game scope only; cross-match components (scope=null) keep the axis enum.
+  const soccerScore = drawPossible && gameKey != null &&
+    ["winner", "margin", "total", "btts"].some((v) => varType.has(v));
+  if (soccerScore) {
+    const winCats = varCats.get("winner") || new Set();
+    const drawTok = winCats.has("DRAW") ? "DRAW" : "TIE";
+    const winTeams = [...winCats].filter((t) => t !== "TIE" && t !== "DRAW").sort();
+    let ref = marginRef.get("margin");
+    if (ref == null) ref = winTeams[0] ?? null;
+    let other = winTeams.find((t) => t !== ref);
+    if (other == null) other = "__OTHER__";
+    let maxLine = 0.5;
+    for (const L of (varLines.get("margin") || [])) maxLine = Math.max(maxLine, Math.abs(L));
+    for (const L of (varLines.get("total") || [])) maxLine = Math.max(maxLine, Math.abs(L));
+    const N = Math.max(12, Math.ceil(maxLine) + 3);   // past every line; mirrors min_cap
+    // value of var `c` at the scoreline (g_ref, g_other); margin cons are already
+    // canonicalised onto ref so margin = g_ref - g_other. undefined = a
+    // non-scoreline leg (player prop / other game) -> auto-satisfiable.
+    const scoreVal = (c, gr, go) =>
+      c.varKey === "winner" ? (gr > go ? ref : go > gr ? other : drawTok)
+      : c.varKey === "margin" ? gr - go
+      : c.varKey === "total" ? gr + go
+      : c.varKey === "btts" ? ((gr > 0 && go > 0) ? "yes" : "no")
+      : undefined;
+    for (let gr = 0; gr <= N; gr++) {
+      for (let go = 0; go <= N; go++) {
+        let netW = 0, netB = 0;
+        for (const pos of posList) {
+          const win = (1 - pos.cp) * pos.c, lose = -pos.cp * pos.c;
+          // worst: loses iff EVERY con hits (non-scoreline cons assumed to hit).
+          // best: wins UNLESS fully pinned to lose (no free leg, every con a
+          // scoreline con AND satisfied here).
+          let allHit = true, pinnedLose = pos.legCount <= pos.cons.length;
+          for (const c of pos.cons) {
+            const v = scoreVal(c, gr, go);
+            const sat = v === undefined ? true : _satNet(c, v);
+            if (!sat) allHit = false;
+            if (v === undefined || !_satNet(c, v)) pinnedLose = false;
+          }
+          netW += allHit ? lose : win;
+          netB += pinnedLose ? lose : win;
+        }
+        if (bestNet === null || netW < bestNet) bestNet = netW;
+        if (bestGain === null || netB > bestGain) bestGain = netB;
       }
-      if (bestNet === null || netW < bestNet) bestNet = netW;
-      if (bestGain === null || netB > bestGain) bestGain = netB;
     }
   } else {
-    bestNet = posList.reduce((a, pos) => a + (-pos.cp * pos.c), 0);          // all lose
-    bestGain = posList.reduce((a, pos) => a + ((1 - pos.cp) * pos.c), 0);    // all win
+    // Non-soccer (and cross-match portfolio scope): independent-var enumeration.
+    const shared = [...varPositions.entries()].filter(([, s]) => s.size >= 2)
+      .map(([v]) => v).sort((a, b) => varPositions.get(b).size - varPositions.get(a).size);
+    const enumVars = []; let grid = 1;
+    for (const v of shared) {
+      const n = Math.max(1, candOf(v).length);
+      if (grid * n > _NET_GRID_BUDGET) break;
+      enumVars.push(v); grid *= n;
+    }
+    const cand = {}; for (const v of enumVars) cand[v] = candOf(v);
+    const enumIdx = new Map(enumVars.map((v, i) => [v, i]));
+    // Worst case: a parlay LOSES (-cost) when all its enumerated legs hit (others
+    // assumed to hit too — conservative). Best case: a parlay WINS (+profit)
+    // unless it's fully PINNED to lose — every leg modelled, enumerated, and
+    // hitting; a free (other-game/unmodelled) or failing leg lets it break our way.
+    const allHits = (pos, asg) => pos.cons.every((c) =>
+      !enumIdx.has(c.varKey) || _satNet(c, asg[enumIdx.get(c.varKey)]));
+    const voidsBest = (pos, asg) => {
+      if (pos.legCount > pos.cons.length) return true;     // has a free leg
+      for (const c of pos.cons) {
+        if (!enumIdx.has(c.varKey)) return true;
+        if (!_satNet(c, asg[enumIdx.get(c.varKey)])) return true;
+      }
+      return false;                                        // fully pinned to lose
+    };
+    if (enumVars.length) {
+      const lists = enumVars.map((v) => cand[v]);
+      const total = lists.reduce((a, l) => a * l.length, 1);
+      for (let i = 0; i < total; i++) {
+        const asg = []; let rem = i;
+        for (const l of lists) { asg.push(l[rem % l.length]); rem = Math.floor(rem / l.length); }
+        let netW = 0, netB = 0;
+        for (const pos of posList) {
+          const win = (1 - pos.cp) * pos.c, lose = -pos.cp * pos.c;
+          netW += allHits(pos, asg) ? lose : win;
+          netB += voidsBest(pos, asg) ? win : lose;
+        }
+        if (bestNet === null || netW < bestNet) bestNet = netW;
+        if (bestGain === null || netB > bestGain) bestGain = netB;
+      }
+    } else {
+      bestNet = posList.reduce((a, pos) => a + (-pos.cp * pos.c), 0);          // all lose
+      bestGain = posList.reduce((a, pos) => a + ((1 - pos.cp) * pos.c), 0);    // all win
+    }
   }
   const worstCase = Math.max(0, -(bestNet == null ? 0 : bestNet));
   const offsetRatio = gross > 0 ? worstCase / gross : 1;
