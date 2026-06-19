@@ -1416,6 +1416,53 @@ function _treeNodeExpected(parlays, gameKey, asg) {
 const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl",
   "wcup", "intlfriendly"]);   // intl comps were missing -> friendlies were treated no-draw/2-way
 
+// True iff this is a SINGLE-GAME SOCCER parlay whose YES (buyer side) can NEVER
+// resolve on any feasible scoreline — so the NO we hold is a 100% SURE WIN: zero
+// loss-risk, profit = the full premium. It reuses the SAME per-scoreline leg
+// resolution (_treeEvalLeg) the risk GRID uses, so it agrees with the grid by
+// construction. The naive independent-leg product (computeParlayProbabilities,
+// the game-card EV loop, and the worst_case netting) can't see structural
+// impossibility, so those callers special-case impossible parlays.
+// Memoized on the parlay object (rebuilt each refresh). Conservative: if ANY leg
+// can't be pinned by a scoreline (prop / unparseable), returns false (we never
+// claim a sure win we can't verify).
+function _impossibleSoccerParlay(p) {
+  if (!p || !p.legs || !p.legs.length) return false;
+  if (p.__impossible !== undefined) return p.__impossible;
+  p.__impossible = (function () {
+    try {
+      const keys = new Set(p.legs.map((l) => legGameGroupKey(l.ticker)).filter(Boolean));
+      const sport = legSport(p.legs[0].ticker);
+      if (keys.size !== 1 || !_SOCCER_TREE_SPORTS.has(sport)) return false;   // single-game soccer only
+      const gameKey = [...keys][0];
+      let teams = null;
+      for (const l of p.legs) { const gl = parseGameLevelLeg(l.ticker); if (gl && gl.teams) { teams = gl.teams; break; } }
+      if (!teams) {
+        const parts = String(gameKey).split("|");                            // sport|DATE|TEAMS
+        teams = parseTeamsFromChunk((parts[1] || "") + (parts[2] || ""), sport) || ["AWAY", "HOME"];
+      }
+      const [away, home] = teams;
+      const N = 16;   // goal cap per team; structural contradictions surface far below this
+      for (let a = 0; a <= N; a++) {
+        for (let h = 0; h <= N; h++) {
+          const asg = { margin: h - a, total: a + h,
+                        winner: h > a ? home : a > h ? away : "__DRAW__",
+                        btts: a > 0 && h > 0 };
+          let allHit = true;
+          for (const l of p.legs) {
+            const r = _treeEvalLeg(l.ticker, l.side, asg);
+            if (r === "unknown") return false;          // a leg we can't pin -> can't prove impossible
+            if (r !== "buyer_hit") { allHit = false; break; }
+          }
+          if (allHit) return false;                     // a scoreline resolves the YES -> NOT impossible
+        }
+      }
+      return true;                                      // no scoreline satisfies the YES -> impossible
+    } catch (_) { return false; }
+  })();
+  return p.__impossible;
+}
+
 // Dashboard sport code -> Kalshi ML (…GAME) series prefix. Used to join a game
 // card to state.soccerStarts (keyed by the ML event ticker) so we can show a
 // kickoff time on soccer games ESPN has no data for (lower-tier friendlies).
@@ -2502,7 +2549,10 @@ function computeGameNetting(positions, gameKey) {
 // scope so the cross-match nets across BOTH games. Verified against the live
 // book in sandbox/_netting_test.js. Independent components stay additive.
 function computePortfolioNetting() {
-  const parlays = state.positions.map((p) => ({
+  // Exclude structurally-impossible parlays: our NO can't lose, so they carry ZERO
+  // worst-case loss and don't participate in offset netting. (Their cost still
+  // counts in the separate "cost paid" sum — this only zeroes their AT-RISK.)
+  const parlays = state.positions.filter((p) => !_impossibleSoccerParlay(p)).map((p) => ({
     contracts: p.qty || 0,
     costPer: (p.qty > 0 ? (p.cost || 0) / p.qty : 0),
     legs: p.legs || [],
@@ -2601,6 +2651,16 @@ function aggregateGameCards() {
       g.parlayTickers.add(p.ticker);
       g.exposure += p.cost;
       g.maxWin += p.max_profit;
+      // IMPOSSIBLE PARLAY: YES can never resolve -> our NO is a sure win. Book the
+      // full profit, skip the independent-leg product (which can't see it). (Its
+      // cost is already in g.exposure above, so "cost paid" stays accurate; only
+      // its worst-case/at-risk is zeroed, via the netting filter below.)
+      if (_impossibleSoccerParlay(p)) {
+        g.expectedPnl = (g.expectedPnl || 0) + p.max_profit;
+        g.expectedCovered = (g.expectedCovered || 0) + 1;
+        g.parlayCount = (g.parlayCount || 0) + 1;
+        continue;
+      }
       // Probability ALL legs hit the buyer's chosen side, taken across every
       // leg of the parlay (incl. legs outside this game — cross-game parlays
       // are saved by their other-game legs too). We win iff at least one leg
@@ -2647,7 +2707,7 @@ function aggregateGameCards() {
   // gross at-risk. Mirrors the quoter's worst_case_net_loss exactly.
   for (const g of games.values()) {
     const gpos = state.positions
-      .filter((p) => p.legs.some((l) => legGameGroupKey(l.ticker) === g.key))
+      .filter((p) => p.legs.some((l) => legGameGroupKey(l.ticker) === g.key) && !_impossibleSoccerParlay(p))
       .map((p) => ({
         contracts: p.qty || 0,
         costPer: (p.qty > 0 ? p.cost / p.qty : 0),
@@ -4739,10 +4799,10 @@ function renderGameCards() {
           ${scorePanel}
           <div class="game-stats">
             <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
-            <span class="stat" title="${g.hedged ? "Worst-case net loss after dual-direction offsets (the quoter's cap number). Gross is the un-netted sum of every parlay's cost." : "Total cost across every parlay touching this game."}">
-              <span class="label">at risk${g.hedged ? " (net)" : ""}</span>
-              <span class="value">${fmtMoney(g.hedged ? g.worstCase : g.exposure)}</span>
-              ${g.hedged ? `<span class="stat-sub">gross ${fmtMoney(g.exposure)}</span>` : ""}
+            <span class="stat" title="${(g.worstCase < g.exposure - 0.005) ? "Worst-case net loss after dual-direction offsets and/or impossible-parlay sure-wins (the true at-risk). Gross is the un-netted sum of every parlay's cost paid." : "Total cost across every parlay touching this game."}">
+              <span class="label">at risk${(g.worstCase < g.exposure - 0.005) ? " (net)" : ""}</span>
+              <span class="value ${(g.worstCase < g.exposure - 0.005) ? "pos" : ""}">${fmtMoney((g.worstCase < g.exposure - 0.005) ? g.worstCase : g.exposure)}</span>
+              ${(g.worstCase < g.exposure - 0.005) ? `<span class="stat-sub">gross ${fmtMoney(g.exposure)}</span>` : ""}
             </span>
             <span class="stat" title="${g.winHedged ? "Best-case net gain after dual-direction offsets — offsetting positions can't all win in the same outcome, so the most we can net is below the un-netted sum of every parlay's max profit (shown as gross)." : "Most we win if every parlay touching this game breaks our way."}">
               <span class="label">to win${g.winHedged ? " (net)" : ""}</span>
@@ -4891,9 +4951,9 @@ function renderSummary() {
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
     <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value${evNote}</div><div class="value">${fmtMoney(pv)}</div></div>
-    <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay (gross). NET = worst-case net loss after dual-direction (over+under) offsets — our true risk, each parlay counted once.${hedgedPortfolio ? ` ${net.offsetPct}% of cost is hedged away.` : " Nothing is hedged, so NET equals cost."}`)}">
+    <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay (gross) — the capital deployed. NET = worst-case net loss = our TRUE risk, after dual-direction offsets AND impossible-parlay sure-wins (a held NO on a structurally-impossible parlay can't lose, so it carries zero risk).${atRisk < totalCost - 0.005 ? ` Only ${fmtMoney(atRisk)} of the ${fmtMoney(totalCost)} cost is actually at risk.` : " Nothing is hedged/risk-free, so NET equals cost."}`)}">
       <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
-      <div class="kpi-half"><div class="label">at risk (net)</div><div class="value ${hedgedPortfolio ? "pos" : ""}">${fmtMoney(atRisk)}</div></div>
+      <div class="kpi-half"><div class="label">at risk (net)</div><div class="value ${atRisk < totalCost - 0.005 ? "pos" : ""}">${fmtMoney(atRisk)}</div></div>
     </div>
     <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
     <div class="kpi kpi-split" title="${escapeHtml(`ROI (gross) = expected outcome ÷ total premium deployed (${fmtMoney(evTotal)} / ${fmtMoney(totalCost)}) — return on the capital tied up. RoR (net) = expected outcome ÷ worst-case net loss after offsets (${fmtMoney(evTotal)} / ${fmtMoney(atRisk)}) — return on the risk we actually carry. Netting pushes these apart: as offsetting flow cancels worst-case, RoR rises while ROI on capital stays flat. Equal when nothing is hedged.`)}">
@@ -5156,6 +5216,7 @@ function effectiveStatus(res, legMid) {
 
 function computeParlayProbabilities(p) {
   // Returns { pWin, pLose, expectedPnl, breakdownLegs:[{p_buyer, p_us, eff}], unknown:bool }
+  const impossible = _impossibleSoccerParlay(p);
   let pLose = 1.0;
   let unknown = false;
   const breakdown = [];
@@ -5171,6 +5232,14 @@ function computeParlayProbabilities(p) {
     if (pb == null) { unknown = true; }
     else { pLose *= pb; }
     breakdown.push({ p_buyer: pb, p_us: pb == null ? null : 1 - pb, res, eff, leg });
+  }
+  // IMPOSSIBLE PARLAY: the YES can never resolve, so our NO is a 100% sure win —
+  // win prob 1, zero loss-risk, profit = the full premium. Overrides the naive
+  // independent-leg product (which can't see structural impossibility and would
+  // show a negative/under-stated EV). Takes precedence even if a leg's live mid
+  // is missing, since impossibility is structural, not price-based.
+  if (impossible) {
+    return { pWin: 1, pLose: 0, expectedPnl: p.max_profit, unknown: false, impossible: true, breakdown };
   }
   if (unknown || p.legs.length === 0) {
     return { pWin: null, pLose: null, expectedPnl: null, unknown: true, breakdown };
@@ -5332,13 +5401,14 @@ function renderParlayCard(p, n, probs) {
       <div class="top">
         <span class="badge ${cardBadgeCls}">#${n} · ${cardBadge}</span>
         ${parlayLegLogosHtml(p)}
+        ${probs.impossible ? `<span class="corr-badge corr-neg" title="Impossible parlay: the YES can never resolve on any scoreline, so our NO is a 100% sure win — zero loss-risk, profit = the premium.">🎁 SURE WIN</span>` : ""}
         ${corrBadge}
         ${mergedHtml}
         ${fillTsHtml}
         <span class="chev" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
       </div>
       <div class="stake">
-        <div class="col"><div class="lbl">Risk</div><div class="val">${fmtMoney(p.cost)}</div></div>
+        <div class="col"><div class="lbl">Risk</div><div class="val ${probs.impossible ? "pos" : ""}">${probs.impossible ? fmtMoney(0) : fmtMoney(p.cost)}</div>${probs.impossible ? `<div class="stat-sub">cost ${fmtMoney(p.cost)}</div>` : ""}</div>
         <div class="col"><div class="lbl">To win</div><div class="val pos">+${p.max_profit.toFixed(2)}</div></div>
         ${pWinHtml}
         ${evHtml}
