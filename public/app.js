@@ -1416,48 +1416,71 @@ function _treeNodeExpected(parlays, gameKey, asg) {
 const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl",
   "wcup", "intlfriendly"]);   // intl comps were missing -> friendlies were treated no-draw/2-way
 
-// True iff this is a SINGLE-GAME SOCCER parlay whose YES (buyer side) can NEVER
-// resolve on any feasible scoreline — so the NO we hold is a 100% SURE WIN: zero
-// loss-risk, profit = the full premium. It reuses the SAME per-scoreline leg
-// resolution (_treeEvalLeg) the risk GRID uses, so it agrees with the grid by
-// construction. The naive independent-leg product (computeParlayProbabilities,
-// the game-card EV loop, and the worst_case netting) can't see structural
-// impossibility, so those callers special-case impossible parlays.
-// Memoized on the parlay object (rebuilt each refresh). Conservative: if ANY leg
-// can't be pinned by a scoreline (prop / unparseable), returns false (we never
-// claim a sure win we can't verify).
+// True iff this parlay holds a SOCCER game subset whose YES (buyer side) can
+// NEVER resolve on any feasible scoreline — so the NO we hold is a 100% SURE
+// WIN: zero loss-risk, profit = the full premium. Works on CROSS-GAME parlays
+// too (legs grouped by game; impossible if ANY one game's subset is), since
+// other-game legs only add AND-constraints and can never rescue it. It reuses
+// the SAME per-scoreline leg resolution (_treeEvalLeg) the risk GRID uses, so
+// it agrees with the grid by construction. The naive independent-leg product
+// (computeParlayProbabilities, the game-card EV loop, and the worst_case
+// netting) can't see structural impossibility, so those callers special-case
+// impossible parlays. Memoized on the parlay object (rebuilt each refresh).
+// Conservative: a game subset with an unpinnable leg (prop/unparseable) is
+// skipped, never used to claim a win we can't verify.
 function _impossibleSoccerParlay(p) {
   if (!p || !p.legs || !p.legs.length) return false;
   if (p.__impossible !== undefined) return p.__impossible;
   p.__impossible = (function () {
     try {
-      const keys = new Set(p.legs.map((l) => legGameGroupKey(l.ticker)).filter(Boolean));
-      const sport = legSport(p.legs[0].ticker);
-      if (keys.size !== 1 || !_SOCCER_TREE_SPORTS.has(sport)) return false;   // single-game soccer only
-      const gameKey = [...keys][0];
-      let teams = null;
-      for (const l of p.legs) { const gl = parseGameLevelLeg(l.ticker); if (gl && gl.teams) { teams = gl.teams; break; } }
-      if (!teams) {
-        const parts = String(gameKey).split("|");                            // sport|DATE|TEAMS
-        teams = parseTeamsFromChunk((parts[1] || "") + (parts[2] || ""), sport) || ["AWAY", "HOME"];
+      // A parlay (a big AND of legs) is a SURE-WIN NO if ANY single game's
+      // subset of legs is structurally unsatisfiable — legs from OTHER games
+      // only ADD constraints, so they can never rescue an impossible subset.
+      // This mirrors the runner's canonical detector (parlay_impossible in
+      // sandbox/_impossible_detector.py): group legs by game, enumerate each
+      // game's scorelines, and flag impossible if no scoreline satisfies that
+      // game's legs. Per-game so a cross-game parlay (BTTS+ML+total on game A,
+      // padded with legs from games B/C) is still caught. Conservative: a game
+      // whose subset has an unpinnable leg (prop/unparseable) is SKIPPED, never
+      // used to claim a win we can't verify — but other games can still prove it.
+      const byGame = new Map();
+      for (const l of p.legs) {
+        const k = legGameGroupKey(l.ticker);
+        if (!k) continue;
+        if (!byGame.has(k)) byGame.set(k, []);
+        byGame.get(k).push(l);
       }
-      const [away, home] = teams;
       const N = 16;   // goal cap per team; structural contradictions surface far below this
-      for (let a = 0; a <= N; a++) {
-        for (let h = 0; h <= N; h++) {
-          const asg = { margin: h - a, total: a + h,
-                        winner: h > a ? home : a > h ? away : "__DRAW__",
-                        btts: a > 0 && h > 0 };
-          let allHit = true;
-          for (const l of p.legs) {
-            const r = _treeEvalLeg(l.ticker, l.side, asg);
-            if (r === "unknown") return false;          // a leg we can't pin -> can't prove impossible
-            if (r !== "buyer_hit") { allHit = false; break; }
-          }
-          if (allHit) return false;                     // a scoreline resolves the YES -> NOT impossible
+      for (const [gameKey, glegs] of byGame) {
+        if (glegs.length < 2) continue;                                        // a lone leg can't self-contradict
+        if (!_SOCCER_TREE_SPORTS.has(legSport(glegs[0].ticker))) continue;     // soccer-tree games only
+        let teams = null;
+        for (const l of glegs) { const gl = parseGameLevelLeg(l.ticker); if (gl && gl.teams) { teams = gl.teams; break; } }
+        if (!teams) {
+          const parts = String(gameKey).split("|");                            // sport|DATE|TEAMS
+          teams = parseTeamsFromChunk((parts[1] || "") + (parts[2] || ""),
+                                      legSport(glegs[0].ticker)) || ["AWAY", "HOME"];
         }
+        const [away, home] = teams;
+        let unpinnable = false, satisfiable = false;
+        for (let a = 0; a <= N && !unpinnable && !satisfiable; a++) {
+          for (let h = 0; h <= N; h++) {
+            const asg = { margin: h - a, total: a + h,
+                          winner: h > a ? home : a > h ? away : "__DRAW__",
+                          btts: a > 0 && h > 0 };
+            let allHit = true;
+            for (const l of glegs) {
+              const r = _treeEvalLeg(l.ticker, l.side, asg);
+              if (r === "unknown") { unpinnable = true; break; }   // can't prove THIS game's subset
+              if (r !== "buyer_hit") { allHit = false; break; }    // scoreline broken by a known leg
+            }
+            if (unpinnable) break;
+            if (allHit) { satisfiable = true; break; }             // a scoreline satisfies this game's YES
+          }
+        }
+        if (!unpinnable && !satisfiable) return true;              // game subset impossible -> sure-win NO
       }
-      return true;                                      // no scoreline satisfies the YES -> impossible
+      return false;                                                // no game subset provably impossible
     } catch (_) { return false; }
   })();
   return p.__impossible;
