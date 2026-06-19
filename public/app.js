@@ -4825,20 +4825,15 @@ function renderGameCards() {
               <span class="label">cost</span>
               <span class="value">${fmtMoney(g.exposure)}</span>
             </span>
-            <span class="stat" title="Most we win if every parlay touching this game hits.">
+            <span class="stat" title="Most we win if every parlay touching this game hits (the sure-win payout).">
               <span class="label">to win</span>
               <span class="value ${g.maxWin >= 0 ? "pos" : "neg"}">${g.maxWin >= 0 ? "+" : ""}${g.maxWin.toFixed(2)}</span>
             </span>
-            ${g.expectedPnl != null && g.expectedCovered === g.parlayCount ? `
-              <span class="stat" title="Expected $ if current live odds hold across every parlay touching this game.">
-                <span class="label">expected</span>
-                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
-              </span>
-              ${g.exposure > 0 ? `
-              <span class="stat" title="ROI = expected ÷ cost paid on this game (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.exposure)}).">
+            ${g.exposure > 0 ? `
+              <span class="stat" title="ROI = to win ÷ cost paid on this game (${fmtMoney(g.maxWin)} / ${fmtMoney(g.exposure)}).">
                 <span class="label">ROI</span>
-                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.exposure * 100).toFixed(0)}%</span>
-              </span>` : ""}` : ""}
+                <span class="value ${g.maxWin >= 0 ? "pos" : "neg"}">${g.maxWin >= 0 ? "+" : ""}${(g.maxWin / g.exposure * 100).toFixed(0)}%</span>
+              </span>` : ""}
           </div>
         </div>
         ${collapsed ? "" : `
@@ -4925,38 +4920,29 @@ function renderSummary() {
   const pvKalshi = pvRaw - (state.excludedPortfolioValue || 0);
   const totalCost   = state.positions.reduce((s, p) => s + p.cost, 0);
 
-  // Aggregate live expected P&L from per-parlay implied probabilities.
-  // Independence within each parlay; parlays-across summed.
-  let evTotal = 0, evMissing = 0;
-  for (const p of state.positions) {
-    const probs = computeParlayProbabilities(p);
-    if (probs.expectedPnl == null) evMissing++;
-    else evTotal += probs.expectedPnl;
-  }
-  const evNote = evMissing > 0 ? ` <small>(${evMissing} missing odds)</small>` : "";
+  // TO WIN = sum of every open parlay's max profit. For our sure-win-NO
+  // impossible parlays this IS the outcome (they always settle our way), so we
+  // show this single number — no separate probability-weighted "expected".
+  const maxWin = state.positions.reduce((s, p) => s + (p.max_profit || 0), 0);
   // DEPLOYMENT = how much capital is working in the market: cost paid /
-  // (cost paid + free cash). We hold only sure-win-NO impossible parlays now,
-  // so there's no netting / worst-case / at-risk framing — capital DEPLOYED is
-  // the metric.
-  const roiPct = totalCost > 0.005 ? (evTotal / totalCost * 100) : null;
+  // (cost paid + free cash). No netting / worst-case / at-risk framing.
+  const roiPct = totalCost > 0.005 ? (maxWin / totalCost * 100) : null;
   const deployBase = totalCost + cash;
   const deployPct = deployBase > 0.005 ? (totalCost / deployBase * 100) : null;
-  const maxWin = state.positions.reduce((s, p) => s + (p.max_profit || 0), 0);
-  // Portfolio value = free cash + open cost paid + expected current outcome.
-  const pv = cash + totalCost + evTotal;
-  const pvTip = `free cash (${fmtMoney(cash)}) + cost paid (${fmtMoney(totalCost)}) + expected current outcome (${fmtMoney(evTotal)}). Kalshi's liquidation-value reading (incl. cash): ${fmtMoney(pvKalshi + cash)}.`;
+  // Portfolio value = free cash + open cost paid + to win (the sure-win payout).
+  const pv = cash + totalCost + maxWin;
+  const pvTip = `free cash (${fmtMoney(cash)}) + cost paid (${fmtMoney(totalCost)}) + to win (${fmtMoney(maxWin)}). Kalshi's liquidation-value reading (incl. cash): ${fmtMoney(pvKalshi + cash)}.`;
 
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
-    <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value${evNote}</div><div class="value">${fmtMoney(pv)}</div></div>
+    <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value</div><div class="value">${fmtMoney(pv)}</div></div>
     <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay — the capital deployed. Deployment % = cost paid / (cost paid + free cash) = how much of this book's capital is working in the market right now.`)}">
       <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
       <div class="kpi-half"><div class="label">deployment</div><div class="value">${deployPct != null ? deployPct.toFixed(0) + "%" : "—"}</div></div>
     </div>
-    <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
-    <div class="kpi kpi-split" title="${escapeHtml(`ROI = expected outcome ÷ cost paid (${fmtMoney(evTotal)} / ${fmtMoney(totalCost)}). To win = sum of every open parlay's max profit if it hits.`)}">
-      <div class="kpi-half"><div class="label">ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
+    <div class="kpi kpi-split" title="${escapeHtml(`To win = sum of every open parlay's max profit (the sure-win payout). ROI = to win ÷ cost paid (${fmtMoney(maxWin)} / ${fmtMoney(totalCost)}).`)}">
       <div class="kpi-half"><div class="label">to win</div><div class="value pos">+${maxWin.toFixed(2)}</div></div>
+      <div class="kpi-half"><div class="label">ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
     </div>
   `;
 }
@@ -4968,9 +4954,7 @@ const PARLAY_SORT_OPTIONS = [
   { key: "cost",   label: "Risk",     get: (p, x) => p.cost },
   { key: "maxWin", label: "To Win",   get: (p, x) => p.max_profit },
   { key: "pWin",   label: "Win Chance", get: (p, x) => x.probs.pWin ?? -1 },
-  { key: "evPnl",  label: "Expected Outcome", get: (p, x) => x.probs.expectedPnl ?? -Infinity },
-  { key: "roi",    label: "Current ROI", get: (p, x) =>
-      (x.probs.expectedPnl != null && p.cost > 0) ? (x.probs.expectedPnl / p.cost) : -Infinity },
+  { key: "roi",    label: "ROI", get: (p, x) => (p.cost > 0 ? (p.max_profit / p.cost) : -Infinity) },
 ];
 
 function renderParlaySortBar() {
@@ -5373,11 +5357,10 @@ function renderParlayCard(p, n, probs) {
   const corrBadge = (p.corrRatio != null && Math.abs(p.corrRatio - 1) >= 0.005)
     ? `<span class="corr-badge ${p.corrRatio < 1 ? "corr-neg" : "corr-pos"}" title="Runner's fill-time correlation: joint probability = ×${p.corrRatio.toFixed(3)} the independent leg product. Baked into Win chance / EV / ROI.">⛓ corr ×${p.corrRatio.toFixed(2)}</span>`
     : "";
-  const evHtml = probs.expectedPnl != null
-    ? `<div class="col"><div class="lbl">Expected current outcome</div><div class="val ${pnlClass(probs.expectedPnl)}">${fmtMoney(probs.expectedPnl)}</div></div>`
-    : "";
-  const roiHtml = (probs.expectedPnl != null && p.cost > 0)
-    ? `<div class="col"><div class="lbl">Current ROI</div><div class="val ${pnlClass(probs.expectedPnl)}">${(probs.expectedPnl/p.cost*100).toFixed(0)}%</div></div>`
+  // ROI on the sure-win basis = to win ÷ cost (no separate probability-weighted
+  // "expected current outcome" — for these parlays the outcome IS the to-win).
+  const roiHtml = (p.cost > 0)
+    ? `<div class="col"><div class="lbl">ROI</div><div class="val pos">${(p.max_profit/p.cost*100).toFixed(0)}%</div></div>`
     : "";
 
   const fillStr = fmtFillTs(p);
@@ -5405,7 +5388,6 @@ function renderParlayCard(p, n, probs) {
         <div class="col"><div class="lbl">Risk</div><div class="val ${probs.impossible ? "pos" : ""}">${probs.impossible ? fmtMoney(0) : fmtMoney(p.cost)}</div>${probs.impossible ? `<div class="stat-sub">cost ${fmtMoney(p.cost)}</div>` : ""}</div>
         <div class="col"><div class="lbl">To win</div><div class="val pos">+${p.max_profit.toFixed(2)}</div></div>
         ${pWinHtml}
-        ${evHtml}
         ${roiHtml}
       </div>
     </div>

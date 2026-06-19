@@ -46,10 +46,9 @@ function todayEt() {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
-// metric accessors
+// metric accessors (firehose total vs the part that actually CLEARED/traded)
 const fireOf = (c) => (state.metric === "risk" ? c.risk : c.rfqs);
-const quotedOf = (c) => (state.metric === "risk" ? (c.quoted_risk || 0) : c.quoted);
-const wonOf = (c) => (state.metric === "risk" ? (c.won_risk || 0) : c.won);
+const clearedOf = (c) => (state.metric === "risk" ? (c.cleared_risk || 0) : (c.cleared || 0));
 const metricLabel = () => (state.metric === "risk" ? "$ budget" : "# RFQs");
 const fmtMetric = (n) => (state.metric === "risk" ? fmtMoney(n) : fmtInt(n));
 
@@ -136,7 +135,7 @@ function kpi(label, value, cls = "", sub = "") {
 function render() {
   const d = state.data;
   if (!d) return;
-  const s = d.summary || { rfqs: 0, risk: 0, quoted_rfqs: 0, won_rfqs: 0, won_risk: 0, n_games: 0 };
+  const s = d.summary || { rfqs: 0, risk: 0, cleared_rfqs: 0, cleared_risk: 0, n_games: 0 };
   const upd = d.updated_at ? new Date(d.updated_at * 1000).toLocaleTimeString() : "—";
   $("meta-text").textContent =
     `${d.date} · ${fmtInt(s.rfqs)} impossible RFQs · ${s.n_games} games · ${d.source} · upd ${upd}`;
@@ -194,6 +193,7 @@ function gameCardHtml(g) {
     ? `${flagImg(g.sport, home)}<span class="gx-team">${escapeHtml(hName)}</span><span class="gx-vs">vs</span><span class="gx-team">${escapeHtml(aName)}</span>${flagImg(g.sport, away)}`
     : `<span class="gx-team">${escapeHtml(hName)}</span>`;
 
+  const clearedPct = g.rfqs > 0 ? (100 * (g.cleared_rfqs || 0) / g.rfqs) : 0;
   const expanded = state.expandedGames.has(g.game);
   return `
   <div class="gx-card${expanded ? " open" : ""}" data-game="${escapeHtml(g.game)}">
@@ -202,16 +202,23 @@ function gameCardHtml(g) {
       <div class="gx-kpis">
         <span class="gx-kpi"><b>${fmtMetric(fireOf(g))}</b> flow</span>
         <span class="gx-kpi"><b>${fmtInt(g.rfqs)}</b> RFQs</span>
+        <span class="gx-kpi" title="Share of this game's impossible RFQs that actually traded, and the $ of flow that cleared.">cleared <b>${fmtPct(clearedPct)}</b> · <b>${fmtMoney(g.cleared_risk || 0)}</b></span>
         <span class="gx-kpi ${trend.cls}">${trend.arrow} ${trend.label}</span>
         <span class="gx-toggle">${expanded ? "▾" : "▸"} shapes</span>
       </div>
     </div>
-    <div class="gx-chart">${chart}</div>
+    <div class="gx-chart">${chart}
+      <div class="gx-legend">
+        <span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>cleared</span>
+        <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24"></span>uncleared</span>
+      </div>
+    </div>
     <div class="gx-details">${expanded ? shapesTableHtml(g) : ""}</div>
   </div>`;
 }
 
-// Impossible-RFQ flow per 10-min bucket (the firehose itself — no fill overlay).
+// Impossible-RFQ flow per 10-min bucket, STACKED: cleared (traded, green) at the
+// base + uncleared (gold) above; total bar height = the firehose for that window.
 function flowSvg(buckets) {
   const W = 600, H = 130, padL = 46, padR = 8, padT = 8, padB = 18;
   const inW = W - padL - padR, inH = H - padT - padB, n = buckets.length;
@@ -226,8 +233,15 @@ function flowSvg(buckets) {
   buckets.forEach((b, i) => {
     const fire = fireOf(b);
     if (fire <= 0) return;
-    const cx = xFor(i) - bw / 2, y1 = yFor(fire), y0 = yFor(0);
-    bars += `<rect x="${cx.toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - y1).toFixed(1)}" fill="#fbbf24"><title>${etHM(b.ts)} · ${fmtMetric(fire)}</title></rect>`;
+    const cl = Math.min(clearedOf(b), fire), cx = xFor(i) - bw / 2, y0 = yFor(0);
+    if (cl > 0) {
+      const yc = yFor(cl);
+      bars += `<rect x="${cx.toFixed(1)}" y="${yc.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - yc).toFixed(1)}" fill="var(--pos)"><title>${etHM(b.ts)} · cleared ${fmtMetric(cl)} of ${fmtMetric(fire)}</title></rect>`;
+    }
+    if (fire - cl > 0) {
+      const yt = yFor(fire), yc = yFor(cl);
+      bars += `<rect x="${cx.toFixed(1)}" y="${yt.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yc - yt).toFixed(1)}" fill="#fbbf24"><title>${etHM(b.ts)} · uncleared ${fmtMetric(fire - cl)} of ${fmtMetric(fire)}</title></rect>`;
+    }
   });
 
   const yTicks = [];
