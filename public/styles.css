@@ -1543,6 +1543,15 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
   border-radius: 3px; overflow: hidden; }
 .shp-bar-fill { display: block; height: 100%; background: #fbbf24; border-radius: 3px; }
 .shp-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+/* per-shape RFQ-size distribution + clearing-by-size (chips small->large) */
+.shp-sizes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.shp-sz-lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.shp-sz { position: relative; display: inline-flex; align-items: center; min-width: 0; overflow: hidden;
+  font-size: 11px; border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; background: var(--card-head); }
+.shp-sz-fill { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(45,212,191,0.20); }
+.shp-sz-txt { position: relative; white-space: nowrap; }
+.shp-sz-txt b { color: var(--fg); font-weight: 600; }
+.shp-sz-clr { color: var(--muted); }
 .shp-pill { display: inline-flex; align-items: baseline; gap: 5px; font-size: 12px;
   background: var(--card-head); border: 1px solid var(--border); border-radius: 6px;
   padding: 2px 8px; color: var(--fg); white-space: nowrap; }

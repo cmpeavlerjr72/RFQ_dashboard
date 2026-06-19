@@ -391,17 +391,34 @@ function shapesTableHtml(g) {
       gap != null ? pill("gap", (gap >= 0 ? `+${gap}` : `${gap}`), gap >= 0 ? "pos" : "neg") : "",
       pill("traded", `${s.traded_pct}%`),
     ].join("");
+    // SIZE DISTRIBUTION (small vs huge RFQs) + clearing PER size bucket — chips
+    // left->right = small->large; the fill width shows count share, the ¢ shows
+    // whether clearing moves as RFQ size grows.
+    const sb = (s.size_buckets || []).filter((b) => b.n > 0);
+    let sizesHtml = "";
+    if (sb.length) {
+      const maxn = Math.max(...sb.map((b) => b.n));
+      const chips = sb.map((b) => {
+        const w = Math.max(4, Math.round((100 * b.n) / maxn));
+        const clr = b.clr != null ? `${b.clr}c` : "·";
+        return `<span class="shp-sz" title="${b.n} RFQs sized ${b.label}${b.clr != null ? `, clears ~${b.clr}c` : " (none traded)"}">`
+          + `<span class="shp-sz-fill" style="width:${w}%"></span>`
+          + `<span class="shp-sz-txt"><b>${b.label}</b> ${fmtInt(b.n)}<span class="shp-sz-clr"> ${clr}</span></span></span>`;
+      }).join("");
+      sizesHtml = `<div class="shp-sizes"><span class="shp-sz-lbl">by size</span>${chips}</div>`;
+    }
     return `<div class="shp">
       <div class="shp-legs">${legsHtml}<span class="shp-raw">${escapeHtml(raw)}</span></div>
       ${whyHtml}
       <div class="shp-stats">${pills}</div>
+      ${sizesHtml}
     </div>`;
   }).join("");
   return `<div class="gx-sub">
     <div class="shp-sub-head">Shapes by occurrence · ${metricLabel()}</div>
     <div class="shp-chart">${occChart}</div>
     <div class="shp-list">${body}</div>
-    <div class="chart-caption">“clears” = the RANGE this shape prints at (typ = median). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears vs that. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). traded = % of sampled RFQs with a print yet.</div>
+    <div class="chart-caption">“clears” = the RANGE this shape prints at (typ = median). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears vs that. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). traded = % of RFQs with a print yet. “by size” = RFQ-count distribution by taker $ size (bar = share), with each bucket's clearing ¢ — left→right small→large, so you can see if clearing drifts with size.</div>
   </div>`;
 }
 
