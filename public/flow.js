@@ -141,12 +141,9 @@ function render() {
   $("meta-text").textContent =
     `${d.date} · ${fmtInt(s.rfqs)} impossible RFQs · ${s.n_games} games · ${d.source} · upd ${upd}`;
 
-  const capturePct = s.rfqs > 0 ? (100 * s.quoted_rfqs) / s.rfqs : 0;
   $("summary").innerHTML = [
     kpi("Impossible RFQs", fmtInt(s.rfqs), "", "in the firehose today"),
     kpi("$ budget (free money)", fmtMoney(s.risk), "", "taker target cost"),
-    kpi("We quoted", fmtInt(s.quoted_rfqs), capturePct > 50 ? "pos" : "", `${fmtPct(capturePct)} of flow`),
-    kpi("We won", fmtInt(s.won_rfqs), s.won_rfqs ? "pos" : "", `${fmtMoney(s.won_risk)} budget`),
     kpi("Games", fmtInt(s.n_games), "", "with impossible flow"),
     kpi("Our NO bid", d.our_no_bid_c != null ? `${d.our_no_bid_c}c` : "—", "", "sniper greed dial"),
   ].join("");
@@ -163,7 +160,7 @@ function render() {
   $("empty-wrap").style.display = "none";
   renderGames();
   $("footer-text").textContent =
-    `${fmtInt(s.rfqs)} impossible RFQs · ${fmtMoney(s.risk)} budget · ${fmtInt(s.quoted_rfqs)} quoted · ${fmtInt(s.won_rfqs)} won`;
+    `${fmtInt(s.rfqs)} impossible RFQs · ${fmtMoney(s.risk)} budget · ${s.n_games} games`;
 }
 
 const avg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
@@ -191,8 +188,6 @@ function gameCardHtml(g) {
   const buckets = (g.buckets || []).slice().sort((a, b) => a.ts - b.ts);
   const chart = buckets.length ? flowSvg(buckets) : `<div class="muted" style="padding:8px">no flow</div>`;
   const trend = trendOf(buckets);
-  const capture = g.rfqs > 0 ? (100 * g.quoted_rfqs) / g.rfqs : 0;
-  const winPct = g.quoted_rfqs > 0 ? (100 * g.won_rfqs) / g.quoted_rfqs : 0;
   const hName = home ? teamName(g.sport, home) : g.game;
   const aName = away ? teamName(g.sport, away) : "";
   const matchup = aName
@@ -206,24 +201,17 @@ function gameCardHtml(g) {
       <div class="gx-match">${matchup}<span class="gx-sport">${escapeHtml(g.sport)}</span></div>
       <div class="gx-kpis">
         <span class="gx-kpi"><b>${fmtMetric(fireOf(g))}</b> flow</span>
-        <span class="gx-kpi">quoted <b>${fmtPct(capture)}</b></span>
-        <span class="gx-kpi ${g.won_rfqs ? "pos" : ""}">won <b>${fmtInt(g.won_rfqs)}</b>${g.quoted_rfqs ? ` (${fmtPct(winPct)})` : ""}</span>
+        <span class="gx-kpi"><b>${fmtInt(g.rfqs)}</b> RFQs</span>
         <span class="gx-kpi ${trend.cls}">${trend.arrow} ${trend.label}</span>
         <span class="gx-toggle">${expanded ? "▾" : "▸"} shapes</span>
       </div>
     </div>
-    <div class="gx-chart">${chart}
-      <div class="gx-legend">
-        <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24"></span>firehose</span>
-        <span class="gx-lg"><span class="gx-sw" style="background:#3b82f6"></span>we quoted</span>
-        <span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>we won</span>
-      </div>
-    </div>
+    <div class="gx-chart">${chart}</div>
     <div class="gx-details">${expanded ? shapesTableHtml(g) : ""}</div>
   </div>`;
 }
 
-// Stacked bar per 10-min bucket: green (won) <= blue (quoted) <= gold (firehose).
+// Impossible-RFQ flow per 10-min bucket (the firehose itself — no fill overlay).
 function flowSvg(buckets) {
   const W = 600, H = 130, padL = 46, padR = 8, padT = 8, padB = 18;
   const inW = W - padL - padR, inH = H - padT - padB, n = buckets.length;
@@ -236,18 +224,10 @@ function flowSvg(buckets) {
 
   let bars = "";
   buckets.forEach((b, i) => {
-    const fire = fireOf(b), q = quotedOf(b), w = wonOf(b);
+    const fire = fireOf(b);
     if (fire <= 0) return;
-    const cx = xFor(i) - bw / 2;
-    const seg = (lo, hi, fill, lbl) => {
-      if (hi - lo <= 0) return "";
-      const y1 = yFor(hi), y0 = yFor(lo);
-      return `<rect x="${cx.toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - y1).toFixed(1)}" fill="${fill}"><title>${etHM(b.ts)} · ${lbl}</title></rect>`;
-    };
-    // base..won (green), won..quoted (blue), quoted..firehose (gold)
-    bars += seg(0, Math.min(w, fire), "var(--pos)", `won ${fmtMetric(w)}`);
-    bars += seg(Math.min(w, q), Math.min(q, fire), "#3b82f6", `quoted ${fmtMetric(q)}`);
-    bars += seg(Math.min(q, fire), fire, "#fbbf24", `firehose ${fmtMetric(fire)}`);
+    const cx = xFor(i) - bw / 2, y1 = yFor(fire), y0 = yFor(0);
+    bars += `<rect x="${cx.toFixed(1)}" y="${y1.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - y1).toFixed(1)}" fill="#fbbf24"><title>${etHM(b.ts)} · ${fmtMetric(fire)}</title></rect>`;
   });
 
   const yTicks = [];
@@ -382,8 +362,6 @@ function shapesTableHtml(g) {
       pill("clears", clrVal, clrCls),
       pill("our bid", s.our_bid_c != null ? s.our_bid_c + "c" : "—"),
       gap != null ? pill("gap", (gap >= 0 ? `+${gap}` : `${gap}`), gap >= 0 ? "pos" : "neg") : "",
-      pill("quoted", fmtInt(s.quoted)),
-      pill("won", fmtInt(s.won), s.won > 0 ? "pos" : ""),
       pill("traded", `${s.traded_pct}%`),
     ].join("");
     return `<div class="shp">
