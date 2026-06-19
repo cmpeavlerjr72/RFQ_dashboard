@@ -36,6 +36,7 @@ import {
 } from "./espn.js";
 import { getRecap, getRecapOverall } from "./recap.js";
 import { getFlow } from "./flow.js";
+import { getImpFlow } from "./impflow.js";
 import { getClv } from "./clv.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
@@ -394,6 +395,17 @@ app.get("/api/flow", async (req, res, next) => {
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
     res.json(await getFlow(date, force));
+  } catch (e) { next(e); }
+});
+
+// Impossible-flow: the firehose of structurally-impossible RFQs across all games
+// (incl. ones we don't quote), per game with a per-shape clearing table.
+app.get("/api/impflow", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "").trim();
+    const force = String(req.query.fresh || "") === "1";
+    upstreamCallCount++;
+    res.json(await getImpFlow(date, force));
   } catch (e) { next(e); }
 });
 

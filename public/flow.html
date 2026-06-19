@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Kalshi RFQ — Flow</title>
+<title>Kalshi RFQ — Impossible Flow</title>
 <link rel="stylesheet" href="/styles.css" />
 <script defer src="/brand.js"></script>
 </head>
 <body>
 <header>
   <div class="row">
-    <h1>Kalshi RFQ — Flow</h1>
+    <h1>Kalshi RFQ — Impossible Flow</h1>
     <nav class="nav-links">
       <a href="/">Live</a>
       <a href="/recap.html">Recap</a>
@@ -29,14 +29,14 @@
       <input type="date" id="flow-date" />
     </label>
     <div class="metric-toggle" id="metric-toggle" role="group" aria-label="metric">
-      <button data-metric="risk" class="active">$ risked</button>
-      <button data-metric="rfqs"># RFQs</button>
+      <button data-metric="rfqs" class="active"># RFQs</button>
+      <button data-metric="risk">$ budget</button>
     </div>
     <button id="refresh-btn" title="Force refresh (bypass cache)">Refresh</button>
     <span class="meta" id="meta-text"></span>
   </div>
   <div class="row">
-    <span class="hint">RFQ flow we quoted through the day (10-min buckets, ET), with the quoted&rarr;filled funnel. Toggle $ risked vs RFQ count.</span>
+    <span class="hint">Every structurally-impossible (sure-win-NO) RFQ in the firehose, per 10-min window (ET), split by game — including games/shapes we aren't quoting. <b>Gold</b> = total flow, <b>blue</b> = we quoted, <b style="color:var(--pos)">green</b> = we won. Click a game for its shapes &amp; where each is clearing.</span>
   </div>
 </header>
 
@@ -44,27 +44,13 @@
   <section class="summary" id="summary"></section>
 
   <section id="games-wrap" style="display:none">
-    <div class="row section-head"><h2>Game by game</h2><span class="hint" id="games-hint">moneyline flow per game, busiest first — click a game for spread / total / BTTS</span></div>
+    <div class="row section-head"><h2>Impossible flow by game</h2><span class="hint" id="games-hint">busiest first — click a game for its shapes &amp; clearing prices</span></div>
     <div id="games-list"></div>
   </section>
 
-  <section id="flow-chart-wrap" class="chart-wrap" style="display:none">
-    <div class="row section-head"><h2>Flow through the day</h2><span class="hint" id="flow-chart-hint">stacked by sport</span></div>
-    <div id="flow-chart"></div>
+  <section id="empty-wrap" style="display:none">
+    <div class="empty" id="empty-text">no impossible flow captured for this date</div>
   </section>
-
-  <section id="filled-chart-wrap" class="chart-wrap" style="display:none">
-    <div class="row section-head"><h2>Filled flow</h2><span class="hint">when quoted flow actually filled — separate scale (fills are a sliver of quotes)</span></div>
-    <div id="filled-chart"></div>
-  </section>
-
-  <section id="impossible-chart-wrap" class="chart-wrap" style="display:none">
-    <div class="row section-head"><h2>🎉 Impossible parlays (free-roll)</h2><span class="hint" id="impossible-chart-hint">structural sure-win NO flow — quoted vs filled per 10-min window</span></div>
-    <div id="impossible-chart"></div>
-    <div id="impossible-games"></div>
-  </section>
-
-  <section id="leaderboard-wrap" class="breakdown-wrap" style="display:none"></section>
 </main>
 
 <footer>
