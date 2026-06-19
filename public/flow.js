@@ -285,8 +285,11 @@ function decodeLeg(tok, sport, home, away) {
   if (/^BTTS$/i.test(t)) {
     base = (h, a) => h >= 1 && a >= 1; yes = "Both teams score"; no = "NOT both teams score";
   } else if (/^\d+$/.test(t)) {
-    const N = parseInt(t, 10); base = (h, a) => (h + a) > N - 0.5;
-    yes = `${N}+ total goals`; no = `Under ${N} goals (≤ ${N - 1})`;
+    // Kalshi total ticker "N" is the half-line floor_strike N-0.5 (matches _pred and
+    // the fill cards' "o2.5/u2.5"): YES = over N-0.5, NO = under N-0.5.
+    const N = parseInt(t, 10), L = N - 0.5;
+    base = (h, a) => (h + a) > L;
+    yes = `Over ${L} goals`; no = `Under ${L} goals`;
   } else {
     const m = t.match(/^([A-Za-z]{2,4})(\d*)$/);
     if (m) {
@@ -342,9 +345,24 @@ function shapesTableHtml(g) {
     (state.metric === "risk" ? b.risk - a.risk : b.rfqs - a.rfqs));
   if (!shapes.length) return `<div class="muted" style="padding:6px 2px">no shapes</div>`;
   const pill = (lbl, val, cls = "") => `<span class="shp-pill ${cls}"><i>${lbl}</i>${val}</span>`;
-  const body = shapes.map((s) => {
+  const mval = (s) => (state.metric === "risk" ? s.risk : s.rfqs);
+  // decode each shape ONCE (reused by the occurrence chart + the detail blocks)
+  const decoded = shapes.map((s) => decodeShape(s.shape, g.sport, g.game));
+  const shortLabel = (i) => decoded[i].map((l) => l.label).join(" / ");
+
+  // OCCURRENCES CHART — one horizontal bar per distinct shape (by current metric)
+  const maxv = Math.max(1, ...shapes.map(mval));
+  const occChart = shapes.map((s, i) => {
+    const v = mval(s), w = Math.max(2, (100 * v) / maxv), lbl = shortLabel(i);
+    return `<div class="shp-bar-row" title="${escapeHtml(lbl)}">`
+      + `<span class="shp-bar-lbl">${escapeHtml(lbl)}</span>`
+      + `<span class="shp-bar-track"><span class="shp-bar-fill" style="width:${w.toFixed(1)}%"></span></span>`
+      + `<span class="shp-bar-val">${fmtMetric(v)}</span></div>`;
+  }).join("");
+
+  const body = shapes.map((s, i) => {
     const raw = s.shape.includes(":") ? s.shape.split(":").slice(1).join(":").trim() : s.shape;
-    const legs = decodeShape(s.shape, g.sport, g.game);
+    const legs = decoded[i];
     const legsHtml = legs.map((l) => `<span class="shp-leg">${escapeHtml(l.label)}</span>`).join("");
     const why = whyImpossible(legs, g.game);
     const whyHtml = why
@@ -354,10 +372,9 @@ function shapesTableHtml(g) {
 
     let clrVal = "—", clrCls = "";
     if (s.clearing_no_c != null) {
-      const rng = (s.clearing_lo != null && s.clearing_hi != null && s.clearing_lo !== s.clearing_hi)
-        ? ` (${s.clearing_lo}–${s.clearing_hi})` : "";
-      clrVal = `${s.clearing_no_c}c${rng}`;
-      if (s.our_bid_c != null) clrCls = s.our_bid_c >= s.clearing_no_c ? "pos" : "neg";
+      const lo = s.clearing_lo, hi = s.clearing_hi, med = s.clearing_no_c;
+      clrVal = (lo != null && hi != null && lo !== hi) ? `${lo}-${hi}c (typ ${med})` : `${med}c`;
+      if (s.our_bid_c != null) clrCls = s.our_bid_c >= med ? "pos" : "neg";
     }
     const pills = [
       pill("RFQs", fmtInt(s.rfqs)),
@@ -376,6 +393,8 @@ function shapesTableHtml(g) {
     </div>`;
   }).join("");
   return `<div class="gx-sub">
+    <div class="shp-sub-head">Shapes by occurrence · ${metricLabel()}</div>
+    <div class="shp-chart">${occChart}</div>
     <div class="shp-list">${body}</div>
     <div class="chart-caption">“clears” = where this shape's flow actually trades (100 − last YES). gap = our bid − clearing: <span class="pos">≥0 we can win it</span>, <span class="neg">&lt;0 priced out</span>. traded = % of sampled RFQs with a print yet.</div>
   </div>`;

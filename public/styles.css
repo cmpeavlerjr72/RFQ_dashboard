@@ -1527,6 +1527,17 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .shp-why-tag { display: inline-block; font-size: 9px; text-transform: uppercase; letter-spacing: .04em;
   font-weight: 700; color: var(--neg); background: var(--neg-bg); border-radius: 4px;
   padding: 1px 5px; margin-right: 5px; vertical-align: 1px; }
+/* occurrences chart — horizontal bar per distinct shape */
+.shp-sub-head { font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase;
+  letter-spacing: .03em; margin: 2px 0 7px; }
+.shp-chart { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.shp-bar-row { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.shp-bar-lbl { flex: 0 0 44%; max-width: 44%; color: var(--fg); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.shp-bar-track { flex: 1 1 auto; height: 12px; background: rgba(128,128,140,0.12);
+  border-radius: 3px; overflow: hidden; min-width: 0; }
+.shp-bar-fill { display: block; height: 100%; background: #fbbf24; border-radius: 3px; }
+.shp-bar-val { flex: 0 0 auto; min-width: 40px; text-align: right; color: var(--muted); }
 .shp-stats { display: flex; flex-wrap: wrap; gap: 6px; }
 .shp-pill { display: inline-flex; align-items: baseline; gap: 5px; font-size: 12px;
   background: var(--card-head); border: 1px solid var(--border); border-radius: 6px;
