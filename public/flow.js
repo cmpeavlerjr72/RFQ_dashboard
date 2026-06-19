@@ -265,6 +265,75 @@ function flowSvg(buckets) {
   </svg>`;
 }
 
+// ---- shape decoding: turn "[BTTS, USA, 3/NO]" into plain-English legs + a proof
+// of impossibility. Mirrors the canonical detector's leg semantics
+// (sandbox/impossible_parlay.py _pred): total "N" => total ≥ N (line N-0.5);
+// spread "TEAMd" => that team wins by ≥ d; GAME "TEAM" => that team wins; BTTS =>
+// both score. "/NO" negates. Soccer chunks are HOME-first.
+function assignFromGame(game) {
+  const m = String(game || "").match(/^\d{2}[A-Z]{3}\d{2}(?:\d{4})?([A-Z]+)$/);
+  if (m && m[1].length === 6) return { home: m[1].slice(0, 3), away: m[1].slice(3, 6) };
+  return null;
+}
+// Decode one shape token -> { raw, label, pred(h,a)|null } where pred is the YES
+// resolution AFTER applying the token's side (h = home goals, a = away goals).
+function decodeLeg(tok, sport, home, away) {
+  let side = "yes", t = String(tok).trim();
+  if (/\/NO$/i.test(t)) { side = "no"; t = t.replace(/\/NO$/i, "").trim(); }
+  const nm = (c) => teamName(sport, c) || c;
+  let base = null, yes = t, no = `not ${t}`;
+  if (/^BTTS$/i.test(t)) {
+    base = (h, a) => h >= 1 && a >= 1; yes = "Both teams score"; no = "NOT both teams score";
+  } else if (/^\d+$/.test(t)) {
+    const N = parseInt(t, 10); base = (h, a) => (h + a) > N - 0.5;
+    yes = `${N}+ total goals`; no = `Under ${N} goals (≤ ${N - 1})`;
+  } else {
+    const m = t.match(/^([A-Za-z]{2,4})(\d*)$/);
+    if (m) {
+      const team = m[1].toUpperCase(), d = m[2];
+      if (team === "TIE" || team === "DRAW") {
+        base = (h, a) => h === a; yes = "Draw"; no = "NOT a draw";
+      } else if (d) {
+        const D = parseInt(d, 10);
+        base = team === home ? (h, a) => (h - a) > D - 0.5
+             : team === away ? (h, a) => (a - h) > D - 0.5 : null;
+        yes = `${nm(team)} win by ${D}+`; no = `${nm(team)} do NOT win by ${D}+`;
+      } else {
+        base = team === home ? (h, a) => h > a
+             : team === away ? (h, a) => a > h : null;
+        yes = `${nm(team)} to win`; no = `${nm(team)} do NOT win (draw or opponent)`;
+      }
+    }
+  }
+  const pred = base ? (side === "no" ? (h, a) => !base(h, a) : base) : null;
+  return { raw: tok, label: side === "no" ? no : yes, pred };
+}
+function decodeShape(shapeStr, sport, game) {
+  const inside = shapeStr.includes(":") ? shapeStr.split(":").slice(1).join(":") : shapeStr;
+  const toks = inside.replace(/[[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+  const asg = assignFromGame(game);
+  return toks.map((t) => decodeLeg(t, sport, asg && asg.home, asg && asg.away));
+}
+// Why impossible: for each leg, find a final score that satisfies EVERY OTHER leg
+// (so that leg is the lone breaker). The list of near-misses is the proof.
+function whyImpossible(legs, game) {
+  const usable = legs.filter((l) => l.pred);
+  if (usable.length < 2) return null;
+  const asg = assignFromGame(game);
+  const N = 12, misses = [];
+  for (let i = 0; i < usable.length; i++) {
+    const others = usable.filter((_, j) => j !== i);
+    let w = null;
+    for (let h = 0; h <= N && !w; h++) for (let a = 0; a <= N; a++) {
+      if (others.every((l) => l.pred(h, a))) { w = { h, a }; break; }
+    }
+    if (w) misses.push({ leg: usable[i], w });
+  }
+  if (!misses.length) return null;
+  const score = (w) => asg ? `${asg.home} ${w.h}–${w.a} ${asg.away}` : `${w.h}–${w.a}`;
+  return misses.map((mz) => `<b>${score(mz.w)}</b> satisfies every leg but “${escapeHtml(mz.leg.label)}”`);
+}
+
 // Expanded: unique shapes for this game with where each is CLEARING vs our bid.
 // A compact, wrapping pill layout (NOT a wide table) so it stays readable on a
 // phone — each shape is a block whose stat pills flow onto as many rows as fit.
@@ -274,7 +343,13 @@ function shapesTableHtml(g) {
   if (!shapes.length) return `<div class="muted" style="padding:6px 2px">no shapes</div>`;
   const pill = (lbl, val, cls = "") => `<span class="shp-pill ${cls}"><i>${lbl}</i>${val}</span>`;
   const body = shapes.map((s) => {
-    const label = s.shape.includes(":") ? s.shape.split(":").slice(1).join(":").trim() : s.shape;
+    const raw = s.shape.includes(":") ? s.shape.split(":").slice(1).join(":").trim() : s.shape;
+    const legs = decodeShape(s.shape, g.sport, g.game);
+    const legsHtml = legs.map((l) => `<span class="shp-leg">${escapeHtml(l.label)}</span>`).join("");
+    const why = whyImpossible(legs, g.game);
+    const whyHtml = why
+      ? `<div class="shp-why"><span class="shp-why-tag">why impossible</span> no final score satisfies all of these — ${why.join("; ")}.</div>`
+      : "";
     const gap = (s.clearing_no_c != null && s.our_bid_c != null) ? (s.our_bid_c - s.clearing_no_c) : null;
 
     let clrVal = "—", clrCls = "";
@@ -295,7 +370,8 @@ function shapesTableHtml(g) {
       pill("traded", `${s.traded_pct}%`),
     ].join("");
     return `<div class="shp">
-      <div class="shp-name">${escapeHtml(label)}</div>
+      <div class="shp-legs">${legsHtml}<span class="shp-raw">${escapeHtml(raw)}</span></div>
+      ${whyHtml}
       <div class="shp-stats">${pills}</div>
     </div>`;
   }).join("");

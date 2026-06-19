@@ -1515,6 +1515,18 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .shp:last-child { border-bottom: 0; }
 .shp-name { font-weight: 600; font-size: 13px; color: var(--fg); margin-bottom: 6px;
   overflow-wrap: anywhere; word-break: break-word; }
+/* decoded legs: plain-English chips + the raw shorthand as a faint tag */
+.shp-legs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 5px; }
+.shp-leg { font-size: 12.5px; font-weight: 600; color: var(--fg);
+  background: rgba(45,212,191,0.10); border: 1px solid rgba(45,212,191,0.35);
+  border-radius: 6px; padding: 2px 8px; overflow-wrap: anywhere; }
+.shp-raw { font-size: 10px; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.shp-why { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-bottom: 7px;
+  overflow-wrap: anywhere; }
+.shp-why b { color: var(--fg); font-weight: 600; }
+.shp-why-tag { display: inline-block; font-size: 9px; text-transform: uppercase; letter-spacing: .04em;
+  font-weight: 700; color: var(--neg); background: var(--neg-bg); border-radius: 4px;
+  padding: 1px 5px; margin-right: 5px; vertical-align: 1px; }
 .shp-stats { display: flex; flex-wrap: wrap; gap: 6px; }
 .shp-pill { display: inline-flex; align-items: baseline; gap: 5px; font-size: 12px;
   background: var(--card-head); border: 1px solid var(--border); border-radius: 6px;
