@@ -4391,7 +4391,7 @@ function renderGameCards() {
       } else if (r.statText) {
         liveStat = `<span class="cheer-live" title="current game state">${escapeHtml(r.statText)}</span>`;
       }
-      const isOffset = g.offsettingVars?.has(_legVarKey(r.ticker));
+      const isOffset = false;  // offset/netting tags removed (no longer netting)
       const offsetTag = isOffset
         ? `<span class="offset-tag" title="Dual-direction flow on this market — offsetting positions cancel against the other side.">⇄ offset</span>`
         : "";
@@ -4524,7 +4524,7 @@ function renderGameCards() {
         .map(gameChipHtml).join("");
       // Tag the row when this market carries dual-direction flow that nets
       // against the opposite side (e.g. we hold both teams' ML).
-      const isOffset = items.some((it) => g.offsettingVars?.has(_legVarKey(it.row.ticker)));
+      const isOffset = false;  // offset/netting tags removed (no longer netting)
       const offsetTag = isOffset
         ? ` <span class="offset-tag" title="Dual-direction flow on this market — offsetting positions cancel against the other side.">⇄ offset</span>`
         : "";
@@ -4738,7 +4738,7 @@ function renderGameCards() {
           }).join("");
           // Flag the stat when we hold dual-direction (over+under) flow on it —
           // same offsetting-var test the quoter and game ladders use.
-          const isOffset = items.some((it) => g.offsettingVars?.has(_legVarKey(it.row.ticker)));
+          const isOffset = false;  // offset/netting tags removed (no longer netting)
           const offsetTag = isOffset
             ? ` <span class="offset-tag" title="Dual-direction flow on this stat — over and under legs cancel against each other.">⇄ offset</span>`
             : "";
@@ -4817,35 +4817,27 @@ function renderGameCards() {
             <span class="game-logos">${logos}</span>
             <span class="game-name">${escapeHtml(title)}</span>
             ${dateHtml}
-            ${g.hedged ? `<span class="hedge-badge" title="Dual-direction flow: opposing positions on this game cancel out. ${g.offsetPct}% of the $${g.exposure.toFixed(2)} gross at-risk is netted away — worst-case net loss is $${g.worstCase.toFixed(2)} (the number the quoter caps against).">⇄ HEDGED ${g.offsetPct}%</span>` : ""}
           </div>
           ${scorePanel}
           <div class="game-stats">
             <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
-            <span class="stat" title="${(g.worstCase < g.exposure - 0.005) ? "Worst-case net loss after dual-direction offsets and/or impossible-parlay sure-wins (the true at-risk). Gross is the un-netted sum of every parlay's cost paid." : "Total cost across every parlay touching this game."}">
-              <span class="label">at risk${(g.worstCase < g.exposure - 0.005) ? " (net)" : ""}</span>
-              <span class="value ${(g.worstCase < g.exposure - 0.005) ? "pos" : ""}">${fmtMoney((g.worstCase < g.exposure - 0.005) ? g.worstCase : g.exposure)}</span>
-              ${(g.worstCase < g.exposure - 0.005) ? `<span class="stat-sub">gross ${fmtMoney(g.exposure)}</span>` : ""}
+            <span class="stat" title="Total cost paid across every parlay touching this game.">
+              <span class="label">cost</span>
+              <span class="value">${fmtMoney(g.exposure)}</span>
             </span>
-            <span class="stat" title="${g.winHedged ? "Best-case net gain after dual-direction offsets — offsetting positions can't all win in the same outcome, so the most we can net is below the un-netted sum of every parlay's max profit (shown as gross)." : "Most we win if every parlay touching this game breaks our way."}">
-              <span class="label">to win${g.winHedged ? " (net)" : ""}</span>
-              <span class="value ${(g.winHedged ? g.bestWin : g.maxWin) >= 0 ? "pos" : "neg"}">${(g.winHedged ? g.bestWin : g.maxWin) >= 0 ? "+" : ""}${(g.winHedged ? g.bestWin : g.maxWin).toFixed(2)}</span>
-              ${g.winHedged ? `<span class="stat-sub">gross +${g.maxWin.toFixed(2)}</span>` : ""}
+            <span class="stat" title="Most we win if every parlay touching this game hits.">
+              <span class="label">to win</span>
+              <span class="value ${g.maxWin >= 0 ? "pos" : "neg"}">${g.maxWin >= 0 ? "+" : ""}${g.maxWin.toFixed(2)}</span>
             </span>
             ${g.expectedPnl != null && g.expectedCovered === g.parlayCount ? `
-              <span class="stat" title="Expected $ if current live odds hold across every parlay touching this game. Sum of (P(we win parlay) * qty - cost) using the latest legMid (else fill-time fair).">
+              <span class="stat" title="Expected $ if current live odds hold across every parlay touching this game.">
                 <span class="label">expected</span>
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
               </span>
               ${g.exposure > 0 ? `
-              <span class="stat" title="ROI (gross) = expected ÷ total premium on this game (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.exposure)}) — return on capital deployed.">
-                <span class="label">ROI gross</span>
+              <span class="stat" title="ROI = expected ÷ cost paid on this game (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.exposure)}).">
+                <span class="label">ROI</span>
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.exposure * 100).toFixed(0)}%</span>
-              </span>` : ""}
-              ${g.worstCase > 0.005 ? `
-              <span class="stat" title="RoR (net) = expected ÷ worst-case net loss after dual-direction offsets (${fmtMoney(g.expectedPnl)} / ${fmtMoney(g.worstCase)}) — return on the risk actually carried. ${g.hedged ? `${g.offsetPct}% of gross is netted away, so RoR runs above ROI.` : "Nothing offsets here, so this equals ROI gross."}">
-                <span class="label">RoR net</span>
-                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.worstCase * 100).toFixed(0)}%</span>
               </span>` : ""}` : ""}
           </div>
         </div>
@@ -4942,50 +4934,29 @@ function renderSummary() {
     else evTotal += probs.expectedPnl;
   }
   const evNote = evMissing > 0 ? ` <small>(${evMissing} missing odds)</small>` : "";
-  // True risk = portfolio worst-case net loss after dual-direction offsets.
-  // This is what we can actually lose, so it's the right ROI denominator:
-  // ROI = expected outcome ÷ amount truly at risk. Falls back to cost paid
-  // only if the netting math somehow returns nothing.
-  const net = computePortfolioNetting();
-  const atRisk = net.worstCase;
-  const hedgedPortfolio = net.offsetPct >= 1 && net.gross - net.worstCase > 0.005;
-  // Two distinct yardsticks (see also game-level cards):
-  //   ROI (gross) = expected ÷ total premium deployed — return on CAPITAL.
-  //   RoR  (net)  = expected ÷ worst-case net loss after offsets — return on
-  //                 the RISK we actually carry. Netting drives these apart: as
-  //                 offsetting flow cancels worst-case, RoR climbs while ROI on
-  //                 the capital tied up stays flat. When nothing is hedged the
-  //                 two converge (worst-case == cost).
-  const roiGrossPct = totalCost > 0.005 ? (evTotal / totalCost * 100) : null;
-  const rorNetPct   = atRisk   > 0.005 ? (evTotal / atRisk   * 100) : roiGrossPct;
-  // Portfolio value = total account value we expect to walk away with: free
-  // cash PLUS the open parlays' cost paid plus their summed expected P&L.
-  // Inherits the same "missing odds" caveat as the EV line. Kalshi's
-  // liquidation-style portfolio_value (positions only) + cash goes in the
-  // tooltip for cross-check.
+  // DEPLOYMENT = how much capital is working in the market: cost paid /
+  // (cost paid + free cash). We hold only sure-win-NO impossible parlays now,
+  // so there's no netting / worst-case / at-risk framing — capital DEPLOYED is
+  // the metric.
+  const roiPct = totalCost > 0.005 ? (evTotal / totalCost * 100) : null;
+  const deployBase = totalCost + cash;
+  const deployPct = deployBase > 0.005 ? (totalCost / deployBase * 100) : null;
+  const maxWin = state.positions.reduce((s, p) => s + (p.max_profit || 0), 0);
+  // Portfolio value = free cash + open cost paid + expected current outcome.
   const pv = cash + totalCost + evTotal;
   const pvTip = `free cash (${fmtMoney(cash)}) + cost paid (${fmtMoney(totalCost)}) + expected current outcome (${fmtMoney(evTotal)}). Kalshi's liquidation-value reading (incl. cash): ${fmtMoney(pvKalshi + cash)}.`;
-  // Upside: max gross = sum of every parlay's max profit (if they all won);
-  // to-win (net) = the most we can actually net, since offsetting positions
-  // can't all win in the same outcome. Symmetric to cost-paid / at-risk(net).
-  const maxWinNet = net.bestCase;
-  const winHedgedP = net.winOffsetPct >= 1 && (net.grossWin - net.bestCase) > 0.005;
 
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
     <div class="kpi" title="${escapeHtml(pvTip)}"><div class="label">portfolio value${evNote}</div><div class="value">${fmtMoney(pv)}</div></div>
-    <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay (gross) — the capital deployed. NET = worst-case net loss = our TRUE risk, after dual-direction offsets AND impossible-parlay sure-wins (a held NO on a structurally-impossible parlay can't lose, so it carries zero risk).${atRisk < totalCost - 0.005 ? ` Only ${fmtMoney(atRisk)} of the ${fmtMoney(totalCost)} cost is actually at risk.` : " Nothing is hedged/risk-free, so NET equals cost."}`)}">
+    <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay — the capital deployed. Deployment % = cost paid / (cost paid + free cash) = how much of this book's capital is working in the market right now.`)}">
       <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
-      <div class="kpi-half"><div class="label">at risk (net)</div><div class="value ${atRisk < totalCost - 0.005 ? "pos" : ""}">${fmtMoney(atRisk)}</div></div>
+      <div class="kpi-half"><div class="label">deployment</div><div class="value">${deployPct != null ? deployPct.toFixed(0) + "%" : "—"}</div></div>
     </div>
     <div class="kpi"><div class="label">expected current outcome${evNote}</div><div class="value ${pnlClass(evTotal)}">${fmtMoney(evTotal)}</div></div>
-    <div class="kpi kpi-split" title="${escapeHtml(`ROI (gross) = expected outcome ÷ total premium deployed (${fmtMoney(evTotal)} / ${fmtMoney(totalCost)}) — return on the capital tied up. RoR (net) = expected outcome ÷ worst-case net loss after offsets (${fmtMoney(evTotal)} / ${fmtMoney(atRisk)}) — return on the risk we actually carry. Netting pushes these apart: as offsetting flow cancels worst-case, RoR rises while ROI on capital stays flat. Equal when nothing is hedged.`)}">
-      <div class="kpi-half"><div class="label">ROI (gross)</div><div class="value ${pnlClass(roiGrossPct)}">${roiGrossPct != null ? roiGrossPct.toFixed(0) + "%" : "—"}</div></div>
-      <div class="kpi-half"><div class="label">RoR (net)</div><div class="value ${pnlClass(rorNetPct)}">${rorNetPct != null ? rorNetPct.toFixed(0) + "%" : "—"}</div></div>
-    </div>
-    <div class="kpi kpi-split" title="${escapeHtml(`Max gross = un-netted sum of every parlay's max profit (if they all won). TO WIN (net) = the most we can actually net — offsetting positions can't all win in the same outcome.${winHedgedP ? ` ${net.winOffsetPct}% of the upside is unreachable due to offsets.` : " Nothing offsets, so they're equal."}`)}">
-      <div class="kpi-half"><div class="label">max gross</div><div class="value pos">+${net.grossWin.toFixed(2)}</div></div>
-      <div class="kpi-half"><div class="label">to win (net)</div><div class="value ${maxWinNet >= 0 ? "pos" : "neg"}">${maxWinNet >= 0 ? "+" : ""}${maxWinNet.toFixed(2)}</div></div>
+    <div class="kpi kpi-split" title="${escapeHtml(`ROI = expected outcome ÷ cost paid (${fmtMoney(evTotal)} / ${fmtMoney(totalCost)}). To win = sum of every open parlay's max profit if it hits.`)}">
+      <div class="kpi-half"><div class="label">ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
+      <div class="kpi-half"><div class="label">to win</div><div class="value pos">+${maxWin.toFixed(2)}</div></div>
     </div>
   `;
 }

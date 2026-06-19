@@ -34,6 +34,9 @@ const DEFAULT_ACCOUNTS: DashAccount[] = [
   { key: "roth", marker: "roth", label: "ROTH", dashboardLabel: "ROTH",
     envSuffix: "_ROTH", fillsFile: "fills_roth.jsonl", hfName: "fills_roth.jsonl.gz",
     allowedSports: ["wc"], ownerTakes: false, portfolio: "peavler" },
+  { key: "beatty", marker: "beatty", label: "BEATTY", dashboardLabel: "Beatty",
+    envSuffix: "_BEATTY", fillsFile: "fills_beatty.jsonl", hfName: "fills_beatty.jsonl.gz",
+    allowedSports: ["wc"], ownerTakes: false, portfolio: "peavler" },
 ];
 
 function loadAccounts(): DashAccount[] {
