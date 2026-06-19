@@ -266,46 +266,42 @@ function flowSvg(buckets) {
 }
 
 // Expanded: unique shapes for this game with where each is CLEARING vs our bid.
+// A compact, wrapping pill layout (NOT a wide table) so it stays readable on a
+// phone — each shape is a block whose stat pills flow onto as many rows as fit.
 function shapesTableHtml(g) {
   const shapes = (g.shapes || []).slice().sort((a, b) =>
     (state.metric === "risk" ? b.risk - a.risk : b.rfqs - a.rfqs));
   if (!shapes.length) return `<div class="muted" style="padding:6px 2px">no shapes</div>`;
+  const pill = (lbl, val, cls = "") => `<span class="shp-pill ${cls}"><i>${lbl}</i>${val}</span>`;
   const body = shapes.map((s) => {
     const label = s.shape.includes(":") ? s.shape.split(":").slice(1).join(":").trim() : s.shape;
-    let clr = "—", clrCls = "muted";
+    const gap = (s.clearing_no_c != null && s.our_bid_c != null) ? (s.our_bid_c - s.clearing_no_c) : null;
+
+    let clrVal = "—", clrCls = "";
     if (s.clearing_no_c != null) {
       const rng = (s.clearing_lo != null && s.clearing_hi != null && s.clearing_lo !== s.clearing_hi)
-        ? ` <span class="muted">(${s.clearing_lo}–${s.clearing_hi})</span>` : "";
-      clr = `${s.clearing_no_c}c${rng}`;
-      // green if our bid is at/above clearing (we can win it); red if priced out
+        ? ` (${s.clearing_lo}–${s.clearing_hi})` : "";
+      clrVal = `${s.clearing_no_c}c${rng}`;
       if (s.our_bid_c != null) clrCls = s.our_bid_c >= s.clearing_no_c ? "pos" : "neg";
-      else clrCls = "";
     }
-    const gap = (s.clearing_no_c != null && s.our_bid_c != null) ? (s.our_bid_c - s.clearing_no_c) : null;
-    const gapTxt = gap == null ? "" : (gap >= 0 ? `+${gap}` : `${gap}`);
-    const won = s.won > 0 ? `<span class="pos">${fmtInt(s.won)}</span>` : "0";
-    return `<tr>
-      <td>${escapeHtml(label)}</td>
-      <td class="t-num">${fmtInt(s.rfqs)}</td>
-      <td class="t-num">${fmtMoney(s.risk)}</td>
-      <td class="t-num ${clrCls}">${clr}</td>
-      <td class="t-num">${s.our_bid_c != null ? s.our_bid_c + "c" : "—"}</td>
-      <td class="t-num ${gap != null ? (gap >= 0 ? "pos" : "neg") : "muted"}">${gapTxt}</td>
-      <td class="t-num">${fmtInt(s.quoted)}</td>
-      <td class="t-num">${won}</td>
-      <td class="t-num muted">${s.traded_pct}%</td>
-    </tr>`;
+    const pills = [
+      pill("RFQs", fmtInt(s.rfqs)),
+      pill("$ bud", fmtMoney(s.risk)),
+      pill("clears", clrVal, clrCls),
+      pill("our bid", s.our_bid_c != null ? s.our_bid_c + "c" : "—"),
+      gap != null ? pill("gap", (gap >= 0 ? `+${gap}` : `${gap}`), gap >= 0 ? "pos" : "neg") : "",
+      pill("quoted", fmtInt(s.quoted)),
+      pill("won", fmtInt(s.won), s.won > 0 ? "pos" : ""),
+      pill("traded", `${s.traded_pct}%`),
+    ].join("");
+    return `<div class="shp">
+      <div class="shp-name">${escapeHtml(label)}</div>
+      <div class="shp-stats">${pills}</div>
+    </div>`;
   }).join("");
   return `<div class="gx-sub">
-    <table class="recap-table breakdown-table">
-      <thead><tr>
-        <th>Shape</th><th class="t-num">RFQs</th><th class="t-num">$ budget</th>
-        <th class="t-num">clears NO</th><th class="t-num">our bid</th><th class="t-num">gap</th>
-        <th class="t-num">quoted</th><th class="t-num">won</th><th class="t-num">traded</th>
-      </tr></thead>
-      <tbody>${body}</tbody>
-    </table>
-    <div class="chart-caption">“clears NO” = where this shape's flow actually trades on the tape (100 − last YES). gap = our bid − clearing: <span class="pos">≥0 we can win it</span>, <span class="neg">&lt;0 priced out</span>. traded = % of sampled RFQs that have a print yet.</div>
+    <div class="shp-list">${body}</div>
+    <div class="chart-caption">“clears” = where this shape's flow actually trades (100 − last YES). gap = our bid − clearing: <span class="pos">≥0 we can win it</span>, <span class="neg">&lt;0 priced out</span>. traded = % of sampled RFQs with a print yet.</div>
   </div>`;
 }
 

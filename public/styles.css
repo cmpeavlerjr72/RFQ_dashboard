@@ -1506,10 +1506,29 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .gx-details { margin-top: 11px; border-top: 1px solid var(--border); padding-top: 10px;
   display: grid; grid-template-columns: 1fr; gap: 14px; }
 .gx-sub-head { font-size: 11px; color: var(--fg); font-weight: 700; margin-bottom: 3px; text-transform: uppercase; letter-spacing: .03em; }
+
+/* Expanded per-game shapes — compact wrapping pills (phone-readable; no wide
+   table that blows the card out horizontally). */
+.shp-list { display: flex; flex-direction: column; }
+.shp { padding: 8px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.shp:first-child { padding-top: 2px; }
+.shp:last-child { border-bottom: 0; }
+.shp-name { font-weight: 600; font-size: 13px; color: var(--fg); margin-bottom: 6px;
+  overflow-wrap: anywhere; word-break: break-word; }
+.shp-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+.shp-pill { display: inline-flex; align-items: baseline; gap: 5px; font-size: 12px;
+  background: var(--card-head); border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px 8px; color: var(--fg); white-space: nowrap; }
+.shp-pill i { font-style: normal; font-size: 9px; text-transform: uppercase;
+  letter-spacing: .03em; color: var(--muted); }
+.shp-pill.pos { color: var(--pos); border-color: rgba(21,128,61,0.4); }
+.shp-pill.neg { color: var(--neg); border-color: rgba(190,18,60,0.4); }
+
 @media (max-width: 720px) {
   #games-list { grid-template-columns: 1fr; }
+  /* Stop the card header KPIs from forcing the card wide on a phone. */
+  .gx-kpis { flex-wrap: wrap; gap: 6px 12px; }
 }
-
 
 /* ---- CLV vs Pinnacle close (recap tab) ---- */
 .clv-wrap { margin-top: 8px; }
