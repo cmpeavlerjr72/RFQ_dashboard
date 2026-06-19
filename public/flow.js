@@ -261,35 +261,41 @@ function decodeLeg(tok, sport, home, away) {
   let side = "yes", t = String(tok).trim();
   if (/\/NO$/i.test(t)) { side = "no"; t = t.replace(/\/NO$/i, "").trim(); }
   const nm = (c) => teamName(sport, c) || c;
-  let base = null, yes = t, no = `not ${t}`;
+  // label = full plain-English; sh = compact form (BTTS / USA / USA -1.5 / u2.5)
+  let base = null, yes = t, no = `not ${t}`, ys = t, ns = `~${t}`;
   if (/^BTTS$/i.test(t)) {
     base = (h, a) => h >= 1 && a >= 1; yes = "Both teams score"; no = "NOT both teams score";
+    ys = "BTTS"; ns = "BTTS✗";
   } else if (/^\d+$/.test(t)) {
     // Kalshi total ticker "N" is the half-line floor_strike N-0.5 (matches _pred and
     // the fill cards' "o2.5/u2.5"): YES = over N-0.5, NO = under N-0.5.
     const N = parseInt(t, 10), L = N - 0.5;
     base = (h, a) => (h + a) > L;
     yes = `Over ${L} goals`; no = `Under ${L} goals`;
+    ys = `o${L}`; ns = `u${L}`;
   } else {
     const m = t.match(/^([A-Za-z]{2,4})(\d*)$/);
     if (m) {
       const team = m[1].toUpperCase(), d = m[2];
       if (team === "TIE" || team === "DRAW") {
         base = (h, a) => h === a; yes = "Draw"; no = "NOT a draw";
+        ys = "draw"; ns = "draw✗";
       } else if (d) {
-        const D = parseInt(d, 10);
-        base = team === home ? (h, a) => (h - a) > D - 0.5
-             : team === away ? (h, a) => (a - h) > D - 0.5 : null;
+        const D = parseInt(d, 10), L = D - 0.5;
+        base = team === home ? (h, a) => (h - a) > L
+             : team === away ? (h, a) => (a - h) > L : null;
         yes = `${nm(team)} win by ${D}+`; no = `${nm(team)} do NOT win by ${D}+`;
+        ys = `${team} -${L}`; ns = `${team} -${L}✗`;
       } else {
         base = team === home ? (h, a) => h > a
              : team === away ? (h, a) => a > h : null;
         yes = `${nm(team)} to win`; no = `${nm(team)} do NOT win (draw or opponent)`;
+        ys = team; ns = `${team}✗`;
       }
     }
   }
   const pred = base ? (side === "no" ? (h, a) => !base(h, a) : base) : null;
-  return { raw: tok, label: side === "no" ? no : yes, pred };
+  return { raw: tok, label: side === "no" ? no : yes, short: side === "no" ? ns : ys, pred };
 }
 function decodeShape(shapeStr, sport, game) {
   const inside = shapeStr.includes(":") ? shapeStr.split(":").slice(1).join(":") : shapeStr;
@@ -328,16 +334,18 @@ function shapesTableHtml(g) {
   const mval = (s) => (state.metric === "risk" ? s.risk : s.rfqs);
   // decode each shape ONCE (reused by the occurrence chart + the detail blocks)
   const decoded = shapes.map((s) => decodeShape(s.shape, g.sport, g.game));
-  const shortLabel = (i) => decoded[i].map((l) => l.label).join(" / ");
+  // compact leg form for the chart: BTTS · USA · u2.5 / BTTS · USA -1.5 · u3.5
+  const shortLabel = (i) => decoded[i].map((l) => l.short).join(" · ");
 
-  // OCCURRENCES CHART — one horizontal bar per distinct shape (by current metric)
+  // OCCURRENCES CHART — one row per distinct shape: short legs on top (wrap so
+  // ALL legs read, no truncation), full-width bar below (by current metric).
   const maxv = Math.max(1, ...shapes.map(mval));
   const occChart = shapes.map((s, i) => {
-    const v = mval(s), w = Math.max(2, (100 * v) / maxv), lbl = shortLabel(i);
-    return `<div class="shp-bar-row" title="${escapeHtml(lbl)}">`
-      + `<span class="shp-bar-lbl">${escapeHtml(lbl)}</span>`
-      + `<span class="shp-bar-track"><span class="shp-bar-fill" style="width:${w.toFixed(1)}%"></span></span>`
-      + `<span class="shp-bar-val">${fmtMetric(v)}</span></div>`;
+    const v = mval(s), w = Math.max(2, (100 * v) / maxv);
+    return `<div class="shp-bar-row">`
+      + `<div class="shp-bar-top"><span class="shp-bar-lbl">${escapeHtml(shortLabel(i))}</span>`
+      + `<span class="shp-bar-val">${fmtMetric(v)}</span></div>`
+      + `<span class="shp-bar-track"><span class="shp-bar-fill" style="width:${w.toFixed(1)}%"></span></span></div>`;
   }).join("");
 
   const body = shapes.map((s, i) => {
@@ -356,10 +364,15 @@ function shapesTableHtml(g) {
       clrVal = (lo != null && hi != null && lo !== hi) ? `${lo}-${hi}c (typ ${med})` : `${med}c`;
       if (s.our_bid_c != null) clrCls = s.our_bid_c >= med ? "pos" : "neg";
     }
+    // naive (dumb-bot) NO price and how far the market clears from it
+    const naive = s.naive_no_c;
+    const vsNaive = (naive != null && s.clearing_no_c != null) ? Math.round(s.clearing_no_c - naive) : null;
     const pills = [
       pill("RFQs", fmtInt(s.rfqs)),
       pill("$ bud", fmtMoney(s.risk)),
       pill("clears", clrVal, clrCls),
+      naive != null ? pill("naive", `${naive}c`) : "",
+      vsNaive != null ? pill("mkt vs naive", (vsNaive >= 0 ? `+${vsNaive}` : `${vsNaive}`), vsNaive >= 0 ? "pos" : "neg") : "",
       pill("our bid", s.our_bid_c != null ? s.our_bid_c + "c" : "—"),
       gap != null ? pill("gap", (gap >= 0 ? `+${gap}` : `${gap}`), gap >= 0 ? "pos" : "neg") : "",
       pill("traded", `${s.traded_pct}%`),
@@ -374,7 +387,7 @@ function shapesTableHtml(g) {
     <div class="shp-sub-head">Shapes by occurrence · ${metricLabel()}</div>
     <div class="shp-chart">${occChart}</div>
     <div class="shp-list">${body}</div>
-    <div class="chart-caption">“clears” = where this shape's flow actually trades (100 − last YES). gap = our bid − clearing: <span class="pos">≥0 we can win it</span>, <span class="neg">&lt;0 priced out</span>. traded = % of sampled RFQs with a print yet.</div>
+    <div class="chart-caption">“clears” = the RANGE this shape prints at (typ = median). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears vs that. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). traded = % of sampled RFQs with a print yet.</div>
   </div>`;
 }
 
