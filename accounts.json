@@ -58,6 +58,20 @@
       "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
     },
     {
+      "key": "croley",
+      "portfolio": "peavler",
+      "marker": "croley",
+      "label": "CROLEY",
+      "dashboard_label": "Croley",
+      "env_suffix": "_CROLEY",
+      "fills_file": "fills_croley.jsonl",
+      "hf_name": "fills_croley.jsonl.gz",
+      "allowed_sports": ["wc"],
+      "blocked_sports": [],
+      "owner_takes": false,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    },
+    {
       "key": "heu1",
       "portfolio": "heuermann",
       "marker": "heu1",
