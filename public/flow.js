@@ -211,7 +211,7 @@ function gameCardHtml(g) {
       <div class="gx-kpis">
         <span class="gx-kpi"><b>${fmtInt(g.rfqs)}</b> RFQs</span>
         <span class="gx-kpi" title="True volume that cleared on this game's impossible combos (every maker), off the trade tape.">cleared <b>${fmtMetric(clearedOf(g))}</b>${state.metric === "risk" ? ` · <b>${fmtInt(g.cleared_ct)}</b> ct` : ""}</span>
-        ${admin && (g.our_no || 0) > 0 ? `<span class="gx-kpi pos" title="Our open impossible-parlay exposure on this game (= Cost Paid; admin only).">ours <b>${fmtMetric(oursOf(g))}</b></span>` : ""}
+        ${admin && (g.our_no || 0) > 0 ? `<span class="gx-kpi pos" title="Our open impossible-parlay exposure on this game (= Cost Paid), and the share of this game's cleared contracts we captured (admin only).">ours <b>${fmtMetric(oursOf(g))}</b>${g.cleared_ct > 0 ? ` · ${Math.min(100, Math.round(100 * (g.our_ct || 0) / g.cleared_ct))}% captured` : ""}</span>` : ""}
         <span class="gx-kpi ${trend.cls}">${trend.arrow} ${trend.label}</span>
         <span class="gx-toggle">${expanded ? "▾" : "▸"} shapes</span>
       </div>
@@ -394,11 +394,14 @@ function shapesTableHtml(g) {
     // naive (dumb-bot) NO price and how far the market clears from it
     const naive = s.naive_no_c;
     const vsNaive = (naive != null && s.clearing_no_c != null) ? Math.round(s.clearing_no_c - naive) : null;
+    // how much of THIS shape's cleared flow we captured (our contracts / total cleared)
+    const capPct = (s.cleared_ct > 0) ? Math.min(100, Math.round(100 * (s.our_ct || 0) / s.cleared_ct)) : null;
     const pills = [
       pill("RFQs", fmtInt(s.rfqs)),
       pill("$ bud", fmtMoney(s.risk)),
       pill("cleared", `${fmtInt(s.cleared_ct || 0)} ct · ${fmtMoney(s.cleared_no || 0)}`, "pos"),
       adminS ? pill("ours", `${fmtInt(s.our_ct || 0)} ct · ${fmtMoney(s.our_no || 0)}`, "pos") : "",
+      adminS ? pill("captured", capPct != null ? `${capPct}%` : "—", capPct != null && capPct >= 50 ? "pos" : (capPct != null && capPct < 20 ? "neg" : "")) : "",
       pill("clears", clrVal, clrCls),
       naive != null ? pill("naive", `${naive}c`) : "",
       vsNaive != null ? pill("mkt vs naive", (vsNaive >= 0 ? `+${vsNaive}` : `${vsNaive}`), vsNaive >= 0 ? "pos" : "neg") : "",
@@ -431,7 +434,7 @@ function shapesTableHtml(g) {
     <div class="shp-sub-head">Shapes by occurrence · ${metricLabel()}</div>
     <div class="shp-chart">${occChart}</div>
     <div class="shp-list">${body}</div>
-    <div class="chart-caption">“cleared” = the TRUE volume that printed on this shape's combo — contracts and NO-side $ off the trade tape (EVERY maker, incl. resting/CLOB fills with no RFQ). ${adminS ? `“ours” = our open impossible-parlay exposure on this shape (= Cost Paid; admin only). ` : ""}“clears” = the price RANGE it prints at (typ = median NO ¢). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). “by size” = RFQ-count distribution by taker $ size (bar = share), left→small right→large.</div>
+    <div class="chart-caption">“cleared” = the TRUE volume that printed on this shape's combo — contracts and NO-side $ off the trade tape (EVERY maker, incl. resting/CLOB fills with no RFQ). ${adminS ? `“ours” = our open impossible-parlay exposure on this shape (= Cost Paid). “captured” = our share of the contracts that cleared on this shape (our ct ÷ cleared ct, capped 100%). Admin only. ` : ""}“clears” = the price RANGE it prints at (typ = median NO ¢). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). “by size” = RFQ-count distribution by taker $ size (bar = share), left→small right→large.</div>
   </div>`;
 }
 
