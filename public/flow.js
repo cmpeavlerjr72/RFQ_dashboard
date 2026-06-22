@@ -151,7 +151,7 @@ function render() {
     kpi("Impossible RFQs", fmtInt(s.rfqs), "", "firehose demand today"),
     kpi("Cleared (NO $)", fmtMoney(s.cleared_no), "pos", `${fmtInt(s.cleared_ct)} contracts · all makers`),
     d.admin
-      ? kpi("Our fills (NO $)", fmtMoney(s.our_no || 0), "pos", `${fmtInt(s.our_ct || 0)} ct · all impossible parlays (= Cost Paid)`)
+      ? kpi("Our exposure (Cost Paid)", fmtMoney(s.our_no || 0), "pos", `${fmtInt(s.our_ct || 0)} ct open · = Live tab`)
       : kpi("Games", fmtInt(s.n_games), "", "with impossible flow"),
     kpi("Our NO bid", d.our_no_bid_c != null ? `${d.our_no_bid_c}c` : "—", "", "sniper greed dial"),
   ].join("");
@@ -203,7 +203,6 @@ function gameCardHtml(g) {
     : `<span class="gx-team">${escapeHtml(hName)}</span>`;
 
   const admin = !!(state.data && state.data.admin);
-  const ourShareG = (admin && g.cleared_no > 0) ? Math.round(100 * (g.our_no || 0) / g.cleared_no) : null;
   const expanded = state.expandedGames.has(g.game);
   return `
   <div class="gx-card${expanded ? " open" : ""}" data-game="${escapeHtml(g.game)}">
@@ -212,16 +211,14 @@ function gameCardHtml(g) {
       <div class="gx-kpis">
         <span class="gx-kpi"><b>${fmtInt(g.rfqs)}</b> RFQs</span>
         <span class="gx-kpi" title="True volume that cleared on this game's impossible combos (every maker), off the trade tape.">cleared <b>${fmtMetric(clearedOf(g))}</b>${state.metric === "risk" ? ` · <b>${fmtInt(g.cleared_ct)}</b> ct` : ""}</span>
-        ${admin ? `<span class="gx-kpi pos" title="Volume OUR accounts cleared (admin only — not shown on shared dashboards).">ours <b>${fmtMetric(oursOf(g))}</b>${ourShareG != null ? ` · ${ourShareG}%` : ""}</span>` : ""}
+        ${admin && (g.our_no || 0) > 0 ? `<span class="gx-kpi pos" title="Our open impossible-parlay exposure on this game (= Cost Paid; admin only).">ours <b>${fmtMetric(oursOf(g))}</b></span>` : ""}
         <span class="gx-kpi ${trend.cls}">${trend.arrow} ${trend.label}</span>
         <span class="gx-toggle">${expanded ? "▾" : "▸"} shapes</span>
       </div>
     </div>
     <div class="gx-chart">${chart}
       <div class="gx-legend">
-        ${admin ? `<span class="gx-lg"><span class="gx-sw" style="background:#16a34a"></span>our fills</span>
-        <span class="gx-lg"><span class="gx-sw" style="background:#86efac"></span>others cleared</span>`
-        : `<span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>cleared (all makers)</span>`}
+        <span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>cleared (all makers)</span>
         <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24;opacity:.75"></span>RFQ demand</span>
       </div>
     </div>
@@ -230,14 +227,13 @@ function gameCardHtml(g) {
 }
 
 // Cleared volume per 10-min bucket — green bar = the TRUE volume that printed on
-// the combos (off the trade tape), NOT the old RFQ-match subset. Admin: the bar
-// splits into our fills (vivid, base) + rest of market (pale). A faint dashed line
-// tracks RFQ demand (firehose) for reference (it sits low — many contracts clear
-// per RFQ, plus resting fills with no RFQ at all).
+// the combos (off the trade tape). A faint dashed line tracks RFQ demand (firehose)
+// for reference (it sits low — many contracts clear per RFQ, plus resting fills with
+// no RFQ at all). "Our exposure" is a current positions snapshot (no per-fill time),
+// so it's shown as KPIs, not split into these time buckets.
 function flowSvg(buckets) {
   const W = 600, H = 130, padL = 46, padR = 8, padT = 8, padB = 18;
   const inW = W - padL - padR, inH = H - padT - padB, n = buckets.length;
-  const admin = !!(state.data && state.data.admin);
   let yMax = 0;
   for (const b of buckets) yMax = Math.max(yMax, clearedOf(b), demandOf(b));
   yMax = yMax || 1;
@@ -250,14 +246,8 @@ function flowSvg(buckets) {
   buckets.forEach((b, i) => {
     const cleared = clearedOf(b);
     if (cleared <= 0) return;
-    const cx = xFor(i) - bw / 2;
-    const ours = admin ? Math.min(oursOf(b), cleared) : 0;
-    if (ours > 0) {                                   // our fills (vivid green) at the base
-      const yb = yFor(ours);
-      bars += `<rect x="${cx.toFixed(1)}" y="${yb.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - yb).toFixed(1)}" fill="#16a34a"><title>${etHM(b.ts)} · our fills ${fmtMetric(ours)} of ${fmtMetric(cleared)} cleared</title></rect>`;
-    }
-    const yc = yFor(cleared), yr = yFor(ours);        // rest of market (pale) above ours
-    bars += `<rect x="${cx.toFixed(1)}" y="${yc.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yr - yc).toFixed(1)}" fill="${admin ? "#86efac" : "var(--pos)"}"><title>${etHM(b.ts)} · cleared ${fmtMetric(cleared)}${admin ? ` (${fmtMetric(cleared - ours)} others)` : ""} · demand ${fmtMetric(demandOf(b))}</title></rect>`;
+    const cx = xFor(i) - bw / 2, yc = yFor(cleared);
+    bars += `<rect x="${cx.toFixed(1)}" y="${yc.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - yc).toFixed(1)}" fill="var(--pos)"><title>${etHM(b.ts)} · cleared ${fmtMetric(cleared)} · demand ${fmtMetric(demandOf(b))}</title></rect>`;
   });
 
   // RFQ demand reference — faint dashed line across bucket centers.
@@ -441,7 +431,7 @@ function shapesTableHtml(g) {
     <div class="shp-sub-head">Shapes by occurrence · ${metricLabel()}</div>
     <div class="shp-chart">${occChart}</div>
     <div class="shp-list">${body}</div>
-    <div class="chart-caption">“cleared” = the TRUE volume that printed on this shape's combo — contracts and NO-side $ off the trade tape (EVERY maker, incl. resting/CLOB fills with no RFQ). ${adminS ? `“ours” = the slice OUR accounts filled (admin only). ` : ""}“clears” = the price RANGE it prints at (typ = median NO ¢). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). “by size” = RFQ-count distribution by taker $ size (bar = share), left→small right→large.</div>
+    <div class="chart-caption">“cleared” = the TRUE volume that printed on this shape's combo — contracts and NO-side $ off the trade tape (EVERY maker, incl. resting/CLOB fills with no RFQ). ${adminS ? `“ours” = our open impossible-parlay exposure on this shape (= Cost Paid; admin only). ` : ""}“clears” = the price RANGE it prints at (typ = median NO ¢). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). “by size” = RFQ-count distribution by taker $ size (bar = share), left→small right→large.</div>
   </div>`;
 }
 

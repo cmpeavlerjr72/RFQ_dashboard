@@ -114,10 +114,12 @@ export async function getImpFlow(dateRaw: string, force = false): Promise<ImpFlo
   const ttl = date >= currentEtDate() ? 60_000 : 5 * 60_000;
   return cache.getOrFetch(date, async () => {
     const r = await load(date);
-    if (IS_ADMIN) {
-      // best-effort — a fills error must not blank the public cleared numbers.
+    // Our exposure (Cost Paid) is a CURRENT positions snapshot — only meaningful
+    // for today, so skip the overlay on past dates.
+    if (IS_ADMIN && date >= currentEtDate()) {
+      // best-effort — a positions error must not blank the public cleared numbers.
       try { await mergeOurFills(r, date); } catch (e) {
-        console.warn(`impflow: our-fills overlay failed for ${date}:`, (e as any)?.message || e);
+        console.warn(`impflow: our-position overlay failed for ${date}:`, (e as any)?.message || e);
       }
     }
     return r;
