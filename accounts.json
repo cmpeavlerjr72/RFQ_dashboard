@@ -1,5 +1,5 @@
 {
-  "_doc": "ACCOUNT REGISTRY (dashboard mirror of kalshi-rfq/config/accounts.json). The dashboard server filters these by the PORTFOLIO env var so ONE codebase serves both books as two Render services: MVPeav (PORTFOLIO=peavler) and Sim2Win (PORTFOLIO=heuermann). Fields mirror config/accounts.json; `portfolio` = isolation domain (absent => peavler). The Heuermann entries below are present so the Sim2Win instance renders its (empty) account shell BEFORE the live accounts exist — they carry NO creds until KALSHI_API_KEY_ID_HEU1/_HEU2/_HEU3 are set in that Render service, and show empty until the heuermann HF fills repo has data. Keep this in sync with config/accounts.json.",
+  "_doc": "ACCOUNT REGISTRY (dashboard mirror of kalshi-rfq/config/accounts.json). The dashboard server filters these by the PORTFOLIO env var so ONE codebase serves each book as its own Render service: MVPeav (PORTFOLIO=peavler), Sim2Win (PORTFOLIO=heuermann), and Beatty (PORTFOLIO=beatty). Fields mirror config/accounts.json; `portfolio` = isolation domain (absent => peavler). The Heuermann entries below are present so the Sim2Win instance renders its (empty) account shell BEFORE the live accounts exist — they carry NO creds until KALSHI_API_KEY_ID_HEU1/_HEU2/_HEU3 are set in that Render service, and show empty until the heuermann HF fills repo has data. Keep this in sync with config/accounts.json.",
   "accounts": [
     {
       "key": "primary",
@@ -45,7 +45,7 @@
     },
     {
       "key": "beatty",
-      "portfolio": "peavler",
+      "portfolio": "beatty",
       "marker": "beatty",
       "label": "BEATTY",
       "dashboard_label": "Beatty",

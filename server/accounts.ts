@@ -36,7 +36,7 @@ const DEFAULT_ACCOUNTS: DashAccount[] = [
     allowedSports: ["wc"], ownerTakes: false, portfolio: "peavler" },
   { key: "beatty", marker: "beatty", label: "BEATTY", dashboardLabel: "Beatty",
     envSuffix: "_BEATTY", fillsFile: "fills_beatty.jsonl", hfName: "fills_beatty.jsonl.gz",
-    allowedSports: ["wc"], ownerTakes: false, portfolio: "peavler" },
+    allowedSports: ["wc"], ownerTakes: false, portfolio: "beatty" },
 ];
 
 function loadAccounts(): DashAccount[] {
@@ -74,10 +74,11 @@ function loadAccounts(): DashAccount[] {
 }
 
 // PORTFOLIO scopes this dashboard INSTANCE to ONE autonomous book. The SAME
-// codebase runs as two Render services — MVPeav (PORTFOLIO unset/"peavler") and
-// Sim2Win (PORTFOLIO="heuermann") — so the two dashboards can NEVER drift in
-// functionality; they differ only by env (PORTFOLIO, HF_FILLS_REPO, DASH_TITLE,
-// per-account creds). Default "peavler" keeps the original MVPeav behavior.
+// codebase runs as separate Render services — MVPeav (PORTFOLIO unset/"peavler"),
+// Sim2Win (PORTFOLIO="heuermann"), and Beatty (PORTFOLIO="beatty") — so the
+// dashboards can NEVER drift in functionality; they differ only by env (PORTFOLIO,
+// HF_FILLS_REPO, DASH_TITLE, per-account creds). Default "peavler" keeps the
+// original MVPeav behavior.
 export const PORTFOLIO: string = (process.env.PORTFOLIO || "peavler").trim();
 const _ALL_ACCOUNTS: DashAccount[] = loadAccounts();
 export const DASH_ACCOUNTS: DashAccount[] =

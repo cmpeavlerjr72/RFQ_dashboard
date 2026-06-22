@@ -56,6 +56,7 @@ const PORT = Number(process.env.PORT || 8090);
 const DASH_BRAND = process.env.DASH_BRAND ||
   (PORTFOLIO === "peavler" ? "MVPeav"
     : PORTFOLIO === "heuermann" ? "Sim2Win"
+    : PORTFOLIO === "beatty" ? "Beatty"
     : PORTFOLIO);
 const DASH_TITLE = process.env.DASH_TITLE || `${DASH_BRAND} Dashboard`;
 
