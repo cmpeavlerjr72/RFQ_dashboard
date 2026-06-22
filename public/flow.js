@@ -147,12 +147,11 @@ function render() {
   $("meta-text").textContent =
     `${d.date} · ${fmtInt(s.rfqs)} impossible RFQs · ${fmtMoney(s.cleared_no)} cleared · ${s.n_games} games · ${d.source}${d.admin ? " · admin" : ""} · upd ${upd}`;
 
-  const ourShare = (d.admin && s.cleared_no > 0) ? Math.round(100 * (s.our_no || 0) / s.cleared_no) : null;
   $("summary").innerHTML = [
     kpi("Impossible RFQs", fmtInt(s.rfqs), "", "firehose demand today"),
     kpi("Cleared (NO $)", fmtMoney(s.cleared_no), "pos", `${fmtInt(s.cleared_ct)} contracts · all makers`),
     d.admin
-      ? kpi("Our fills (NO $)", fmtMoney(s.our_no || 0), "pos", `${fmtInt(s.our_ct || 0)} ct · ${ourShare}% of cleared`)
+      ? kpi("Our fills (NO $)", fmtMoney(s.our_no || 0), "pos", `${fmtInt(s.our_ct || 0)} ct · all impossible parlays (= Cost Paid)`)
       : kpi("Games", fmtInt(s.n_games), "", "with impossible flow"),
     kpi("Our NO bid", d.our_no_bid_c != null ? `${d.our_no_bid_c}c` : "—", "", "sniper greed dial"),
   ].join("");

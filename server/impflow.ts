@@ -63,7 +63,8 @@ export interface ImpFlowResult {
   our_no_bid_c: number | null;
   bucket_s: number;
   summary: { rfqs: number; risk: number; cleared_ct: number; cleared_no: number; n_games: number;
-             our_ct?: number; our_no?: number };
+             our_ct?: number; our_no?: number;          // admin: ALL our maker impossible-parlay fills
+             our_attr_ct?: number; our_attr_no?: number };  // admin: the part shown on the game cards
   games: ImpGame[];
   source: "local" | "hf" | "empty";
   fetched_at: string;
