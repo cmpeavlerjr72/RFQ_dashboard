@@ -80,9 +80,14 @@ function loadAccounts(): DashAccount[] {
 // HF_FILLS_REPO, DASH_TITLE, per-account creds). Default "peavler" keeps the
 // original MVPeav behavior.
 export const PORTFOLIO: string = (process.env.PORTFOLIO || "peavler").trim();
+// "all"/"admin" = a cross-portfolio ADMIN view: every account from every book in
+// ONE dashboard (the Overall aggregate then sums across all of them). Requires ALL
+// per-account creds set in that single Render service. Any other value scopes to the
+// one matching portfolio (the normal per-book services) — unchanged behavior.
+export const ADMIN_ALL: boolean = PORTFOLIO === "all" || PORTFOLIO === "admin";
 const _ALL_ACCOUNTS: DashAccount[] = loadAccounts();
 export const DASH_ACCOUNTS: DashAccount[] =
-  _ALL_ACCOUNTS.filter((a) => a.portfolio === PORTFOLIO);
+  ADMIN_ALL ? _ALL_ACCOUNTS : _ALL_ACCOUNTS.filter((a) => a.portfolio === PORTFOLIO);
 if (!DASH_ACCOUNTS.length) {
   console.warn(
     `accounts: PORTFOLIO='${PORTFOLIO}' matched 0 of ${_ALL_ACCOUNTS.length} accounts ` +

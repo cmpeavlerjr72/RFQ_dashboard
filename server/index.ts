@@ -57,6 +57,7 @@ const DASH_BRAND = process.env.DASH_BRAND ||
   (PORTFOLIO === "peavler" ? "MVPeav"
     : PORTFOLIO === "heuermann" ? "Sim2Win"
     : PORTFOLIO === "beatty" ? "Beatty"
+    : (PORTFOLIO === "all" || PORTFOLIO === "admin") ? "Admin"
     : PORTFOLIO);
 const DASH_TITLE = process.env.DASH_TITLE || `${DASH_BRAND} Dashboard`;
 
