@@ -358,6 +358,7 @@ function shapesTableHtml(g) {
   if (!shapes.length) return `<div class="muted" style="padding:6px 2px">no shapes</div>`;
   const pill = (lbl, val, cls = "") => `<span class="shp-pill ${cls}"><i>${lbl}</i>${val}</span>`;
   const mval = (s) => (state.metric === "risk" ? s.risk : s.rfqs);
+  const adminS = !!(state.data && state.data.admin);   // used by both the pills and the caption
   // decode each shape ONCE (reused by the occurrence chart + the detail blocks)
   const decoded = shapes.map((s) => decodeShape(s.shape, g.sport, g.game));
   // compact leg form for the chart: BTTS · USA · u2.5 / BTTS · USA -1.5 · u3.5
@@ -393,7 +394,6 @@ function shapesTableHtml(g) {
     // naive (dumb-bot) NO price and how far the market clears from it
     const naive = s.naive_no_c;
     const vsNaive = (naive != null && s.clearing_no_c != null) ? Math.round(s.clearing_no_c - naive) : null;
-    const adminS = !!(state.data && state.data.admin);
     const pills = [
       pill("RFQs", fmtInt(s.rfqs)),
       pill("$ bud", fmtMoney(s.risk)),
