@@ -46,10 +46,17 @@ function todayEt() {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
-// metric accessors (firehose total vs the part that actually CLEARED/traded)
-const fireOf = (c) => (state.metric === "risk" ? c.risk : c.rfqs);
-const clearedOf = (c) => (state.metric === "risk" ? (c.cleared_risk || 0) : (c.cleared || 0));
-const metricLabel = () => (state.metric === "risk" ? "$ budget" : "# RFQs");
+// metric accessors. DEMAND = the firehose (RFQ count / taker target $) — a faint
+// reference. CLEARED = the TRUE volume that printed on the combo (contracts in #
+// mode, NO-side $ in $ mode), measured off the trade tape. OURS = our accounts'
+// fills (admin-only overlay). Bucket fields are cl_ct/cl_no; game/shape totals are
+// cleared_ct/cleared_no — accept either.
+const demandOf = (c) => (state.metric === "risk" ? (c.risk || 0) : (c.rfqs || 0));
+const clearedOf = (c) => (state.metric === "risk"
+  ? (c.cl_no != null ? c.cl_no : (c.cleared_no || 0))
+  : (c.cl_ct != null ? c.cl_ct : (c.cleared_ct || 0)));
+const oursOf = (c) => (state.metric === "risk" ? (c.our_no || 0) : (c.our_ct || 0));
+const metricLabel = () => (state.metric === "risk" ? "$ (NO-side)" : "# contracts");
 const fmtMetric = (n) => (state.metric === "risk" ? fmtMoney(n) : fmtInt(n));
 
 // ---- team/flag helpers ----
@@ -135,15 +142,18 @@ function kpi(label, value, cls = "", sub = "") {
 function render() {
   const d = state.data;
   if (!d) return;
-  const s = d.summary || { rfqs: 0, risk: 0, cleared_rfqs: 0, cleared_risk: 0, n_games: 0 };
+  const s = d.summary || { rfqs: 0, risk: 0, cleared_ct: 0, cleared_no: 0, n_games: 0 };
   const upd = d.updated_at ? new Date(d.updated_at * 1000).toLocaleTimeString() : "—";
   $("meta-text").textContent =
-    `${d.date} · ${fmtInt(s.rfqs)} impossible RFQs · ${s.n_games} games · ${d.source} · upd ${upd}`;
+    `${d.date} · ${fmtInt(s.rfqs)} impossible RFQs · ${fmtMoney(s.cleared_no)} cleared · ${s.n_games} games · ${d.source}${d.admin ? " · admin" : ""} · upd ${upd}`;
 
+  const ourShare = (d.admin && s.cleared_no > 0) ? Math.round(100 * (s.our_no || 0) / s.cleared_no) : null;
   $("summary").innerHTML = [
-    kpi("Impossible RFQs", fmtInt(s.rfqs), "", "in the firehose today"),
-    kpi("$ budget (free money)", fmtMoney(s.risk), "", "taker target cost"),
-    kpi("Games", fmtInt(s.n_games), "", "with impossible flow"),
+    kpi("Impossible RFQs", fmtInt(s.rfqs), "", "firehose demand today"),
+    kpi("Cleared (NO $)", fmtMoney(s.cleared_no), "pos", `${fmtInt(s.cleared_ct)} contracts · all makers`),
+    d.admin
+      ? kpi("Our fills (NO $)", fmtMoney(s.our_no || 0), "pos", `${fmtInt(s.our_ct || 0)} ct · ${ourShare}% of cleared`)
+      : kpi("Games", fmtInt(s.n_games), "", "with impossible flow"),
     kpi("Our NO bid", d.our_no_bid_c != null ? `${d.our_no_bid_c}c` : "—", "", "sniper greed dial"),
   ].join("");
 
@@ -159,12 +169,12 @@ function render() {
   $("empty-wrap").style.display = "none";
   renderGames();
   $("footer-text").textContent =
-    `${fmtInt(s.rfqs)} impossible RFQs · ${fmtMoney(s.risk)} budget · ${s.n_games} games`;
+    `${fmtInt(s.rfqs)} RFQs · ${fmtMoney(s.cleared_no)} cleared (${fmtInt(s.cleared_ct)} ct) · ${s.n_games} games`;
 }
 
 const avg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 function trendOf(buckets) {
-  const totals = buckets.map((b) => fireOf(b));
+  const totals = buckets.map((b) => clearedOf(b));
   if (totals.length < 4) return { label: "—", cls: "muted", arrow: "" };
   const k = Math.max(1, Math.floor(totals.length / 3));
   const early = avg(totals.slice(0, k)), late = avg(totals.slice(-k));
@@ -178,7 +188,7 @@ function renderGames() {
   const wrap = $("games-wrap");
   wrap.style.display = "block";
   $("games-hint").textContent =
-    `${metricLabel()} per 10-min window · busiest first · click a game for its shapes & clearing prices`;
+    `cleared volume (${metricLabel()}) per 10-min window · dashed line = RFQ demand · click a game for shapes & clearing`;
   $("games-list").innerHTML = state.data.games.map(gameCardHtml).join("");
 }
 
@@ -193,56 +203,69 @@ function gameCardHtml(g) {
     ? `${flagImg(g.sport, home)}<span class="gx-team">${escapeHtml(hName)}</span><span class="gx-vs">vs</span><span class="gx-team">${escapeHtml(aName)}</span>${flagImg(g.sport, away)}`
     : `<span class="gx-team">${escapeHtml(hName)}</span>`;
 
-  const clearedPct = g.rfqs > 0 ? (100 * (g.cleared_rfqs || 0) / g.rfqs) : 0;
+  const admin = !!(state.data && state.data.admin);
+  const ourShareG = (admin && g.cleared_no > 0) ? Math.round(100 * (g.our_no || 0) / g.cleared_no) : null;
   const expanded = state.expandedGames.has(g.game);
   return `
   <div class="gx-card${expanded ? " open" : ""}" data-game="${escapeHtml(g.game)}">
     <div class="gx-head">
       <div class="gx-match">${matchup}<span class="gx-sport">${escapeHtml(g.sport)}</span></div>
       <div class="gx-kpis">
-        <span class="gx-kpi"><b>${fmtMetric(fireOf(g))}</b> flow</span>
         <span class="gx-kpi"><b>${fmtInt(g.rfqs)}</b> RFQs</span>
-        <span class="gx-kpi" title="Share of this game's impossible RFQs that actually traded, and the $ of flow that cleared.">cleared <b>${fmtPct(clearedPct)}</b> · <b>${fmtMoney(g.cleared_risk || 0)}</b></span>
+        <span class="gx-kpi" title="True volume that cleared on this game's impossible combos (every maker), off the trade tape.">cleared <b>${fmtMetric(clearedOf(g))}</b>${state.metric === "risk" ? ` · <b>${fmtInt(g.cleared_ct)}</b> ct` : ""}</span>
+        ${admin ? `<span class="gx-kpi pos" title="Volume OUR accounts cleared (admin only — not shown on shared dashboards).">ours <b>${fmtMetric(oursOf(g))}</b>${ourShareG != null ? ` · ${ourShareG}%` : ""}</span>` : ""}
         <span class="gx-kpi ${trend.cls}">${trend.arrow} ${trend.label}</span>
         <span class="gx-toggle">${expanded ? "▾" : "▸"} shapes</span>
       </div>
     </div>
     <div class="gx-chart">${chart}
       <div class="gx-legend">
-        <span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>cleared</span>
-        <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24"></span>uncleared</span>
+        ${admin ? `<span class="gx-lg"><span class="gx-sw" style="background:#16a34a"></span>our fills</span>
+        <span class="gx-lg"><span class="gx-sw" style="background:#86efac"></span>others cleared</span>`
+        : `<span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>cleared (all makers)</span>`}
+        <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24;opacity:.75"></span>RFQ demand</span>
       </div>
     </div>
     <div class="gx-details">${expanded ? shapesTableHtml(g) : ""}</div>
   </div>`;
 }
 
-// Impossible-RFQ flow per 10-min bucket, STACKED: cleared (traded, green) at the
-// base + uncleared (gold) above; total bar height = the firehose for that window.
+// Cleared volume per 10-min bucket — green bar = the TRUE volume that printed on
+// the combos (off the trade tape), NOT the old RFQ-match subset. Admin: the bar
+// splits into our fills (vivid, base) + rest of market (pale). A faint dashed line
+// tracks RFQ demand (firehose) for reference (it sits low — many contracts clear
+// per RFQ, plus resting fills with no RFQ at all).
 function flowSvg(buckets) {
   const W = 600, H = 130, padL = 46, padR = 8, padT = 8, padB = 18;
   const inW = W - padL - padR, inH = H - padT - padB, n = buckets.length;
+  const admin = !!(state.data && state.data.admin);
   let yMax = 0;
-  for (const b of buckets) yMax = Math.max(yMax, fireOf(b));
+  for (const b of buckets) yMax = Math.max(yMax, clearedOf(b), demandOf(b));
   yMax = yMax || 1;
   const bw = Math.max(1, (inW / n) * 0.84);
   const xFor = (i) => padL + (i + 0.5) * (inW / n);
   const yFor = (v) => padT + inH - (v / yMax) * inH;
+  const y0 = yFor(0);
 
   let bars = "";
   buckets.forEach((b, i) => {
-    const fire = fireOf(b);
-    if (fire <= 0) return;
-    const cl = Math.min(clearedOf(b), fire), cx = xFor(i) - bw / 2, y0 = yFor(0);
-    if (cl > 0) {
-      const yc = yFor(cl);
-      bars += `<rect x="${cx.toFixed(1)}" y="${yc.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - yc).toFixed(1)}" fill="var(--pos)"><title>${etHM(b.ts)} · cleared ${fmtMetric(cl)} of ${fmtMetric(fire)}</title></rect>`;
+    const cleared = clearedOf(b);
+    if (cleared <= 0) return;
+    const cx = xFor(i) - bw / 2;
+    const ours = admin ? Math.min(oursOf(b), cleared) : 0;
+    if (ours > 0) {                                   // our fills (vivid green) at the base
+      const yb = yFor(ours);
+      bars += `<rect x="${cx.toFixed(1)}" y="${yb.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, y0 - yb).toFixed(1)}" fill="#16a34a"><title>${etHM(b.ts)} · our fills ${fmtMetric(ours)} of ${fmtMetric(cleared)} cleared</title></rect>`;
     }
-    if (fire - cl > 0) {
-      const yt = yFor(fire), yc = yFor(cl);
-      bars += `<rect x="${cx.toFixed(1)}" y="${yt.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yc - yt).toFixed(1)}" fill="#fbbf24"><title>${etHM(b.ts)} · uncleared ${fmtMetric(fire - cl)} of ${fmtMetric(fire)}</title></rect>`;
-    }
+    const yc = yFor(cleared), yr = yFor(ours);        // rest of market (pale) above ours
+    bars += `<rect x="${cx.toFixed(1)}" y="${yc.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, yr - yc).toFixed(1)}" fill="${admin ? "#86efac" : "var(--pos)"}"><title>${etHM(b.ts)} · cleared ${fmtMetric(cleared)}${admin ? ` (${fmtMetric(cleared - ours)} others)` : ""} · demand ${fmtMetric(demandOf(b))}</title></rect>`;
   });
+
+  // RFQ demand reference — faint dashed line across bucket centers.
+  const pts = buckets.map((b, i) => `${xFor(i).toFixed(1)},${yFor(demandOf(b)).toFixed(1)}`).join(" ");
+  const demandLine = pts
+    ? `<polyline points="${pts}" fill="none" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.75"/>`
+    : "";
 
   const yTicks = [];
   for (let t = 0; t <= 2; t++) {
@@ -255,7 +278,7 @@ function flowSvg(buckets) {
     xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle">${etHM(buckets[i].ts)}</text>`);
   }
   return `<svg class="roi-chart flow-bars gx-svg" viewBox="0 0 ${W} ${H}">
-    <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g><g class="axis-x">${xLabels.join("")}</g>
+    <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g>${demandLine}<g class="axis-x">${xLabels.join("")}</g>
   </svg>`;
 }
 
@@ -381,15 +404,17 @@ function shapesTableHtml(g) {
     // naive (dumb-bot) NO price and how far the market clears from it
     const naive = s.naive_no_c;
     const vsNaive = (naive != null && s.clearing_no_c != null) ? Math.round(s.clearing_no_c - naive) : null;
+    const adminS = !!(state.data && state.data.admin);
     const pills = [
       pill("RFQs", fmtInt(s.rfqs)),
       pill("$ bud", fmtMoney(s.risk)),
+      pill("cleared", `${fmtInt(s.cleared_ct || 0)} ct · ${fmtMoney(s.cleared_no || 0)}`, "pos"),
+      adminS ? pill("ours", `${fmtInt(s.our_ct || 0)} ct · ${fmtMoney(s.our_no || 0)}`, "pos") : "",
       pill("clears", clrVal, clrCls),
       naive != null ? pill("naive", `${naive}c`) : "",
       vsNaive != null ? pill("mkt vs naive", (vsNaive >= 0 ? `+${vsNaive}` : `${vsNaive}`), vsNaive >= 0 ? "pos" : "neg") : "",
       pill("our bid", s.our_bid_c != null ? s.our_bid_c + "c" : "—"),
       gap != null ? pill("gap", (gap >= 0 ? `+${gap}` : `${gap}`), gap >= 0 ? "pos" : "neg") : "",
-      pill("traded", `${s.traded_pct}%`),
     ].join("");
     // SIZE DISTRIBUTION (small vs huge RFQs) + clearing PER size bucket — chips
     // left->right = small->large; the fill width shows count share, the ¢ shows
@@ -400,10 +425,9 @@ function shapesTableHtml(g) {
       const maxn = Math.max(...sb.map((b) => b.n));
       const chips = sb.map((b) => {
         const w = Math.max(4, Math.round((100 * b.n) / maxn));
-        const clr = b.clr != null ? `${b.clr}c` : "·";
-        return `<span class="shp-sz" title="${b.n} RFQs sized ${b.label}${b.clr != null ? `, clears ~${b.clr}c` : " (none traded)"}">`
+        return `<span class="shp-sz" title="${b.n} RFQs sized ${b.label} (${fmtMoney(b.risk || 0)} demand)">`
           + `<span class="shp-sz-fill" style="width:${w}%"></span>`
-          + `<span class="shp-sz-txt"><b>${b.label}</b> ${fmtInt(b.n)}<span class="shp-sz-clr"> ${clr}</span></span></span>`;
+          + `<span class="shp-sz-txt"><b>${b.label}</b> ${fmtInt(b.n)}</span></span>`;
       }).join("");
       sizesHtml = `<div class="shp-sizes"><span class="shp-sz-lbl">by size</span>${chips}</div>`;
     }
@@ -418,7 +442,7 @@ function shapesTableHtml(g) {
     <div class="shp-sub-head">Shapes by occurrence · ${metricLabel()}</div>
     <div class="shp-chart">${occChart}</div>
     <div class="shp-list">${body}</div>
-    <div class="chart-caption">“clears” = the RANGE this shape prints at (typ = median). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears vs that. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). traded = % of RFQs with a print yet. “by size” = RFQ-count distribution by taker $ size (bar = share), with each bucket's clearing ¢ — left→right small→large, so you can see if clearing drifts with size.</div>
+    <div class="chart-caption">“cleared” = the TRUE volume that printed on this shape's combo — contracts and NO-side $ off the trade tape (EVERY maker, incl. resting/CLOB fills with no RFQ). ${adminS ? `“ours” = the slice OUR accounts filled (admin only). ` : ""}“clears” = the price RANGE it prints at (typ = median NO ¢). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). “by size” = RFQ-count distribution by taker $ size (bar = share), left→small right→large.</div>
   </div>`;
 }
 

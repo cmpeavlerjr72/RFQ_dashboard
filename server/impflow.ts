@@ -12,8 +12,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TTLCache } from "./cache.js";
+import { PORTFOLIO } from "./accounts.js";
+import { mergeOurFills } from "./impflowOurs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// The all-portfolios admin instance (PORTFOLIO=admin|all) is the ONLY one that
+// enriches the flow with our own fills. Every other instance — incl. the
+// partner's Sim2Win — never computes it, so our outflow stays private.
+const IS_ADMIN = PORTFOLIO === "admin" || PORTFOLIO === "all";
 
 const HF_FLOW_REPO = process.env.HF_FLOW_REPO ||
   (process.env.HF_FILLS_REPO || "mvpeav/kalshi-rfq-fills").replace("-fills", "-flow");
@@ -23,31 +30,44 @@ const HF_FLOW_BASE = `https://huggingface.co/datasets/${HF_FLOW_REPO}/resolve/ma
 const LOCAL_DIR = path.resolve(__dirname, "..", "..", "data", "impossible_flow");
 const ET_UTC_OFFSET_HOURS = 4;
 
+// cleared_ct / cleared_no = the TRUE volume that cleared on the combo, measured off
+// the public trade tape (real count_fp + NO-side $) — not the old 1:1 RFQ->trade
+// match, which missed every resting/CLOB fill and ~27x under-counted. rfqs / risk
+// stay the firehose DEMAND (count / taker target $). "our fills" is an admin-only
+// overlay merged in by the route (never in the published artifact).
+export interface ImpSizeBucket { label: string; n: number; risk: number }
 export interface ImpShape {
   shape: string;
   rfqs: number; risk: number;
-  quoted: number; won: number; won_risk: number;
+  cleared_ct: number; cleared_no: number;
   clearing_no_c: number | null;
   clearing_lo: number | null; clearing_hi: number | null;
-  traded_pct: number;
+  naive_no_c: number | null;
   our_bid_c: number | null;
+  size_buckets: ImpSizeBucket[];
+  tickers?: string[];                  // combo market(s) — keys the admin our-fills overlay
+  our_ct?: number; our_no?: number;   // admin-only
 }
 export interface ImpGame {
   game: string; sport: string;
   rfqs: number; risk: number;
-  quoted_rfqs: number; won_rfqs: number; won_risk: number;
-  buckets: Array<{ ts: number; rfqs: number; risk: number; quoted: number; won: number; won_risk: number }>;
+  cleared_ct: number; cleared_no: number;
+  buckets: Array<{ ts: number; rfqs: number; risk: number; cl_ct: number; cl_no: number;
+                   our_ct?: number; our_no?: number }>;
   shapes: ImpShape[];
+  our_ct?: number; our_no?: number;    // admin-only
 }
 export interface ImpFlowResult {
   date: string;
   updated_at: number | null;
   our_no_bid_c: number | null;
   bucket_s: number;
-  summary: { rfqs: number; risk: number; quoted_rfqs: number; won_rfqs: number; won_risk: number; n_games: number };
+  summary: { rfqs: number; risk: number; cleared_ct: number; cleared_no: number; n_games: number;
+             our_ct?: number; our_no?: number };
   games: ImpGame[];
   source: "local" | "hf" | "empty";
   fetched_at: string;
+  admin?: boolean;   // true iff this response includes the our-fills overlay
 }
 
 const cache = new TTLCache<ImpFlowResult>();
@@ -60,7 +80,7 @@ export function currentEtDate(): string {
 
 const EMPTY = (date: string, source: ImpFlowResult["source"]): ImpFlowResult => ({
   date, updated_at: null, our_no_bid_c: null, bucket_s: 600,
-  summary: { rfqs: 0, risk: 0, quoted_rfqs: 0, won_rfqs: 0, won_risk: 0, n_games: 0 },
+  summary: { rfqs: 0, risk: 0, cleared_ct: 0, cleared_no: 0, n_games: 0 },
   games: [], source, fetched_at: new Date().toISOString(),
 });
 
@@ -91,5 +111,14 @@ export async function getImpFlow(dateRaw: string, force = false): Promise<ImpFlo
   const date = isYmd(dateRaw) ? dateRaw : currentEtDate();
   if (force) cache.set(date, undefined as any, 0);
   const ttl = date >= currentEtDate() ? 60_000 : 5 * 60_000;
-  return cache.getOrFetch(date, () => load(date), ttl);
+  return cache.getOrFetch(date, async () => {
+    const r = await load(date);
+    if (IS_ADMIN) {
+      // best-effort — a fills error must not blank the public cleared numbers.
+      try { await mergeOurFills(r, date); } catch (e) {
+        console.warn(`impflow: our-fills overlay failed for ${date}:`, (e as any)?.message || e);
+      }
+    }
+    return r;
+  }, ttl);
 }
