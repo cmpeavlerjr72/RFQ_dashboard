@@ -351,22 +351,30 @@ export async function getPositions(account: string, force = false): Promise<any>
   return positionsCache.getOrFetch(
     key,
     async () => {
-      const raw = await getJson(account, "/portfolio/positions?limit=200");
-      // EXCLUDE non-KXMVE positions: our runner ONLY ever holds the multi-game
-      // parlay products (KXMVE…). Anything else on the account is the OWNER's
-      // personal betting — e.g. a direct KXATPMATCH tennis taker (~$150) or a
-      // manually-held KXGAPRIMARY — which must NOT contaminate our positions /
-      // exposure / sport breakdowns. Mirrors the runner's hydration filter
-      // (run_netting_maker.py: positions startswith "KXMVE"). 2026-06-03.
+      // PAGINATE every position record (cursor). A single ?limit=200 page silently
+      // DROPS open positions once an account accumulates >200 records — which happens
+      // fast on a heavy settlement day (settled/zero-qty records crowd the page and
+      // push live positions off it). That under-counted portfolio value and made held
+      // parlays "disappear" from the dashboard. We keep only our KXMVE parlay products
+      // (anything else is the owner's personal betting) across every page.
+      // Mirrors the runner's hydration filter (run_netting_maker.py). 2026-06-03 / 06-24.
       const keep = (p: any) => (p?.ticker || "").startsWith("KXMVE");
-      if (raw && typeof raw === "object") {
-        if (Array.isArray(raw.market_positions))
-          raw.market_positions = raw.market_positions.filter(keep);
-        if (Array.isArray(raw.event_positions))
-          raw.event_positions = raw.event_positions.filter(
-            (e: any) => (e?.event_ticker || "").startsWith("KXMVE"),
-          );
+      const market_positions: any[] = [];
+      const event_positions: any[] = [];
+      let cursor = "";
+      for (let i = 0; i < 30; i++) {
+        const page = await getJson(
+          account,
+          `/portfolio/positions?limit=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        );
+        if (!page || typeof page !== "object") break;
+        for (const p of page.market_positions || []) if (keep(p)) market_positions.push(p);
+        for (const e of page.event_positions || [])
+          if ((e?.event_ticker || "").startsWith("KXMVE")) event_positions.push(e);
+        cursor = page.cursor || "";
+        if (!cursor) break;
       }
+      const raw: any = { market_positions, event_positions, cursor: "" };
       // On the secondary (TP) account, the owner also makes his OWN bets — which
       // fill as TAKER orders, sometimes even on KXMVE parlay markets (so the
       // KXMVE filter above doesn't catch them). Drop any position that was

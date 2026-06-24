@@ -111,6 +111,9 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     ts: new Date().toISOString(),
+    // Deployed commit (Render injects RENDER_GIT_COMMIT at build) — lets us verify
+    // exactly which commit is live instead of inferring from behavior.
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || "local",
     upstreamCallCount,
     kalshi: kalshiCacheStats(),
     espn: espnCacheStats(),
