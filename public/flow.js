@@ -364,9 +364,10 @@ function priceBuckets(g) {
     .slice().sort((a, b) => a.ts - b.ts);
 }
 
-// HEATMAP — x = 10-min bucket, y = NO price ¢, cell brightness = cleared volume.
-// Our resting bid is a dashed white line. Shows how the clearing distribution
-// migrates (e.g. up toward kickoff / late in the game).
+// BUBBLE CHART — x = time, y = NO price ¢, bubble AREA = cleared volume. Far more
+// readable than a brightness grid for sparse data: you see at a glance where the
+// mass sits and whether it drifts up over time. A white line tracks the volume-
+// weighted avg price per bucket (the center); the gold dashed line is our bid.
 function priceHeatmapSvg(g, ourBid) {
   const buckets = priceBuckets(g);
   if (!buckets.length) return `<div class="muted" style="padding:8px">no price data yet</div>`;
@@ -375,35 +376,52 @@ function priceHeatmapSvg(g, ourBid) {
     const pc = +p; pmin = Math.min(pmin, pc); pmax = Math.max(pmax, pc); maxVol = Math.max(maxVol, c);
   }
   if (ourBid != null) { pmin = Math.min(pmin, ourBid); pmax = Math.max(pmax, ourBid); }
-  pmin = Math.max(0, pmin); pmax = Math.min(100, pmax);
-  const prices = []; for (let p = pmax; p >= pmin; p--) prices.push(p);   // high price at top
-  const n = buckets.length, rows = prices.length;
-  const W = 620, H = Math.max(110, 22 + rows * 12), padL = 40, padR = 8, padT = 6, padB = 18;
-  const inW = W - padL - padR, inH = H - padT - padB, cw = inW / n, rh = inH / rows;
-  const xFor = (i) => padL + i * cw, yFor = (pi) => padT + pi * rh;
-  const denom = Math.log1p(maxVol) || 1;
-  const col = (v) => {
-    if (!(v > 0)) return "transparent";
-    const t = Math.min(1, Math.log1p(v) / denom);        // log scale so low vol is still visible
-    return `rgba(34,${Math.round(70 + t * 160)},94,${(0.15 + t * 0.85).toFixed(2)})`;
-  };
-  let cells = "";
-  buckets.forEach((b, i) => prices.forEach((p, pi) => {
-    const v = b.price_hist[p] || 0;
-    if (v <= 0) return;
-    cells += `<rect x="${xFor(i).toFixed(1)}" y="${yFor(pi).toFixed(1)}" width="${Math.ceil(cw)}" height="${Math.ceil(rh)}" fill="${col(v)}"><title>${etHM(b.ts)} · ${p}¢ · ${fmtInt(v)} ct</title></rect>`;
-  }));
-  let bidLine = "";
-  if (ourBid != null && ourBid <= pmax && ourBid >= pmin) {
-    const pi = prices.indexOf(ourBid), y = (pi >= 0 ? yFor(pi) + rh / 2 : yFor(0));
-    bidLine = `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#fff" stroke-width="1.1" stroke-dasharray="3 2" opacity="0.85"/>`
-      + `<text x="${(W - padR).toFixed(1)}" y="${(y - 2).toFixed(1)}" text-anchor="end" fill="#fff" font-size="8">our ${ourBid}¢</text>`;
+  pmin = Math.max(0, pmin - 1); pmax = Math.min(100, pmax + 1);   // pad so edge bubbles aren't clipped
+  const span = (pmax - pmin) || 1, n = buckets.length;
+  const W = 620, H = 200, padL = 40, padR = 14, padT = 12, padB = 22;
+  const inW = W - padL - padR, inH = H - padT - padB;
+  const xFor = (i) => (n > 1 ? padL + (i / (n - 1)) * inW : padL + inW / 2);   // active buckets spread across
+  const yFor = (p) => padT + inH - ((p - pmin) / span) * inH;                  // high price at top
+  const rFor = (v) => 1.5 + Math.sqrt(Math.max(0, v) / (maxVol || 1)) * 12;    // AREA ∝ volume
+
+  // price gridlines + labels
+  const grid = []; const stepc = span <= 8 ? 1 : (span <= 18 ? 2 : 5);
+  for (let p = Math.ceil(pmin); p <= pmax; p++) {
+    if (p % stepc !== 0) continue;
+    const y = yFor(p);
+    grid.push(`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--border,#2a2f3a)" stroke-width="0.5" opacity="0.5"/>`
+      + `<text x="${(padL - 5).toFixed(1)}" y="${y.toFixed(1)}" text-anchor="end" dominant-baseline="central" font-size="8" fill="var(--muted)">${p}¢</text>`);
   }
-  const yT = []; const pstep = Math.max(1, Math.round(rows / 6));
-  prices.forEach((p, pi) => { if (pi % pstep === 0) yT.push(`<text x="${(padL - 4).toFixed(1)}" y="${(yFor(pi) + rh / 2).toFixed(1)}" text-anchor="end" dominant-baseline="central" font-size="8" fill="var(--muted)">${p}¢</text>`); });
+  // volume-weighted avg-price trend line (the "center" over time)
+  const pts = [];
+  buckets.forEach((b, i) => {
+    let sc = 0, sv = 0;
+    for (const [p, c] of Object.entries(b.price_hist)) { sc += (+p) * c; sv += c; }
+    if (sv > 0) pts.push(`${xFor(i).toFixed(1)},${yFor(sc / sv).toFixed(1)}`);
+  });
+  const trend = pts.length > 1 ? `<polyline points="${pts.join(" ")}" fill="none" stroke="#fff" stroke-width="1.1" opacity="0.55"/>` : "";
+  // bubbles (drawn largest-first so small ones stay clickable on top)
+  const marks = [];
+  buckets.forEach((b, i) => {
+    const x = xFor(i);
+    for (const [p, c] of Object.entries(b.price_hist)) {
+      if (!(c > 0)) continue;
+      marks.push({ r: rFor(c), s: `<circle cx="${x.toFixed(1)}" cy="${yFor(+p).toFixed(1)}" r="${rFor(c).toFixed(1)}" fill="var(--pos)" opacity="0.5" stroke="var(--pos)" stroke-width="0.5"><title>${etHM(b.ts)} · ${p}¢ · ${fmtInt(c)} ct</title></circle>` });
+    }
+  });
+  marks.sort((a, b) => b.r - a.r);
+  const bubbles = marks.map((m) => m.s).join("");
+  // our-bid reference line
+  let bidLine = "";
+  if (ourBid != null && ourBid >= pmin && ourBid <= pmax) {
+    const y = yFor(ourBid);
+    bidLine = `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#fbbf24" stroke-width="1.2" stroke-dasharray="4 3" opacity="0.9"/>`
+      + `<text x="${(W - padR).toFixed(1)}" y="${(y - 3).toFixed(1)}" text-anchor="end" fill="#fbbf24" font-size="9">our bid ${ourBid}¢</text>`;
+  }
+  // time labels
   const xL = []; const xstep = Math.max(1, Math.ceil(n / 6));
-  for (let i = 0; i < n; i += xstep) xL.push(`<text x="${(xFor(i) + cw / 2).toFixed(1)}" y="${(H - 5).toFixed(1)}" text-anchor="middle" font-size="8" fill="var(--muted)">${etHM(buckets[i].ts)}</text>`);
-  return `<svg class="gx-svg" viewBox="0 0 ${W} ${H}" style="width:100%">${cells}${bidLine}${yT.join("")}${xL.join("")}</svg>`;
+  for (let i = 0; i < n; i += xstep) xL.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle" font-size="8" fill="var(--muted)">${etHM(buckets[i].ts)}</text>`);
+  return `<svg class="gx-svg" viewBox="0 0 ${W} ${H}" style="width:100%">${grid.join("")}${trend}${bubbles}${bidLine}${xL.join("")}</svg>`;
 }
 
 // Aggregate price_hist over the whole game -> {price¢: volume}, plus the cumulative
@@ -461,7 +479,7 @@ function pricingBlockHtml(g) {
     <div class="shp-sub-head">Pricing surface — price × volume × time</div>
     <div class="chart-caption">${summary}</div>
     <div style="display:flex;gap:14px;flex-wrap:wrap">
-      <div style="flex:1;min-width:280px"><div class="muted" style="font-size:11px;margin-bottom:2px">cleared volume by price over time — brighter = more (dashed = our bid)</div>${priceHeatmapSvg(g, ourBid)}</div>
+      <div style="flex:1;min-width:280px"><div class="muted" style="font-size:11px;margin-bottom:2px">cleared volume by price over time — <b>bubble size = contracts</b> · white line = avg price · dashed = our bid</div>${priceHeatmapSvg(g, ourBid)}</div>
       <div style="flex:1;min-width:240px"><div class="muted" style="font-size:11px;margin-bottom:2px">cumulative volume capturable if we rest @ price (★ = profit-max P*)</div>${demandCurveSvg(g, ourBid)}</div>
     </div>
     <div class="chart-caption">Model: resting at P captures volume that cleared at ≤ P (a NO bid at P intercepts the sweep before cheaper bids); edge = (100−P)¢ for sure-win NO; <b>P*</b> maximizes capture × edge. First-order — ignores our size limit, market impact and competition, so treat it as a guide.</div>
