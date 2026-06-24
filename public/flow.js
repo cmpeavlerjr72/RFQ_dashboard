@@ -52,12 +52,23 @@ function todayEt() {
 // fills (admin-only overlay). Bucket fields are cl_ct/cl_no; game/shape totals are
 // cleared_ct/cleared_no — accept either.
 const demandOf = (c) => (state.metric === "risk" ? (c.risk || 0) : (c.rfqs || 0));
-const clearedOf = (c) => (state.metric === "risk"
-  ? (c.cl_no != null ? c.cl_no : (c.cleared_no || 0))
+// avg clearing NO price (¢) = volume-weighted = cleared NO-$ / cleared contracts * 100.
+// null when nothing cleared in this window (so the price line BREAKS over the gap
+// instead of plotting a fake 0). Accepts bucket (cl_*) or game/shape (cleared_*) fields.
+const priceOf = (c) => {
+  const ct = c.cl_ct != null ? c.cl_ct : (c.cleared_ct || 0);
+  const no = c.cl_no != null ? c.cl_no : (c.cleared_no || 0);
+  return ct > 0 ? (100 * no) / ct : null;
+};
+const clearedOf = (c) => (state.metric === "price" ? priceOf(c)
+  : state.metric === "risk" ? (c.cl_no != null ? c.cl_no : (c.cleared_no || 0))
   : (c.cl_ct != null ? c.cl_ct : (c.cleared_ct || 0)));
 const oursOf = (c) => (state.metric === "risk" ? (c.our_no || 0) : (c.our_ct || 0));
-const metricLabel = () => (state.metric === "risk" ? "$ (NO-side)" : "# contracts");
-const fmtMetric = (n) => (state.metric === "risk" ? fmtMoney(n) : fmtInt(n));
+const metricLabel = () => (state.metric === "risk" ? "$ (NO-side)" : state.metric === "price" ? "avg clear ¢" : "# contracts");
+const fmtMetric = (n) => (n == null ? "—"
+  : state.metric === "risk" ? fmtMoney(n)
+  : state.metric === "price" ? `${n.toFixed(1)}¢`
+  : fmtInt(n));
 
 // ---- team/flag helpers ----
 function logoKeyFor(sport) {
@@ -173,10 +184,16 @@ function render() {
 
 const avg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 function trendOf(buckets) {
-  const totals = buckets.map((b) => clearedOf(b));
+  const totals = buckets.map((b) => clearedOf(b)).filter((v) => v != null);
   if (totals.length < 4) return { label: "—", cls: "muted", arrow: "" };
   const k = Math.max(1, Math.floor(totals.length / 3));
   const early = avg(totals.slice(0, k)), late = avg(totals.slice(-k));
+  if (state.metric === "price") {                 // PRICE: absolute ¢ move early->late
+    const d = late - early;
+    if (d >= 1.5) return { label: `rising +${d.toFixed(1)}¢`, cls: "pos", arrow: "▲" };
+    if (d <= -1.5) return { label: `cooling ${d.toFixed(1)}¢`, cls: "neg", arrow: "▼" };
+    return { label: "steady", cls: "muted", arrow: "▬" };
+  }
   const ratio = early > 0 ? late / early : (late > 0 ? 2 : 1);
   if (ratio >= 1.25) return { label: "rising", cls: "pos", arrow: "▲" };
   if (ratio <= 0.8) return { label: "cooling", cls: "neg", arrow: "▼" };
@@ -186,8 +203,9 @@ function trendOf(buckets) {
 function renderGames() {
   const wrap = $("games-wrap");
   wrap.style.display = "block";
-  $("games-hint").textContent =
-    `cleared volume (${metricLabel()}) per 10-min window · dashed line = RFQ demand · click a game for shapes & clearing`;
+  $("games-hint").textContent = state.metric === "price"
+    ? `avg cleared NO price (¢) per 10-min window · dashed = our NO bid · rising ⇒ the market pays up as kickoff nears / the game runs · click a game for shapes`
+    : `cleared volume (${metricLabel()}) per 10-min window · dashed line = RFQ demand · click a game for shapes & clearing`;
   $("games-list").innerHTML = state.data.games.map(gameCardHtml).join("");
 }
 
@@ -210,7 +228,7 @@ function gameCardHtml(g) {
       <div class="gx-match">${matchup}<span class="gx-sport">${escapeHtml(g.sport)}</span></div>
       <div class="gx-kpis">
         <span class="gx-kpi"><b>${fmtInt(g.rfqs)}</b> RFQs</span>
-        <span class="gx-kpi" title="True volume that cleared on this game's impossible combos (every maker), off the trade tape.">cleared <b>${fmtMetric(clearedOf(g))}</b>${state.metric === "risk" ? ` · <b>${fmtInt(g.cleared_ct)}</b> ct` : ""}</span>
+        <span class="gx-kpi" title="True volume that cleared on this game's impossible combos (every maker), off the trade tape. In price mode: the volume-weighted avg NO price it all cleared at.">cleared <b>${fmtMetric(clearedOf(g))}</b>${(state.metric === "risk" || state.metric === "price") ? ` · <b>${fmtInt(g.cleared_ct)}</b> ct` : ""}</span>
         ${admin && (g.our_no || 0) > 0 ? `<span class="gx-kpi pos" title="Our open impossible-parlay exposure on this game (= Cost Paid), and the share of this game's cleared contracts we captured (admin only).">ours <b>${fmtMetric(oursOf(g))}</b>${g.cleared_ct > 0 ? ` · ${Math.min(100, Math.round(100 * (g.our_ct || 0) / g.cleared_ct))}% captured` : ""}</span>` : ""}
         <span class="gx-kpi ${trend.cls}">${trend.arrow} ${trend.label}</span>
         <span class="gx-toggle">${expanded ? "▾" : "▸"} shapes</span>
@@ -218,8 +236,11 @@ function gameCardHtml(g) {
     </div>
     <div class="gx-chart">${chart}
       <div class="gx-legend">
-        <span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>cleared (all makers)</span>
-        <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24;opacity:.75"></span>RFQ demand</span>
+        ${state.metric === "price"
+          ? `<span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>avg clear ¢</span>
+        <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24;opacity:.75"></span>our NO bid</span>`
+          : `<span class="gx-lg"><span class="gx-sw" style="background:var(--pos)"></span>cleared (all makers)</span>
+        <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24;opacity:.75"></span>RFQ demand</span>`}
       </div>
     </div>
     <div class="gx-details">${expanded ? shapesTableHtml(g) : ""}</div>
@@ -232,6 +253,7 @@ function gameCardHtml(g) {
 // no RFQ at all). "Our exposure" is a current positions snapshot (no per-fill time),
 // so it's shown as KPIs, not split into these time buckets.
 function flowSvg(buckets) {
+  if (state.metric === "price") return priceSvg(buckets);
   const W = 600, H = 130, padL = 46, padR = 8, padT = 8, padB = 18;
   const inW = W - padL - padR, inH = H - padT - padB, n = buckets.length;
   let yMax = 0;
@@ -268,6 +290,62 @@ function flowSvg(buckets) {
   }
   return `<svg class="roi-chart flow-bars gx-svg" viewBox="0 0 ${W} ${H}">
     <g class="axis-y">${yTicks.join("")}</g><g class="bars">${bars}</g>${demandLine}<g class="axis-x">${xLabels.join("")}</g>
+  </svg>`;
+}
+
+// PRICE mode: the volume-weighted avg cleared NO price (¢) per 10-min bucket, drawn
+// as a ZOOMED line (prices cluster 88-99c — bars-from-0 would hide the trend) with a
+// dashed reference line at our current NO bid. If the market line sits ABOVE our bid
+// and climbs as kickoff nears / the game runs, that's edge we're leaving on the table.
+// Buckets with no cleared volume are gaps (the line breaks rather than dropping to 0).
+function priceSvg(buckets) {
+  const W = 600, H = 130, padL = 46, padR = 8, padT = 8, padB = 18;
+  const inW = W - padL - padR, inH = H - padT - padB, n = buckets.length;
+  const ourBid = (state.data && state.data.our_no_bid_c != null) ? state.data.our_no_bid_c : null;
+  const prices = buckets.map((b) => clearedOf(b));      // ¢, null where nothing cleared
+  const vals = prices.filter((v) => v != null);
+  if (ourBid != null) vals.push(ourBid);
+  if (!vals.length) return `<div class="muted" style="padding:8px">no cleared volume</div>`;
+  // zoom the y-axis to the data (incl. our bid) so a few ¢ of drift is readable.
+  let lo = Math.max(0, Math.floor(Math.min(...vals)) - 1);
+  let hi = Math.min(100, Math.ceil(Math.max(...vals)) + 1);
+  if (hi - lo < 3) { lo = Math.max(0, hi - 4); }       // keep a minimum span
+  const xFor = (i) => padL + (i + 0.5) * (inW / n);
+  const yFor = (v) => padT + inH - ((v - lo) / (hi - lo)) * inH;
+
+  // line in segments so gaps (null buckets) break it; a dot on every real point.
+  let path = "", dots = "", seg = [];
+  const flush = () => { if (seg.length > 1) path += `<polyline points="${seg.join(" ")}" fill="none" stroke="var(--pos)" stroke-width="1.8"/>`; seg = []; };
+  buckets.forEach((b, i) => {
+    const v = prices[i];
+    if (v == null) { flush(); return; }
+    const x = xFor(i), y = yFor(v);
+    seg.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    const vol = b.cl_ct != null ? b.cl_ct : (b.cleared_ct || 0);
+    dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.2" fill="var(--pos)"><title>${etHM(b.ts)} · avg ${v.toFixed(1)}¢ · ${fmtInt(vol)} ct cleared</title></circle>`;
+  });
+  flush();
+
+  // our NO-bid reference line (the greed dial) — the thing we'd compare the market to.
+  let bidLine = "";
+  if (ourBid != null && ourBid >= lo && ourBid <= hi) {
+    const yb = yFor(ourBid);
+    bidLine = `<line x1="${padL}" y1="${yb.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yb.toFixed(1)}" stroke="#fbbf24" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.9"/>`
+      + `<text x="${(W - padR).toFixed(1)}" y="${(yb - 3).toFixed(1)}" text-anchor="end" fill="#fbbf24" font-size="9">our bid ${ourBid}¢</text>`;
+  }
+
+  const yTicks = [];
+  for (let t = 0; t <= 2; t++) {
+    const v = lo + (t / 2) * (hi - lo), yy = yFor(v);
+    yTicks.push(`<g class="tick"><line x1="${padL}" y1="${yy.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${yy.toFixed(1)}"/><text x="${padL - 5}" y="${yy.toFixed(1)}" text-anchor="end" dominant-baseline="central">${v.toFixed(0)}¢</text></g>`);
+  }
+  const xLabels = [];
+  const step = Math.max(1, Math.ceil(n / 6));
+  for (let i = 0; i < n; i += step) {
+    xLabels.push(`<text x="${xFor(i).toFixed(1)}" y="${(H - 6).toFixed(1)}" text-anchor="middle">${etHM(buckets[i].ts)}</text>`);
+  }
+  return `<svg class="roi-chart flow-bars gx-svg" viewBox="0 0 ${W} ${H}">
+    <g class="axis-y">${yTicks.join("")}</g>${bidLine}<g class="price-line">${path}${dots}</g><g class="axis-x">${xLabels.join("")}</g>
   </svg>`;
 }
 
@@ -353,11 +431,12 @@ function whyImpossible(legs, game) {
 // A compact, wrapping pill layout (NOT a wide table) so it stays readable on a
 // phone — each shape is a block whose stat pills flow onto as many rows as fit.
 function shapesTableHtml(g) {
-  const shapes = (g.shapes || []).slice().sort((a, b) =>
-    (state.metric === "risk" ? b.risk - a.risk : b.rfqs - a.rfqs));
+  const mval = (s) => (state.metric === "risk" ? s.risk
+    : state.metric === "price" ? (s.cleared_ct > 0 ? (100 * s.cleared_no) / s.cleared_ct : 0)
+    : s.rfqs);
+  const shapes = (g.shapes || []).slice().sort((a, b) => mval(b) - mval(a));
   if (!shapes.length) return `<div class="muted" style="padding:6px 2px">no shapes</div>`;
   const pill = (lbl, val, cls = "") => `<span class="shp-pill ${cls}"><i>${lbl}</i>${val}</span>`;
-  const mval = (s) => (state.metric === "risk" ? s.risk : s.rfqs);
   const adminS = !!(state.data && state.data.admin);   // used by both the pills and the caption
   // decode each shape ONCE (reused by the occurrence chart + the detail blocks)
   const decoded = shapes.map((s) => decodeShape(s.shape, g.sport, g.game));
@@ -431,7 +510,7 @@ function shapesTableHtml(g) {
     </div>`;
   }).join("");
   return `<div class="gx-sub">
-    <div class="shp-sub-head">Shapes by occurrence · ${metricLabel()}</div>
+    <div class="shp-sub-head">Shapes ${state.metric === "price" ? "by avg clear ¢" : `by occurrence · ${metricLabel()}`}</div>
     <div class="shp-chart">${occChart}</div>
     <div class="shp-list">${body}</div>
     <div class="chart-caption">“cleared” = the TRUE volume that printed on this shape's combo — contracts and NO-side $ off the trade tape (EVERY maker, incl. resting/CLOB fills with no RFQ). ${adminS ? `“ours” = our open impossible-parlay exposure on this shape (= Cost Paid). “captured” = our share of the contracts that cleared on this shape (our ct ÷ cleared ct, capped 100%). Admin only. ` : ""}“clears” = the price RANGE it prints at (typ = median NO ¢). “naive” = the NO price a dumb independent-leg bot computes from current leg mids; “mkt vs naive” = how much richer/cheaper the market clears. gap = our bid − typ (<span class="pos">≥0 we win the typical</span>, <span class="neg">&lt;0 priced out</span>). “by size” = RFQ-count distribution by taker $ size (bar = share), left→small right→large.</div>
