@@ -245,7 +245,7 @@ function gameCardHtml(g) {
         <span class="gx-lg"><span class="gx-sw" style="background:#fbbf24;opacity:.75"></span>RFQ demand</span>`}
       </div>
     </div>
-    <div class="gx-details">${expanded ? shapesTableHtml(g) : ""}</div>
+    <div class="gx-details">${expanded ? pricingBlockHtml(g) + shapesTableHtml(g) : ""}</div>
   </div>`;
 }
 
@@ -349,6 +349,123 @@ function priceSvg(buckets) {
   return `<svg class="roi-chart flow-bars gx-svg" viewBox="0 0 ${W} ${H}">
     <g class="axis-y">${yTicks.join("")}</g>${bidLine}<g class="price-line">${path}${dots}</g><g class="axis-x">${xLabels.join("")}</g>
   </svg>`;
+}
+
+// ============================================================================
+// PRICING SURFACE (expanded view) — the joint price × volume × time picture so
+// we can pick the resting price that grabs the most volume at the best edge.
+// Data: each bucket carries price_hist = { NO-price-¢ : cleared contracts }.
+// ============================================================================
+
+// buckets that carry a non-empty price histogram, time-sorted.
+function priceBuckets(g) {
+  return (g.buckets || [])
+    .filter((b) => b.price_hist && Object.keys(b.price_hist).length)
+    .slice().sort((a, b) => a.ts - b.ts);
+}
+
+// HEATMAP — x = 10-min bucket, y = NO price ¢, cell brightness = cleared volume.
+// Our resting bid is a dashed white line. Shows how the clearing distribution
+// migrates (e.g. up toward kickoff / late in the game).
+function priceHeatmapSvg(g, ourBid) {
+  const buckets = priceBuckets(g);
+  if (!buckets.length) return `<div class="muted" style="padding:8px">no price data yet</div>`;
+  let pmin = 100, pmax = 0, maxVol = 0;
+  for (const b of buckets) for (const [p, c] of Object.entries(b.price_hist)) {
+    const pc = +p; pmin = Math.min(pmin, pc); pmax = Math.max(pmax, pc); maxVol = Math.max(maxVol, c);
+  }
+  if (ourBid != null) { pmin = Math.min(pmin, ourBid); pmax = Math.max(pmax, ourBid); }
+  pmin = Math.max(0, pmin); pmax = Math.min(100, pmax);
+  const prices = []; for (let p = pmax; p >= pmin; p--) prices.push(p);   // high price at top
+  const n = buckets.length, rows = prices.length;
+  const W = 620, H = Math.max(110, 22 + rows * 12), padL = 40, padR = 8, padT = 6, padB = 18;
+  const inW = W - padL - padR, inH = H - padT - padB, cw = inW / n, rh = inH / rows;
+  const xFor = (i) => padL + i * cw, yFor = (pi) => padT + pi * rh;
+  const denom = Math.log1p(maxVol) || 1;
+  const col = (v) => {
+    if (!(v > 0)) return "transparent";
+    const t = Math.min(1, Math.log1p(v) / denom);        // log scale so low vol is still visible
+    return `rgba(34,${Math.round(70 + t * 160)},94,${(0.15 + t * 0.85).toFixed(2)})`;
+  };
+  let cells = "";
+  buckets.forEach((b, i) => prices.forEach((p, pi) => {
+    const v = b.price_hist[p] || 0;
+    if (v <= 0) return;
+    cells += `<rect x="${xFor(i).toFixed(1)}" y="${yFor(pi).toFixed(1)}" width="${Math.ceil(cw)}" height="${Math.ceil(rh)}" fill="${col(v)}"><title>${etHM(b.ts)} · ${p}¢ · ${fmtInt(v)} ct</title></rect>`;
+  }));
+  let bidLine = "";
+  if (ourBid != null && ourBid <= pmax && ourBid >= pmin) {
+    const pi = prices.indexOf(ourBid), y = (pi >= 0 ? yFor(pi) + rh / 2 : yFor(0));
+    bidLine = `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(W - padR).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#fff" stroke-width="1.1" stroke-dasharray="3 2" opacity="0.85"/>`
+      + `<text x="${(W - padR).toFixed(1)}" y="${(y - 2).toFixed(1)}" text-anchor="end" fill="#fff" font-size="8">our ${ourBid}¢</text>`;
+  }
+  const yT = []; const pstep = Math.max(1, Math.round(rows / 6));
+  prices.forEach((p, pi) => { if (pi % pstep === 0) yT.push(`<text x="${(padL - 4).toFixed(1)}" y="${(yFor(pi) + rh / 2).toFixed(1)}" text-anchor="end" dominant-baseline="central" font-size="8" fill="var(--muted)">${p}¢</text>`); });
+  const xL = []; const xstep = Math.max(1, Math.ceil(n / 6));
+  for (let i = 0; i < n; i += xstep) xL.push(`<text x="${(xFor(i) + cw / 2).toFixed(1)}" y="${(H - 5).toFixed(1)}" text-anchor="middle" font-size="8" fill="var(--muted)">${etHM(buckets[i].ts)}</text>`);
+  return `<svg class="gx-svg" viewBox="0 0 ${W} ${H}" style="width:100%">${cells}${bidLine}${yT.join("")}${xL.join("")}</svg>`;
+}
+
+// Aggregate price_hist over the whole game -> {price¢: volume}, plus the cumulative
+// demand curve V(P) = volume that cleared at <= P (capturable by resting at P, since
+// a NO bid at P intercepts the sweep before it reaches anything cheaper). Edge per
+// contract = (100-P)¢ for sure-win NO; P* maximizes V(P)*(100-P).
+function demandModel(g, ourBid) {
+  const buckets = priceBuckets(g);
+  const tot = {};
+  for (const b of buckets) for (const [p, c] of Object.entries(b.price_hist)) tot[+p] = (tot[+p] || 0) + c;
+  const ps = Object.keys(tot).map(Number).sort((a, b) => a - b);
+  if (!ps.length) return null;
+  const total = ps.reduce((s, p) => s + tot[p], 0);
+  const rows = []; let cum = 0, best = { P: null, profit: -1, V: 0 }, bidV = 0;
+  for (let P = ps[0]; P <= ps[ps.length - 1]; P++) {
+    cum += tot[P] || 0;
+    const profit = cum * (100 - P) / 100;                 // est $ if it all settles NO
+    rows.push({ P, V: cum, profit });
+    if (profit > best.profit) best = { P, profit, V: cum };
+    if (ourBid != null && P === ourBid) bidV = cum;
+  }
+  return { rows, total, best, bidV };
+}
+
+// DEMAND CURVE — price on Y (high at top), bar = cumulative capturable volume.
+// ★ marks the profit-max P*; ◀ marks our current bid.
+function demandCurveSvg(g, ourBid) {
+  const m = demandModel(g, ourBid);
+  if (!m) return `<div class="muted" style="padding:8px">no price data yet</div>`;
+  const order = m.rows.slice().reverse();                 // high price at top
+  const W = 620, H = Math.max(110, 16 + order.length * 12), padL = 38, padR = 64, padT = 6, padB = 6;
+  const inW = W - padL - padR, inH = H - padT - padB, rh = inH / order.length;
+  let out = "";
+  order.forEach((r, i) => {
+    const w = Math.max(1, inW * (r.V / m.total)), y = padT + i * rh;
+    const isStar = r.P === m.best.P, isBid = ourBid != null && r.P === ourBid;
+    out += `<rect x="${padL}" y="${(y + 1).toFixed(1)}" width="${w.toFixed(1)}" height="${(rh - 2).toFixed(1)}" fill="${isStar ? '#fbbf24' : 'var(--pos)'}" opacity="${isStar ? 0.95 : 0.7}"><title>rest @${r.P}¢ → capture ~${fmtInt(r.V)} ct (${Math.round(100 * r.V / m.total)}%) at ${100 - r.P}¢ edge ≈ ${fmtMoney(r.profit)}</title></rect>`;
+    out += `<text x="${(padL - 4).toFixed(1)}" y="${(y + rh / 2).toFixed(1)}" text-anchor="end" dominant-baseline="central" font-size="8" fill="${isBid ? '#fff' : 'var(--muted)'}">${r.P}¢${isBid ? '◀' : ''}</text>`;
+    out += `<text x="${(padL + w + 3).toFixed(1)}" y="${(y + rh / 2).toFixed(1)}" dominant-baseline="central" font-size="8" fill="var(--muted)">${Math.round(100 * r.V / m.total)}%${isStar ? ' ★P*' : ''}</text>`;
+  });
+  return `<svg class="gx-svg" viewBox="0 0 ${W} ${H}" style="width:100%">${out}</svg>`;
+}
+
+function pricingBlockHtml(g) {
+  const ourBid = (state.data && state.data.our_no_bid_c != null) ? state.data.our_no_bid_c : null;
+  const m = demandModel(g, ourBid);
+  if (!m) {
+    return `<div class="gx-sub"><div class="shp-sub-head">Pricing surface — price × volume × time</div>`
+      + `<div class="muted" style="padding:6px 2px">no price-distribution data for this game yet — the producer adds it on its next run (~5 min) and backfills today + yesterday.</div></div>`;
+  }
+  const pct = (v) => Math.round(100 * v / m.total);
+  const summary = `<b>P*=${m.best.P}¢</b> → capture ~${pct(m.best.V)}% (${fmtInt(m.best.V)} ct) at ${100 - m.best.P}¢ edge ≈ <b>${fmtMoney(m.best.profit)}</b>`
+    + (ourBid != null ? ` · our bid <b>${ourBid}¢</b> → ~${pct(m.bidV)}% (${fmtInt(m.bidV)} ct)` : "");
+  return `<div class="gx-sub">
+    <div class="shp-sub-head">Pricing surface — price × volume × time</div>
+    <div class="chart-caption">${summary}</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:280px"><div class="muted" style="font-size:11px;margin-bottom:2px">cleared volume by price over time — brighter = more (dashed = our bid)</div>${priceHeatmapSvg(g, ourBid)}</div>
+      <div style="flex:1;min-width:240px"><div class="muted" style="font-size:11px;margin-bottom:2px">cumulative volume capturable if we rest @ price (★ = profit-max P*)</div>${demandCurveSvg(g, ourBid)}</div>
+    </div>
+    <div class="chart-caption">Model: resting at P captures volume that cleared at ≤ P (a NO bid at P intercepts the sweep before cheaper bids); edge = (100−P)¢ for sure-win NO; <b>P*</b> maximizes capture × edge. First-order — ignores our size limit, market impact and competition, so treat it as a guide.</div>
+  </div>`;
 }
 
 // ---- shape decoding: turn "[BTTS, USA, 3/NO]" into plain-English legs + a proof
