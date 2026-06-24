@@ -37,6 +37,7 @@ import {
 import { getRecap, getRecapOverall } from "./recap.js";
 import { getFlow } from "./flow.js";
 import { getImpFlow } from "./impflow.js";
+import { getBuilders } from "./builders.js";
 import { getClv } from "./clv.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
@@ -408,6 +409,15 @@ app.get("/api/impflow", async (req, res, next) => {
     const force = String(req.query.fresh || "") === "1";
     upstreamCallCount++;
     res.json(await getImpFlow(date, force));
+  } catch (e) { next(e); }
+});
+
+// Builder profiles (admin-only): per-counterparty impossible-parlay RFQ creators.
+app.get("/api/builders", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "").trim();
+    const force = String(req.query.fresh || "") === "1";
+    res.json(await getBuilders(date, force));
   } catch (e) { next(e); }
 });
 
