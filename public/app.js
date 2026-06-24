@@ -401,9 +401,12 @@ async function enrichMissingLegs() {
       const p = noRfqId[idx];
       try {
         const r = await api(`/api/kalshi/recover/${encodeURIComponent(p.ticker)}`);
-        if (r?.rfq_id) {
-          p.rfq_id = r.rfq_id;
-          p.legs = (r.legs || []).map((l) => ({
+        // Apply on LEGS, not rfq_id: bait/rester resting fills recover legs from the
+        // market with no rfq_id (no quote chain). Gating on rfq_id discarded those legs,
+        // so resting-fill positions never got sorted into games.
+        if (r?.legs?.length) {
+          if (r.rfq_id) p.rfq_id = r.rfq_id;
+          p.legs = r.legs.map((l) => ({
             ticker: l.ticker,
             side: (l.side || "yes"),
             p: null,

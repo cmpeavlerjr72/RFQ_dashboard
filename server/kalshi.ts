@@ -519,62 +519,24 @@ export async function recoverParlay(account: string, parlayTicker: string): Prom
     } catch {}
   }
 
-  // 3. Recover. PRIMARY leg source = the parlay MARKET's own structure
-  //    (/markets/<ticker> -> mve_selected_legs), which works for ANY open position —
-  //    the sniper's RFQ-quote fills AND the bait/rester resting fills — because the MVE
-  //    market carries its own legs. The old fills -> order -> quote -> rfq walk only
-  //    yielded legs for quote-placed (sniper) orders (it bailed on resting orders whose
-  //    client_order_id isn't "quote:"), which is why resting-fill positions never got
-  //    sorted into games. That walk is now BEST-EFFORT enrichment for rfq_id/accepted_side.
+  // 3. Recover legs from the parlay MARKET's own structure (/markets/<ticker> ->
+  //    mve_selected_legs). Works for ANY open position — the sniper's RFQ-quote fills AND
+  //    the bait/rester resting fills — because the MVE market carries its own legs. (The old
+  //    fills -> order -> quote -> rfq walk only yielded legs for quote-placed orders, so
+  //    resting-fill positions never got sorted into games.) ONE cached call; we no longer
+  //    recover rfq_id/accepted_side — the frontend keys grouping + valuation off legs only,
+  //    so dropping the extra walk keeps recovery fast (no 429s under many open positions).
   const empty: ParlayRecovery = {
     parlay_ticker: parlayTicker,
     rfq_id: null, quote_id: null, accepted_side: null, legs: [],
   };
   let result: ParlayRecovery = empty;
   try {
-    const toLegs = (raw: any[]): { ticker: string; side: string; p: number | null }[] =>
-      (raw || [])
-        .map((l: any) => ({ ticker: l?.market_ticker || "", side: (l?.side || "yes").toLowerCase(), p: null as number | null }))
-        .filter((l) => l.ticker);
-
-    // Primary: legs straight off the market metadata (universal).
-    let legs: { ticker: string; side: string; p: number | null }[] = [];
-    try {
-      const mkt = (await getJson(account, `/markets/${encodeURIComponent(parlayTicker)}`))?.market;
-      legs = toLegs(mkt?.mve_selected_legs);
-    } catch { /* fall through to the fill/quote walk below */ }
-
-    // Best-effort enrichment: rfq_id + accepted_side (and legs, if the market lookup was empty)
-    // via fills -> order -> quote -> rfq. Only succeeds for quote-placed (sniper) orders; any
-    // failure here is non-fatal now that legs already come from the market.
-    let rfqId: string | null = null, quoteId: string | null = null, acceptedSide: string | null = null;
-    try {
-      const fills = await getJson(account, `/portfolio/fills?ticker=${encodeURIComponent(parlayTicker)}&limit=20`);
-      const fillsList: any[] = fills?.fills || [];
-      if (fillsList.length) {
-        const sorted = [...fillsList].sort((a, b) => String(a.created_time || "").localeCompare(String(b.created_time || "")));
-        const first = sorted[0];
-        acceptedSide = (first?.side || "").toLowerCase() || null;
-        const orderId = first?.order_id;
-        if (orderId) {
-          const order = (await getJson(account, `/portfolio/orders/${encodeURIComponent(orderId)}`))?.order;
-          const clientOrderId: string = order?.client_order_id || "";
-          const parts = clientOrderId.split(":");
-          if (clientOrderId.startsWith("quote:") && parts.length >= 3) {
-            quoteId = parts[2];
-            const quote = (await getJson(account, `/communications/quotes/${encodeURIComponent(quoteId)}`))?.quote;
-            rfqId = quote?.rfq_id || null;
-            acceptedSide = (quote?.accepted_side || acceptedSide || "").toLowerCase() || null;
-            if (!legs.length && rfqId) {
-              const rfqResp = await getRfqLegs(account, rfqId);
-              legs = toLegs((rfqResp?.rfq || rfqResp)?.mve_selected_legs);
-            }
-          }
-        }
-      }
-    } catch { /* enrichment is best-effort */ }
-
-    result = { parlay_ticker: parlayTicker, rfq_id: rfqId, quote_id: quoteId, accepted_side: acceptedSide, legs };
+    const mkt = (await getJson(account, `/markets/${encodeURIComponent(parlayTicker)}`))?.market;
+    const legs = (mkt?.mve_selected_legs || [])
+      .map((l: any) => ({ ticker: l?.market_ticker || "", side: (l?.side || "yes").toLowerCase(), p: null as number | null }))
+      .filter((l: { ticker: string }) => l.ticker);
+    result = { parlay_ticker: parlayTicker, rfq_id: null, quote_id: null, accepted_side: null, legs };
   } catch (e) {
     console.warn(`recoverParlay(${account}/${parlayTicker}) failed:`, (e as any)?.message || e);
     recoveryMemCache.set(memKey, empty, 60_000);
