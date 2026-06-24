@@ -63,7 +63,9 @@ const priceOf = (c) => {
 const clearedOf = (c) => (state.metric === "price" ? priceOf(c)
   : state.metric === "risk" ? (c.cl_no != null ? c.cl_no : (c.cleared_no || 0))
   : (c.cl_ct != null ? c.cl_ct : (c.cleared_ct || 0)));
-const oursOf = (c) => (state.metric === "risk" ? (c.our_no || 0) : (c.our_ct || 0));
+const oursOf = (c) => (state.metric === "price"
+  ? (c.our_ct > 0 ? (100 * (c.our_no || 0)) / c.our_ct : null)   // our avg cost basis (¢) = VWAP of our fills
+  : state.metric === "risk" ? (c.our_no || 0) : (c.our_ct || 0));
 const metricLabel = () => (state.metric === "risk" ? "$ (NO-side)" : state.metric === "price" ? "avg clear ¢" : "# contracts");
 const fmtMetric = (n) => (n == null ? "—"
   : state.metric === "risk" ? fmtMoney(n)
