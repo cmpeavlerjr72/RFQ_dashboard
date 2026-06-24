@@ -793,10 +793,38 @@ export async function getRecap(account: string, startEt: string, endEt: string, 
         );
         if (!Number.isFinite(firstMs)) continue;
         if (firstMs < startUtcMs) continue;   // first-filled before the period — excluded from both
-        const row = aggregateParlay(tk, parlayFills, settleByTk.get(tk));
-        if (row.pnl != null) realizedSinceStart += row.pnl;
+        // SETTLED parlays are handled by the targeted pass below (the page-capped fills here
+        // can be incomplete for a settled parlay, mis-stating its cost basis). Only build
+        // OPEN-parlay rows from the bulk fills.
+        if (settleByTk.get(tk)?.market_result) continue;
+        const row = aggregateParlay(tk, parlayFills, undefined);
+        if (row.pnl != null) realizedSinceStart += row.pnl;   // open => null, so no-op
         if (firstMs >= endUtcMs) continue;    // after the window — counts for since-start only
         rows.push(row);
+      }
+
+      // SETTLED parlays — the realized P&L the growth block reports. fetchFillsBack is
+      // PAGE-CAPPED (30×200), and the bait/rester generate enough fills to blow past it, so
+      // most settled parlays' (older) fills never land in byParlay and their P&L was being
+      // DROPPED (the recap showed only the few settled parlays with recent fills). The
+      // settlements list, by contrast, is small and fully fetched — so drive settled P&L off
+      // IT, pulling each held ticker's complete fills via a targeted query (immune to the cap)
+      // for an exact cost basis. Skip markets we never held (no targeted call for those).
+      for (const [tk, settle] of settleByTk) {
+        if (!settle.market_result || isExcluded(tk) || !tk.startsWith("KXMVE")) continue;
+        const heldCt = (Number((settle as any).no_count_fp) || 0) + (Number((settle as any).yes_count_fp) || 0);
+        if (heldCt <= 0) continue;                       // a settled market we didn't hold
+        let tf: KalshiFill[];
+        try {
+          tf = (await getJson(account, `/portfolio/fills?ticker=${encodeURIComponent(tk)}&limit=200`))?.fills || [];
+        } catch { continue; }
+        const real = excludeTakers ? tf.filter((f) => !f.is_taker) : tf;
+        if (!real.length) continue;
+        const firstMs = Math.min(...real.map((f) => parseIsoMs(f.created_time) ?? Infinity));
+        if (!Number.isFinite(firstMs) || firstMs < startUtcMs) continue;  // first-filled before the period
+        const row = aggregateParlay(tk, real, settle);
+        if (row.pnl != null) realizedSinceStart += row.pnl;
+        if (firstMs < endUtcMs) rows.push(row);
       }
       rows.sort((a, b) => b.first_fill_iso.localeCompare(a.first_fill_iso));
 
