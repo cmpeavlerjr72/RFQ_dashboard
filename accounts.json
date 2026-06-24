@@ -72,6 +72,20 @@
       "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
     },
     {
+      "key": "presto",
+      "portfolio": "peavler",
+      "marker": "presto",
+      "label": "PRESTO",
+      "dashboard_label": "Presto",
+      "env_suffix": "_PRESTO",
+      "fills_file": "fills_presto.jsonl",
+      "hf_name": "fills_presto.jsonl.gz",
+      "allowed_sports": ["wc"],
+      "blocked_sports": [],
+      "owner_takes": false,
+      "cap_fractions": {"per_quote": 0.12, "per_ticker": 0.25, "per_leg_signed": 0.20}
+    },
+    {
       "key": "heu1",
       "portfolio": "heuermann",
       "marker": "heu1",
