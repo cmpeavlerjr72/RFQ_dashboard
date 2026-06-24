@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TTLCache } from "./cache.js";
 import { PORTFOLIO } from "./accounts.js";
-import { mergeOurFills } from "./impflowOurs.js";
+import { mergeOurFills, mergeOurFillsForDate } from "./impflowOurs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -114,12 +114,16 @@ export async function getImpFlow(dateRaw: string, force = false): Promise<ImpFlo
   const ttl = date >= currentEtDate() ? 60_000 : 5 * 60_000;
   return cache.getOrFetch(date, async () => {
     const r = await load(date);
-    // Our exposure (Cost Paid) is a CURRENT positions snapshot — only meaningful
-    // for today, so skip the overlay on past dates.
-    if (IS_ADMIN && date >= currentEtDate()) {
-      // best-effort — a positions error must not blank the public cleared numbers.
-      try { await mergeOurFills(r, date); } catch (e) {
-        console.warn(`impflow: our-position overlay failed for ${date}:`, (e as any)?.message || e);
+    // Our overlay (admin only). TODAY: live positions = the Live tab's Cost Paid.
+    // PAST dates: that day's fills off the Kalshi API (positions have settled
+    // away) — so we can compare how WE did vs. the market on prior days. Best-
+    // effort: an overlay error must not blank the public cleared numbers.
+    if (IS_ADMIN) {
+      try {
+        if (date >= currentEtDate()) await mergeOurFills(r, date);
+        else await mergeOurFillsForDate(r, date);
+      } catch (e) {
+        console.warn(`impflow: our-fills overlay failed for ${date}:`, (e as any)?.message || e);
       }
     }
     return r;
