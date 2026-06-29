@@ -6,6 +6,16 @@
 <title>Kalshi RFQ — Impossible Flow</title>
 <link rel="stylesheet" href="/styles.css" />
 <script defer src="/brand.js"></script>
+<style>
+  #rester-wrap { margin-top: 18px; }
+  table.rester-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.rester-tbl th, table.rester-tbl td { padding: 4px 8px; border-bottom: 1px solid var(--border, #2a2a2a); text-align: left; white-space: nowrap; }
+  table.rester-tbl th { color: var(--muted, #888); font-weight: 600; }
+  table.rester-tbl td.num, table.rester-tbl th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.rester-tbl tr.muted-row td { color: var(--muted, #888); }
+  table.rester-tbl .pos { color: var(--pos, #3fb950); }
+  table.rester-tbl .neg { color: var(--neg, #f85149); }
+</style>
 </head>
 <body>
 <header>
@@ -52,6 +62,12 @@
 
   <section id="empty-wrap" style="display:none">
     <div class="empty" id="empty-text">no impossible flow captured for this date</div>
+  </section>
+
+  <section id="rester-wrap" style="display:none">
+    <div class="row section-head"><h2>Our resting book <span class="muted" style="font-size:12px">· admin</span></h2><span class="hint" id="rester-hint">top markets by 5-min demand — our coverage, clearing &amp; whether we're top-of-book</span></div>
+    <div id="rester-summary" class="summary"></div>
+    <div id="rester-table"></div>
   </section>
 </main>
 

@@ -133,6 +133,7 @@ async function loadFlow({ force = false } = {}) {
   const date = $("flow-date").value || todayEt();
   setStatus(`loading ${date}…`, "fetching");
   $("refresh-btn").disabled = true;
+  loadRester(date, force);   // admin-only panel; independent so an error never blanks the public Flow view
   try {
     const r = await fetch(`/api/impflow?date=${date}${force ? "&fresh=1" : ""}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -150,6 +151,76 @@ async function loadFlow({ force = false } = {}) {
 
 function kpi(label, value, cls = "", sub = "") {
   return `<div class="kpi"><div class="label">${label}</div><div class="value ${cls}">${value}</div>${sub ? `<div class="kpi-sub muted">${sub}</div>` : ""}</div>`;
+}
+
+const fmtC = (c) => (c == null ? "—" : `${Math.round(c)}¢`);
+
+// "Our resting book" — admin-only panel below the public flow. Fetched separately
+// from /api/rester so a failure (or a non-admin instance returning "admin-only")
+// just hides the panel without touching the public Flow view.
+async function loadRester(date, force = false) {
+  try {
+    const r = await fetch(`/api/rester?date=${date}${force ? "&fresh=1" : ""}`);
+    if (!r.ok) return;
+    state.rester = await r.json();
+    renderRester();
+  } catch { /* ignore — admin-only panel */ }
+}
+
+function renderRester() {
+  const wrap = $("rester-wrap");
+  if (!wrap) return;
+  const d = state.rester;
+  if (!d || d.source === "admin-only" || !d.markets || !d.markets.length) {
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "block";
+  const t = d.totals || {};
+  const upd = d.generated_at ? new Date(d.generated_at * 1000).toLocaleTimeString() : "—";
+  $("rester-hint").textContent =
+    `top markets by 5-min demand · ● = we're top-of-book, ○ = outbid · upd ${upd} (${d.source})`;
+
+  $("rester-summary").innerHTML = [
+    kpi("Open resting", fmtMoney(t.open || 0), "", "unfilled NO at rest"),
+    kpi("Filled", fmtMoney(t.filled || 0), "pos", "sure-win NO captured"),
+    kpi("Free cash", fmtMoney(t.free || 0), "", `${fmtMoney(t.cash || 0)} bankroll`),
+    kpi("Locked", fmtMoney(t.locked || 0), "pos", "settled / open positions"),
+  ].join("");
+
+  const rows = d.markets.slice(0, 12).map((m) => {
+    const tob = m.held
+      ? (m.top_of_book ? `<span class="pos">●</span>` : `<span class="neg">○</span>`)
+      : "";
+    const cov = m.held
+      ? `${fmtMoney(m.our_cov)}${m.our_filled ? ` <span class="pos">+${fmtMoney(m.our_filled)}</span>` : ""}`
+      : `<span class="muted">—</span>`;
+    const fillp = m.fill_pct != null ? ` <span class="muted">${m.fill_pct}%</span>` : "";
+    const book = m.best_no_c != null ? `${tob} ${fmtC(m.best_no_c)}` : (m.held ? tob : "—");
+    return `<tr class="${m.held ? "" : "muted-row"}">
+      <td title="${escapeHtml(m.ticker)}">${escapeHtml(m.shape)}${m.held ? "" : ` <span class="muted">·new</span>`}</td>
+      <td class="num">${fmtInt(m.m5)}</td>
+      <td class="num">${fmtInt(m.m15)}</td>
+      <td class="num">${fmtInt(m.vol)}</td>
+      <td class="num">${fmtC(m.clear_no_c)}</td>
+      <td class="num">${cov}${fillp}</td>
+      <td class="num">${book}</td>
+    </tr>`;
+  }).join("");
+
+  const accts = (d.accounts || [])
+    .map((a) => `${escapeHtml(a.label)} $${fmtInt(a.free)}f/${fmtInt(a.n_resting)}r`)
+    .join(" · ");
+
+  $("rester-table").innerHTML = `
+    <table class="rester-tbl">
+      <thead><tr>
+        <th>shape</th><th class="num">5m</th><th class="num">15m</th><th class="num">vol</th>
+        <th class="num">NO-clr</th><th class="num">our cov</th><th class="num">book</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="muted" style="margin-top:6px;font-size:12px">${accts}</div>`;
 }
 
 function render() {

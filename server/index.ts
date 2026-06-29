@@ -38,6 +38,7 @@ import { getRecap, getRecapOverall } from "./recap.js";
 import { getFlow } from "./flow.js";
 import { getImpFlow } from "./impflow.js";
 import { getBuilders } from "./builders.js";
+import { getRester } from "./rester.js";
 import { getClv } from "./clv.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
@@ -421,6 +422,16 @@ app.get("/api/builders", async (req, res, next) => {
     const date = String(req.query.date || "").trim();
     const force = String(req.query.fresh || "") === "1";
     res.json(await getBuilders(date, force));
+  } catch (e) { next(e); }
+});
+
+// Our resting book (admin-only): our resting impossible-parlay orders + top markets,
+// rendered as the Flow-tab "Our Resting Book" panel.
+app.get("/api/rester", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "").trim();
+    const force = String(req.query.fresh || "") === "1";
+    res.json(await getRester(date, force));
   } catch (e) { next(e); }
 });
 
