@@ -154,6 +154,7 @@ function kpi(label, value, cls = "", sub = "") {
 }
 
 const fmtC = (c) => (c == null ? "—" : `${Math.round(c)}¢`);
+const fmtK = (n) => (n == null ? "" : Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n)}`);
 
 // "Our resting book" — admin-only panel below the public flow. Fetched separately
 // from /api/rester so a failure (or a non-admin instance returning "admin-only")
@@ -179,7 +180,7 @@ function renderRester() {
   const t = d.totals || {};
   const upd = d.generated_at ? new Date(d.generated_at * 1000).toLocaleTimeString() : "—";
   $("rester-hint").textContent =
-    `top markets by 5-min demand · ● = we're top-of-book, ○ = outbid · upd ${upd} (${d.source})`;
+    `top markets by 5-min demand · book ●=top ○=outbid · comp = best rival NO bid ×contracts at/above our bid · upd ${upd} (${d.source})`;
 
   $("rester-summary").innerHTML = [
     kpi("Open resting", fmtMoney(t.open || 0), "", "unfilled NO at rest"),
@@ -196,15 +197,22 @@ function renderRester() {
       ? `${fmtMoney(m.our_cov)}${m.our_filled ? ` <span class="pos">+${fmtMoney(m.our_filled)}</span>` : ""}`
       : `<span class="muted">—</span>`;
     const fillp = m.fill_pct != null ? ` <span class="muted">${m.fill_pct}%</span>` : "";
-    const book = m.best_no_c != null ? `${tob} ${fmtC(m.best_no_c)}` : (m.held ? tob : "—");
+    const book = m.held ? `${tob} ${fmtC(m.our_no_c)}` : `<span class="muted">—</span>`;
+    // competition: best external NO bid + contracts resting at/above our bid (contest us)
+    let comp = `<span class="muted">—</span>`;
+    if (m.comp_best_c != null) {
+      const contested = m.held && m.comp_ct > 0;          // a rival at/above our price
+      const sz = m.comp_ct ? ` ×${fmtK(m.comp_ct)}` : "";
+      comp = `<span class="${contested ? "neg" : "muted"}">${fmtC(m.comp_best_c)}${sz}</span>`;
+    }
     return `<tr class="${m.held ? "" : "muted-row"}">
       <td title="${escapeHtml(m.ticker)}">${escapeHtml(m.shape)}${m.held ? "" : ` <span class="muted">·new</span>`}</td>
-      <td class="num">${fmtInt(m.m5)}</td>
-      <td class="num">${fmtInt(m.m15)}</td>
+      <td class="num">${fmtInt(m.m5)}/${fmtInt(m.m15)}</td>
       <td class="num">${fmtInt(m.vol)}</td>
       <td class="num">${fmtC(m.clear_no_c)}</td>
       <td class="num">${cov}${fillp}</td>
       <td class="num">${book}</td>
+      <td class="num">${comp}</td>
     </tr>`;
   }).join("");
 
@@ -215,8 +223,9 @@ function renderRester() {
   $("rester-table").innerHTML = `
     <table class="rester-tbl">
       <thead><tr>
-        <th>shape</th><th class="num">5m</th><th class="num">15m</th><th class="num">vol</th>
+        <th>shape</th><th class="num">5/15m</th><th class="num">vol</th>
         <th class="num">NO-clr</th><th class="num">our cov</th><th class="num">book</th>
+        <th class="num">comp</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
