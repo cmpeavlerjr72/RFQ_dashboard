@@ -199,12 +199,12 @@ function renderRester() {
     const book = m.best_no_c != null ? `${tob} ${fmtC(m.best_no_c)}` : (m.held ? tob : "—");
     return `<tr class="${m.held ? "" : "muted-row"}">
       <td title="${escapeHtml(m.ticker)}">${escapeHtml(m.shape)}${m.held ? "" : ` <span class="muted">·new</span>`}</td>
-      <td class="num">${fmtInt(m.m5)}</td>
-      <td class="num">${fmtInt(m.m15)}</td>
-      <td class="num">${fmtInt(m.vol)}</td>
-      <td class="num">${fmtC(m.clear_no_c)}</td>
-      <td class="num">${cov}${fillp}</td>
-      <td class="num">${book}</td>
+      <td class="num" data-label="5m">${fmtInt(m.m5)}</td>
+      <td class="num" data-label="15m">${fmtInt(m.m15)}</td>
+      <td class="num" data-label="vol">${fmtInt(m.vol)}</td>
+      <td class="num" data-label="NO-clr">${fmtC(m.clear_no_c)}</td>
+      <td class="num" data-label="our cov">${cov}${fillp}</td>
+      <td class="num" data-label="book">${book}</td>
     </tr>`;
   }).join("");
 

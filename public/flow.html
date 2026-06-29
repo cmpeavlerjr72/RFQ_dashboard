@@ -8,6 +8,7 @@
 <script defer src="/brand.js"></script>
 <style>
   #rester-wrap { margin-top: 18px; }
+  #rester-table { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table.rester-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   table.rester-tbl th, table.rester-tbl td { padding: 4px 8px; border-bottom: 1px solid var(--border, #2a2a2a); text-align: left; white-space: nowrap; }
   table.rester-tbl th { color: var(--muted, #888); font-weight: 600; }
@@ -15,6 +16,16 @@
   table.rester-tbl tr.muted-row td { color: var(--muted, #888); }
   table.rester-tbl .pos { color: var(--pos, #3fb950); }
   table.rester-tbl .neg { color: var(--neg, #f85149); }
+  /* Phone: stack each market into a labelled card instead of one wide scrolling row. */
+  @media (max-width: 640px) {
+    #rester-table { overflow-x: visible; }
+    table.rester-tbl, table.rester-tbl tbody, table.rester-tbl tr, table.rester-tbl td { display: block; width: 100%; }
+    table.rester-tbl thead { display: none; }
+    table.rester-tbl tr { border: 1px solid var(--border, #2a2a2a); border-radius: 8px; padding: 6px 10px; margin-bottom: 8px; }
+    table.rester-tbl td { border: 0; padding: 2px 0; white-space: normal; display: flex; justify-content: space-between; gap: 12px; text-align: right; }
+    table.rester-tbl td:first-child { font-weight: 600; text-align: left; border-bottom: 1px solid var(--border, #2a2a2a); padding-bottom: 4px; margin-bottom: 4px; }
+    table.rester-tbl td:not(:first-child)::before { content: attr(data-label); color: var(--muted, #888); font-weight: 400; }
+  }
 </style>
 </head>
 <body>
