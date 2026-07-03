@@ -176,7 +176,7 @@ async function refresh() {
   state.fetching = true;
   setStatus("fetching", "fetching");
   try {
-    const [bal, pos, fills, starts, momentum] = await Promise.all([
+    const [bal, pos, fills, starts, momentum, takerInfo] = await Promise.all([
       api("/api/kalshi/balance"),
       api("/api/kalshi/positions"),
       api("/api/fills"),
@@ -185,7 +185,11 @@ async function refresh() {
       api("/api/start-times").catch(() => ({ starts: {} })),
       // Live FotMob match-momentum (account-independent; non-fatal).
       fetch("/api/momentum").then((r) => r.json()).catch(() => ({ games: {} })),
+      // Taker-acquired contracts per ticker (RFQ submissions / hole repairs,
+      // 2026-07-03) — powers the TAKER pill on parlay cards. Non-fatal.
+      api("/api/kalshi/taker-info").catch(() => ({ tickers: {} })),
     ]);
+    state.takerByTicker = (takerInfo && takerInfo.tickers) || {};
 
     state.soccerStarts = (starts && starts.starts) || {};
     state.soccerScores = (starts && starts.scores) || {};
@@ -218,9 +222,14 @@ async function refresh() {
       const qty = Math.abs(parseFloat(p.position_fp));
       const exposure = parseFloat(p.market_exposure_dollars || "0");
       const side = parseFloat(p.position_fp) > 0 ? "YES" : "NO";
+      // holdYes: we are LONG the parlay/market (position_fp > 0) — e.g. a
+      // taker hole-repair buy. Every valuation path below branches on this;
+      // the historical default (maker book) is holdYes=false = long NO.
+      const holdYes = parseFloat(p.position_fp) > 0;
+      const takerCt = Number(state.takerByTicker?.[p.ticker]?.taker_ct) || 0;
       const f = state.fillsByParlay[p.ticker] || {};
       return {
-        ticker: p.ticker, qty, side,
+        ticker: p.ticker, qty, side, holdYes, takerCt,
         cost: exposure,
         avgCostC: qty ? Math.round((exposure / qty) * 100) : 0,
         max_profit: qty - exposure,
@@ -278,15 +287,17 @@ async function refresh() {
       }
       for (const p of state.positions) {
         const m = markets[p.ticker]?.market || {};
-        // Parlay MTM (we hold NO of the parlay)
-        const noBidC = dollarsToC(m.no_bid_dollars);
-        const noAskC = dollarsToC(m.no_ask_dollars);
-        if (noBidC && noAskC && noBidC > 0 && noAskC > 0) {
-          const noMidC = (noBidC + noAskC) / 2;
-          p.midC = noMidC;
-          p.unreal = ((noMidC - p.avgCostC) / 100) * p.qty;
+        // Parlay MTM on OUR side: NO for the maker book (default), YES when
+        // holdYes (taker buys / long positions, 2026-07-03).
+        const sBidC = dollarsToC(p.holdYes ? m.yes_bid_dollars : m.no_bid_dollars);
+        const sAskC = dollarsToC(p.holdYes ? m.yes_ask_dollars : m.no_ask_dollars);
+        if (sBidC && sAskC && sBidC > 0 && sAskC > 0) {
+          const sMidC = (sBidC + sAskC) / 2;
+          p.midC = sMidC;
+          p.unreal = ((sMidC - p.avgCostC) / 100) * p.qty;
         }
-        // Per-leg odds: buyer took side X on leg; we want the OPPOSITE side's price.
+        // Per-leg odds: price the leg on OUR side — the buyer's opposite for
+        // the maker book, the leg side itself when we hold YES.
         for (const leg of p.legs) {
           const lm = markets[leg.ticker]?.market || {};
           const lLast = dollarsToC(lm.last_price_dollars);
@@ -297,8 +308,9 @@ async function refresh() {
           // Prefer direct YES prices; fall back to deriving from NO via 100-x.
           const lYesBid = lYesBidDirect != null ? lYesBidDirect : (lNoAsk != null ? 100 - lNoAsk : null);
           const lYesAsk = lYesAskDirect != null ? lYesAskDirect : (lNoBid != null ? 100 - lNoBid : null);
-          // Flip the buyer's side to get OUR side
-          const ourSide = flipSide(leg.side);
+          // OUR side: the buyer's opposite (maker book) or the leg side as-is
+          // when we hold YES of the parlay.
+          const ourSide = p.holdYes ? (leg.side || "yes").toLowerCase() : flipSide(leg.side);
           const bidC = ourSide === "yes" ? lYesBid : lNoBid;
           const askC = ourSide === "yes" ? lYesAsk : lNoAsk;
           // Mid preference order:
@@ -1294,19 +1306,19 @@ function computeGameScenarios(g, parlays) {
         // "buyer_hit" leaves allHit true; everything else flips it
       }
       if (anyBuyerMiss) {
-        // Locked: we win this parlay.
-        const winPnl = p.qty - p.cost;
-        best  += winPnl;
-        worst += winPnl;
+        // Locked: legs broke — the maker book wins, a holdYes (long) loses.
+        const v = p.holdYes ? -p.cost : p.qty - p.cost;
+        best  += v;
+        worst += v;
       } else if (anyUnknown) {
-        // Envelope: best case we still win (one unknown fails buyer),
-        // worst case we lose (every unknown hits buyer).
+        // Envelope: unknowns can still swing it either way in BOTH frames.
         best  += p.qty - p.cost;
         worst += -p.cost;
       } else if (allHit) {
-        // Locked: every leg hit, we lose.
-        best  += -p.cost;
-        worst += -p.cost;
+        // Locked: every leg hit — the maker book loses, a holdYes wins.
+        const v = p.holdYes ? p.qty - p.cost : -p.cost;
+        best  += v;
+        worst += v;
       }
     }
     return { label, best, worst };
@@ -1381,9 +1393,14 @@ function _treeEvalLeg(ticker, side, asg) {
 // Market-implied probability that OUR side wins a leg (pUs), from the live
 // leg mid (preferred) or the fill-time fair as fallback. null when unknown.
 function _treeLegPUs(p, leg) {
+  // legMids are already stored in OUR-side terms (branch-aware since
+  // 2026-07-03); the fill-time fallback must match that frame.
   const lm = p.legMids?.[leg.ticker];
   if (lm && lm.midC != null) return Math.min(1, Math.max(0, lm.midC / 100));
-  if (leg.p != null) return Math.min(1, Math.max(0, 1 - Number(leg.p)));
+  if (leg.p != null) {
+    const buyerP = Math.min(1, Math.max(0, Number(leg.p)));
+    return p.holdYes ? buyerP : 1 - buyerP;
+  }
   return null;
 }
 
@@ -1400,7 +1417,12 @@ function _treeNodeExpected(parlays, gameKey, asg) {
       let pHit;
       if (r === "buyer_hit") pHit = 1;
       else if (r === "buyer_miss") pHit = 0;
-      else { const pu = _treeLegPUs(p, l); pHit = pu == null ? 0.5 : (1 - pu); }
+      else {
+        // _treeLegPUs is in OUR-side terms; the leg-hit prob is its complement
+        // for the maker book but the value itself when we hold YES.
+        const pu = _treeLegPUs(p, l);
+        pHit = pu == null ? 0.5 : (p.holdYes ? pu : 1 - pu);
+      }
       pAllHit *= pHit;
     }
     // Fold in the runner's fill-time correlation ratio (cosmetic first-order:
@@ -1409,7 +1431,10 @@ function _treeNodeExpected(parlays, gameKey, asg) {
     if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
       pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
     }
-    exp += pAllHit * (-p.cost) + (1 - pAllHit) * p.max_profit;
+    // all-legs-hit pays the maker book's counterparty — that's US when holdYes.
+    exp += p.holdYes
+      ? pAllHit * p.max_profit + (1 - pAllHit) * (-p.cost)
+      : pAllHit * (-p.cost) + (1 - pAllHit) * p.max_profit;
   }
   return exp;
 }
@@ -1433,6 +1458,9 @@ const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "l
 // skipped, never used to claim a win we can't verify.
 function _impossibleSoccerParlay(p) {
   if (!p || !p.legs || !p.legs.length) return false;
+  // The sure-win shortcut is a LONG-NO property. Holding YES of an impossible
+  // parlay would be a sure LOSS — never claim the win frame (2026-07-03).
+  if (p.holdYes) return false;
   if (p.__impossible !== undefined) return p.__impossible;
   p.__impossible = (function () {
     try {
@@ -2201,17 +2229,20 @@ function aggregateLegExposure() {
   for (const p of state.positions) {
     for (const leg of p.legs) {
       const tk = leg.ticker;
+      // OUR side of this leg: the buyer's opposite for the maker book, the
+      // leg side itself when we hold YES (2026-07-03).
+      const usSide = p.holdYes ? (leg.side || "yes").toLowerCase() : flipSide(leg.side);
       // Key by ticker AND our side: a hedged market (we hold both the over and
       // the under of the same threshold — e.g. CINCBURNS26-8 yes+no) must stay
       // two rows, else the opposing legs merge into one chip with summed
       // exposure across sides and a single (wrong) label.
-      const rowKey = `${tk}|${leg.side}`;
+      const rowKey = `${tk}|${usSide}`;
       let row = byTicker.get(rowKey);
       if (!row) {
         row = {
           ticker: tk,
-          buyerSide: leg.side,         // what the buyer needs (parlay hits)
-          ourSide: flipSide(leg.side), // what we need (parlay voids)
+          buyerSide: flipSide(usSide), // the anti-us side (leg hits against us)
+          ourSide: usSide,             // what we need
           parlays: 0,
           exposure: 0,
           maxWin: 0,
@@ -2225,7 +2256,8 @@ function aggregateLegExposure() {
       row.maxWin += p.max_profit;
       const lm = p.legMids[tk];
       if (lm && lm.midC != null) row.legMid = lm;
-      if (leg.p != null) row.fillP = Number(leg.p);
+      // Normalize the fill-time fair to the ANTI-us frame (pUs = 1 - fillP).
+      if (leg.p != null) row.fillP = p.holdYes ? 1 - Number(leg.p) : Number(leg.p);
     }
   }
 
@@ -2397,13 +2429,13 @@ function computeGameNetting(positions, gameKey) {
         if (cur == null || lc.team < cur) marginRef.set(lc.varKey, lc.team);
       }
     }
-    raw.push({ c, cp, cons, legCount: (pos.legs || []).length });
+    raw.push({ c, cp, cons, legCount: (pos.legs || []).length, hy: !!pos.holdYes });
   }
 
   // Pass 2: canonicalise margin specs onto the reference axis (flip legs about
   // the other team: margin_other = -margin_ref, so ">L" <=> "<=-L"), then build
   // the variable tables.
-  for (const { c, cp, cons, legCount } of raw) {
+  for (const { c, cp, cons, legCount, hy } of raw) {
     const idx = posList.length;
     const ccons = [];
     for (const lc0 of cons) {
@@ -2424,7 +2456,7 @@ function computeGameNetting(positions, gameKey) {
       if (!varPositions.has(lc.varKey)) varPositions.set(lc.varKey, new Set());
       varPositions.get(lc.varKey).add(idx);
     }
-    posList.push({ c, cp, cons: ccons, legCount });
+    posList.push({ c, cp, cons: ccons, legCount, hy });
   }
 
   const candOf = (v) => {
@@ -2497,8 +2529,16 @@ function computeGameNetting(positions, gameKey) {
             if (!sat) allHit = false;
             if (v === undefined || !_satNet(c, v)) pinnedLose = false;
           }
-          netW += allHit ? lose : win;
-          netB += pinnedLose ? lose : win;
+          // holdYes positions have the MIRROR payoff: all-legs-hit is their
+          // WIN. Conservative both ways: worst assumes free legs break
+          // against a long, best assumes they break for it (2026-07-03).
+          if (pos.hy) {
+            netW += pinnedLose ? win : lose;
+            netB += allHit ? win : lose;
+          } else {
+            netW += allHit ? lose : win;
+            netB += pinnedLose ? lose : win;
+          }
         }
         if (bestNet === null || netW < bestNet) bestNet = netW;
         if (bestGain === null || netB > bestGain) bestGain = netB;
@@ -2539,8 +2579,13 @@ function computeGameNetting(positions, gameKey) {
         let netW = 0, netB = 0;
         for (const pos of posList) {
           const win = (1 - pos.cp) * pos.c, lose = -pos.cp * pos.c;
-          netW += allHits(pos, asg) ? lose : win;
-          netB += voidsBest(pos, asg) ? win : lose;
+          if (pos.hy) {   // mirror payoff for long (holdYes) positions
+            netW += voidsBest(pos, asg) ? lose : win;
+            netB += allHits(pos, asg) ? win : lose;
+          } else {
+            netW += allHits(pos, asg) ? lose : win;
+            netB += voidsBest(pos, asg) ? win : lose;
+          }
         }
         if (bestNet === null || netW < bestNet) bestNet = netW;
         if (bestGain === null || netB > bestGain) bestGain = netB;
@@ -2581,6 +2626,7 @@ function computePortfolioNetting() {
   const parlays = state.positions.filter((p) => !_impossibleSoccerParlay(p)).map((p) => ({
     contracts: p.qty || 0,
     costPer: (p.qty > 0 ? (p.cost || 0) / p.qty : 0),
+    holdYes: !!p.holdYes,
     legs: p.legs || [],
     games: [...new Set((p.legs || []).map((l) => legGameGroupKey(l.ticker)).filter(Boolean))],
   }));
@@ -2718,7 +2764,8 @@ function aggregateGameCards() {
         if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
           pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
         }
-        const pWeWin = 1 - pAllHit;
+        // all-legs-hit pays the parlay holder — that's US when holdYes.
+        const pWeWin = p.holdYes ? pAllHit : 1 - pAllHit;
         g.expectedPnl = (g.expectedPnl || 0) + (pWeWin * p.qty - p.cost);
         g.expectedCovered = (g.expectedCovered || 0) + 1;
       }
@@ -2737,6 +2784,7 @@ function aggregateGameCards() {
       .map((p) => ({
         contracts: p.qty || 0,
         costPer: (p.qty > 0 ? p.cost / p.qty : 0),
+        holdYes: !!p.holdYes,
         legs: p.legs,
       }));
     const net = computeGameNetting(gpos, g.key);
@@ -2888,9 +2936,12 @@ function _legYesProbNow(ticker) {
     const lm = p.legMids?.[ticker];
     if (lm && lm.midC != null) {
       const leg = (p.legs || []).find((l) => l.ticker === ticker);
-      const buyerYes = !leg || (leg.side || "yes").toLowerCase() === "yes";
+      // stored midC is in OUR-side terms; our side depends on the frame:
+      // maker book = buyer's opposite, holdYes = the leg side itself.
+      const legSide = leg ? (leg.side || "yes").toLowerCase() : "yes";
+      const ourS = p.holdYes ? legSide : flipSide(legSide);
       const v = Math.min(1, Math.max(0, lm.midC / 100));
-      return buyerYes ? 1 - v : v;   // buyer yes => our (stored) side is NO
+      return ourS === "yes" ? v : 1 - v;
     }
   }
   for (const f of state.fillRows) {
@@ -5198,21 +5249,30 @@ function effectiveStatus(res, legMid) {
 function computeParlayProbabilities(p) {
   // Returns { pWin, pLose, expectedPnl, breakdownLegs:[{p_buyer, p_us, eff}], unknown:bool }
   const impossible = _impossibleSoccerParlay(p);
-  let pLose = 1.0;
+  let pAllHit = 1.0;   // P(every leg's market side hits) — the parlay paying out
   let unknown = false;
   const breakdown = [];
   for (const leg of p.legs) {
     const lm = p.legMids[leg.ticker] || {};
-    const res = legResolutionForUs(leg, state.scoreboards, state.boxscores);
+    // legResolutionForUs / pBuyerWinsLeg are ANTI-buyer framed. For a holdYes
+    // (long) parlay WE are the buyer, so feed them the side-flipped leg —
+    // then "alive"/p_us keep meaning OUR way in both frames (2026-07-03).
+    const legF = p.holdYes
+      ? { ...leg, side: flipSide(leg.side), p: leg.p != null ? 1 - Number(leg.p) : null }
+      : leg;
+    const res = legResolutionForUs(legF, state.scoreboards, state.boxscores);
     const eff = effectiveStatus(res, lm);
     // Promote market-implied resolution into the prob so locked legs short-circuit
     const resForProb = eff !== res.status
       ? { ...res, status: eff }
       : res;
-    const pb = pBuyerWinsLeg(leg, lm, resForProb);
+    const pb = pBuyerWinsLeg(legF, lm, resForProb);  // P(anti-us side hits)
     if (pb == null) { unknown = true; }
-    else { pLose *= pb; }
-    breakdown.push({ p_buyer: pb, p_us: pb == null ? null : 1 - pb, res, eff, leg });
+    else { pAllHit *= p.holdYes ? 1 - pb : pb; }     // P(market leg side hits)
+    breakdown.push({
+      p_buyer: pb == null ? null : (p.holdYes ? 1 - pb : pb),
+      p_us: pb == null ? null : 1 - pb, res, eff, leg,
+    });
   }
   // IMPOSSIBLE PARLAY: the YES can never resolve, so our NO is a 100% sure win —
   // win prob 1, zero loss-risk, profit = the full premium. Overrides the naive
@@ -5226,12 +5286,14 @@ function computeParlayProbabilities(p) {
     return { pWin: null, pLose: null, expectedPnl: null, unknown: true, breakdown };
   }
   // Bake in the runner's fill-time correlation ratio (see corrRatio above):
-  // pLose is the independent product, which overstates the loss prob on
-  // negatively-correlated parlays. Skip decided parlays (pLose 0/1).
-  if (p.corrRatio != null && pLose > 0 && pLose < 1) {
-    pLose = Math.min(1, Math.max(0, pLose * p.corrRatio));
+  // pAllHit is the independent product, which overstates the joint-hit prob
+  // on negatively-correlated parlays. Skip decided parlays (0/1).
+  if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
+    pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
   }
-  const pWin = 1 - pLose;
+  // The parlay paying out is our LOSS on the maker book, our WIN when holdYes.
+  const pWin = p.holdYes ? pAllHit : 1 - pAllHit;
+  const pLose = 1 - pWin;
   const expectedPnl = pWin * p.max_profit - pLose * p.cost;
   return { pWin, pLose, expectedPnl, unknown: false, breakdown };
 }
@@ -5274,8 +5336,11 @@ function renderParlayCard(p, n, probs) {
   const expanded = state.parlayExpanded.has(p.ticker);
 
   const legHtml = p.legs.map((leg, i) => {
-    const res = legResolutionForUs(leg, state.scoreboards, state.boxscores);
-    const ourSide = flipSide(leg.side);
+    // legResolutionForUs is anti-buyer framed — flip the side in when WE are
+    // the buyer (holdYes) so alive/dead keep meaning OUR way (2026-07-03).
+    const legF = p.holdYes ? { ...leg, side: flipSide(leg.side) } : leg;
+    const res = legResolutionForUs(legF, state.scoreboards, state.boxscores);
+    const ourSide = p.holdYes ? (leg.side || "yes").toLowerCase() : flipSide(leg.side);
     const desc = legLabel(leg.ticker, ourSide, state.athleteIdx, _floorStrikeByTicker[leg.ticker]);
     const lm = p.legMids[leg.ticker] || {};
     const eff = probs.breakdown[i]?.eff || res.status;
@@ -5302,9 +5367,8 @@ function renderParlayCard(p, n, probs) {
                    : res.status === "dead" ? "post" : "";
     const statText = res.stat || "";
 
-    // Pass our flipped side so game-pick legs show the OPPOSITE team's logo
-    // (e.g. parlay leg picks ATL but we hold long-NO → show COL logo, our
-    // rooting interest).
+    // Pass OUR side so game-pick legs show our rooting interest's logo
+    // (maker book: the opposite team; holdYes: the picked team itself).
     const { sport, teams: logoTeams, league } = legTeams(leg.ticker, ourSide);
     const logoHtml = logoTeams.map(abbr =>
       `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
@@ -5376,12 +5440,23 @@ function renderParlayCard(p, n, probs) {
     ? `<span class="merged-badge" title="${escapeHtml(`${p.mergedCount} fills with identical legs combined into one. Risk / To win / qty are summed.\n${p.mergedTickers.join("\n")}`)}">⧉ ${p.mergedCount} fills</span>`
     : "";
 
+  // TAKER pill (2026-07-03): this ticker includes taker-side fills — an RFQ
+  // submission / hole-repair buy, not our passive maker flow. LONG marks a
+  // net long-YES holding (the position's whole valuation runs in the
+  // holdYes frame).
+  const takerHtml = (p.takerCt > 0)
+    ? `<span class="corr-badge corr-pos" title="${escapeHtml(`${p.takerCt.toFixed(2)} contracts on this ticker filled as TAKER (our RFQ submission / hole repair), the rest as maker.${p.holdYes ? "\nPosition is net LONG (YES) — priced in the long frame." : ""}`)}">⚡ TAKER${p.holdYes ? " · LONG" : ""}</span>`
+    : (p.holdYes
+      ? `<span class="corr-badge corr-pos" title="Net long-YES holding — priced in the long frame (we win when the legs hit).">▲ LONG</span>`
+      : "");
+
   return `<div class="parlay ${expanded ? "expanded" : "collapsed"}">
     <div class="head" data-ticker="${escapeHtml(p.ticker)}" role="button" aria-expanded="${expanded}" tabindex="0">
       <div class="top">
         <span class="badge ${cardBadgeCls}">#${n} · ${cardBadge}</span>
         ${parlayLegLogosHtml(p)}
         ${probs.impossible ? `<span class="corr-badge corr-neg" title="Impossible parlay: the YES can never resolve on any scoreline, so our NO is a 100% sure win — zero loss-risk, profit = the premium.">🎁 SURE WIN</span>` : ""}
+        ${takerHtml}
         ${corrBadge}
         ${mergedHtml}
         ${fillTsHtml}
@@ -5422,6 +5497,7 @@ function resetForAccountSwitch() {
   state.balance = null;
   state.positions = [];
   state.fillsByParlay = {};
+  state.takerByTicker = {};
   state.scoreboards = {};
   state.boxscores = {};
   state.rosters = {};

@@ -13,6 +13,7 @@ import dotenv from "dotenv";
 import {
   getBalance,
   getPositions,
+  getTakerInfo,
   getMarket,
   getMarketsBatch,
   getEventMarkets,
@@ -173,6 +174,29 @@ app.get("/api/kalshi/positions", async (req, res, next) => {
     upstreamCallCount++;
     const a = acct(req);
     res.json(isOverall(a) ? await combinedPositions(force) : await getPositions(a, force));
+  } catch (e) { next(e); }
+});
+
+// Taker/maker contract counts per ticker (recent fills) — TAKER pill data.
+app.get("/api/kalshi/taker-info", async (req, res, next) => {
+  try {
+    upstreamCallCount++;
+    const a = acct(req);
+    if (isOverall(a)) {
+      const parts = await Promise.all(
+        REAL_ACCOUNTS.map((x) => getTakerInfo(x).catch(() => ({ tickers: {} }))),
+      );
+      const tickers: Record<string, { taker_ct: number; maker_ct: number }> = {};
+      for (const part of parts as any[]) {
+        for (const [tk, v] of Object.entries((part && part.tickers) || {})) {
+          const row = tickers[tk] || (tickers[tk] = { taker_ct: 0, maker_ct: 0 });
+          row.taker_ct += Number((v as any).taker_ct) || 0;
+          row.maker_ct += Number((v as any).maker_ct) || 0;
+        }
+      }
+      return res.json({ tickers });
+    }
+    res.json(await getTakerInfo(a));
   } catch (e) { next(e); }
 });
 

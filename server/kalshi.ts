@@ -345,6 +345,35 @@ async function takerOnlyTickers(account: string, maxPages = 12): Promise<Set<str
   return out;
 }
 
+// Taker/maker contract counts per ticker from recent fills (2026-07-03) —
+// powers the frontend's TAKER pill (RFQ-submission / hole-repair buys). A few
+// pages is plenty: the pill matters for TODAY's open positions, and taker
+// fills are rare events on the maker accounts.
+const takerInfoCache = new TTLCache<any>();
+export async function getTakerInfo(account: string, maxPages = 4): Promise<any> {
+  return takerInfoCache.getOrFetch(`${account}:takerinfo`, async () => {
+    const tickers: Record<string, { taker_ct: number; maker_ct: number }> = {};
+    let cursor = "";
+    for (let i = 0; i < maxPages; i++) {
+      const body = await getJson(
+        account,
+        "/portfolio/fills?limit=200" + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""),
+      );
+      const page: any[] = body?.fills || [];
+      for (const f of page) {
+        const tk = f?.market_ticker || f?.ticker || "";
+        if (!tk) continue;
+        const ct = parseFloat(f?.count_fp ?? f?.count ?? "0") || 0;
+        const row = tickers[tk] || (tickers[tk] = { taker_ct: 0, maker_ct: 0 });
+        if (f?.is_taker) row.taker_ct += ct; else row.maker_ct += ct;
+      }
+      cursor = body?.cursor || "";
+      if (!page.length || !cursor) break;
+    }
+    return { tickers };
+  }, 60_000);
+}
+
 export async function getPositions(account: string, force = false): Promise<any> {
   const key = `${account}:positions`;
   if (force) positionsCache.set(key, undefined as any, 0);
