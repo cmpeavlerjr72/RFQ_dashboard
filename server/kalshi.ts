@@ -358,7 +358,12 @@ export async function getPositions(account: string, force = false): Promise<any>
       // parlays "disappear" from the dashboard. We keep only our KXMVE parlay products
       // (anything else is the owner's personal betting) across every page.
       // Mirrors the runner's hydration filter (run_netting_maker.py). 2026-06-03 / 06-24.
-      const keep = (p: any) => (p?.ticker || "").startsWith("KXMVE");
+      // 2026-07-02: also keep KXWC soccer SINGLES — the pinmaker singles desk
+      // rests on lit TOTAL/SPREAD/GAME/BTTS markets from the maker accounts.
+      const keep = (p: any) => {
+        const t = p?.ticker || "";
+        return t.startsWith("KXMVE") || t.startsWith("KXWC");
+      };
       const market_positions: any[] = [];
       const event_positions: any[] = [];
       let cursor = "";
@@ -370,7 +375,7 @@ export async function getPositions(account: string, force = false): Promise<any>
         if (!page || typeof page !== "object") break;
         for (const p of page.market_positions || []) if (keep(p)) market_positions.push(p);
         for (const e of page.event_positions || [])
-          if ((e?.event_ticker || "").startsWith("KXMVE")) event_positions.push(e);
+          if ((e?.event_ticker || "").startsWith("KXMVE") || (e?.event_ticker || "").startsWith("KXWC")) event_positions.push(e);
         cursor = page.cursor || "";
         if (!cursor) break;
       }
@@ -544,6 +549,12 @@ export async function recoverParlay(account: string, parlayTicker: string): Prom
     const legs = (mkt?.mve_selected_legs || [])
       .map((l: any) => ({ ticker: l?.market_ticker || "", side: (l?.side || "yes").toLowerCase(), p: null as number | null }))
       .filter((l: { ticker: string }) => l.ticker);
+    // SINGLES (2026-07-02): a lit KXWC single (TOTAL/SPREAD/GAME/BTTS) has no
+    // mve_selected_legs — it IS its own single leg. Synthesize the 1-leg
+    // parlay so singles-desk fills sort into games and paint the risk grid.
+    if (!legs.length && parlayTicker.startsWith("KXWC")) {
+      legs.push({ ticker: parlayTicker, side: "yes", p: null });
+    }
     result = { parlay_ticker: parlayTicker, rfq_id: null, quote_id: null, accepted_side: null, legs };
   } catch (e) {
     console.warn(`recoverParlay(${account}/${parlayTicker}) failed:`, (e as any)?.message || e);
