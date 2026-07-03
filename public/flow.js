@@ -134,6 +134,7 @@ async function loadFlow({ force = false } = {}) {
   setStatus(`loading ${date}…`, "fetching");
   $("refresh-btn").disabled = true;
   loadRester(date, force);   // admin-only panel; independent so an error never blanks the public Flow view
+  loadEngineDiag(date, force);  // admin-only live engine telemetry
   try {
     const r = await fetch(`/api/impflow?date=${date}${force ? "&fresh=1" : ""}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -159,6 +160,90 @@ const fmtK = (n) => (n == null ? "" : Math.abs(n) >= 1000 ? `${(n / 1000).toFixe
 // "Our resting book" — admin-only panel below the public flow. Fetched separately
 // from /api/rester so a failure (or a non-admin instance returning "admin-only")
 // just hides the panel without touching the public Flow view.
+async function loadEngineDiag(date, force = false) {
+  try {
+    const r = await fetch(`/api/engine-diag?date=${date}${force ? "&fresh=1" : ""}`);
+    if (!r.ok) return;
+    state.ediag = await r.json();
+    renderEngineDiag();
+  } catch { /* admin-only panel */ }
+}
+
+function _ediagSvg(pts, opts) {
+  // pts: [{x, ys: [y1, y2?]}] normalized externally; two polylines max
+  const { w = 460, h = 120, colors = ["#4ade80", "#f87171"], labels = [] } = opts || {};
+  if (!pts.length) return "";
+  const xs = pts.map(p => p.x), all = pts.flatMap(p => p.ys.filter(v => v != null));
+  if (!all.length) return "";
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...all, 0), y1 = Math.max(...all, 0);
+  const sx = x => 8 + (w - 16) * (x1 > x0 ? (x - x0) / (x1 - x0) : 0);
+  const sy = y => h - 14 - (h - 28) * (y1 > y0 ? (y - y0) / (y1 - y0) : 0.5);
+  const lines = [];
+  for (let i = 0; i < (pts[0].ys || []).length; i++) {
+    const d = pts.filter(p => p.ys[i] != null).map(p => `${sx(p.x).toFixed(1)},${sy(p.ys[i]).toFixed(1)}`).join(" ");
+    if (d) lines.push(`<polyline points="${d}" fill="none" stroke="${colors[i]}" stroke-width="1.8"/>`);
+  }
+  const zero = `<line x1="8" y1="${sy(0).toFixed(1)}" x2="${w - 8}" y2="${sy(0).toFixed(1)}" stroke="#444" stroke-dasharray="3,3" stroke-width="0.7"/>`;
+  const leg = labels.map((t, i) => `<tspan fill="${colors[i]}">&#9632; ${t}</tspan>`).join("  ");
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto;background:var(--panel,#161616);border-radius:8px">
+    ${zero}${lines.join("")}
+    <text x="10" y="12" font-size="10" fill="#888">${leg}</text>
+    <text x="${w - 10}" y="12" font-size="10" fill="#888" text-anchor="end">${(y1).toFixed(0)} / ${(y0).toFixed(0)}</text>
+  </svg>`;
+}
+
+function renderEngineDiag() {
+  const wrap = $("ediag-wrap");
+  if (!wrap) return;
+  const d = state.ediag;
+  if (!d || d.source === "admin-only" || d.source === "empty" || !(d.fills || []).length) {
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "block";
+  const t = d.totals || {};
+  const rails = d.rails || {};
+  const last = (d.series || []).slice(-1)[0] || {};
+  const upd = d.generated_at ? new Date(d.generated_at * 1000).toLocaleTimeString() : "—";
+  $("ediag-hint").textContent =
+    `machine line = cumulative edge banked at fill (skill) · drift = book E minus machine (game variance) · upd ${upd} (${d.source})`;
+
+  $("ediag-summary").innerHTML = [
+    kpi("Edge banked", fmtMoney(t.edge_banked || 0), (t.edge_banked || 0) >= 0 ? "pos" : "neg", `${t.n_fills || 0} fills today`),
+    kpi("Book E now", last.e_pnl != null ? fmtMoney(last.e_pnl) : "—", (last.e_pnl || 0) >= 0 ? "pos" : "neg", `worst ${last.worst != null ? fmtMoney(last.worst) : "—"} @ ${last.worst_at || "—"}`),
+    kpi("P(green)", last.p_green != null ? `${(last.p_green * 100).toFixed(0)}%` : "—", "", `shortfall ${last.shortfall != null ? fmtMoney(last.shortfall) : "—"}`),
+    kpi("Rails", `${(rails.g || 0) + (rails.w || 0) + (rails.score || 0)} blocked`, (rails.breaches || 0) === 0 ? "pos" : "neg", `${rails.breaches || 0} breaches · ${rails.errors || 0} errors`),
+  ].join("");
+
+  const attr = (d.attribution || []).map(a => ({ x: a.ts, ys: [a.machine, a.drift] }));
+  const risk = (d.series || []).filter(s2 => s2.worst != null).map(s2 => ({ x: s2.ts, ys: [s2.worst] }));
+  $("ediag-charts").innerHTML =
+    `<div>${_ediagSvg(attr, { labels: ["machine (edge)", "game drift"] })}</div>` +
+    `<div>${_ediagSvg(risk, { colors: ["#60a5fa"], labels: ["at-risk (worst cell)"] })}</div>`;
+
+  const rows = (d.fills || []).slice(-14).reverse().map(f => {
+    const tm = f.ts ? new Date(f.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+    return `<tr>
+      <td>${tm}</td><td>${escapeHtml(f.engine || "")}</td>
+      <td title="${escapeHtml(f.tk || "")}">${escapeHtml((f.shape || "").slice(0, 34))}</td>
+      <td class="num">${(f.ct || 0).toFixed(1)}</td>
+      <td class="num">${((f.yes || 0) * 100).toFixed(1)}c</td>
+      <td class="num">${((f.fair || 0) * 100).toFixed(1)}c${f.fair_src === "approx" ? "*" : ""}</td>
+      <td class="num ${(f.edge || 0) >= 0 ? "pos" : "neg"}">${fmtMoney(f.edge || 0)}</td>
+      <td class="num">${f.worst_after != null ? fmtMoney(f.worst_after) : "—"}</td>
+    </tr>`;
+  }).join("");
+  $("ediag-table").innerHTML = `
+    <table class="rester-tbl">
+      <thead><tr><th>time</th><th>phase</th><th>shape</th><th class="num">ct</th>
+        <th class="num">fill</th><th class="num">fair</th><th class="num">edge</th>
+        <th class="num">at-risk after</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="muted" style="margin-top:6px;font-size:12px">* fair approximated from margin floor (place log lacked model fair)</div>`;
+}
+
 async function loadRester(date, force = false) {
   try {
     const r = await fetch(`/api/rester?date=${date}${force ? "&fresh=1" : ""}`);

@@ -39,6 +39,7 @@ import { getFlow } from "./flow.js";
 import { getImpFlow } from "./impflow.js";
 import { getBuilders } from "./builders.js";
 import { getRester } from "./rester.js";
+import { getEngineDiag } from "./engineDiag.js";
 import { getClv } from "./clv.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
@@ -432,6 +433,16 @@ app.get("/api/rester", async (req, res, next) => {
     const date = String(req.query.date || "").trim();
     const force = String(req.query.fresh || "") === "1";
     res.json(await getRester(date, force));
+  } catch (e) { next(e); }
+});
+
+// Engine diagnostics (admin-only): live pinmaker telemetry — machine-vs-game
+// attribution, fill ledger with edge-at-fill, rails audit. Flow-tab panel.
+app.get("/api/engine-diag", async (req, res, next) => {
+  try {
+    const date = String(req.query.date || "").trim();
+    const force = String(req.query.fresh || "") === "1";
+    res.json(await getEngineDiag(date, force));
   } catch (e) { next(e); }
 });
 
