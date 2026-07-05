@@ -3084,11 +3084,16 @@ function soccerScoreProbs(gameKey, teams, Na, Nh, liveCond) {
       break;
     }
   }
-  // supremacy (lh - la) from an ML mid: home, else away, else draw.
+  // supremacy (lh - la) from an ML mid: home, else away. NEVER the TIE leg —
+  // P(draw) is symmetric/non-monotone in s (same reason the live branch
+  // excludes it), so a TIE-anchored bisection has no sign change and pins at
+  // an endpoint = max home tilt. First hit 7/5 MEXENG: the book's only
+  // game-level leg was TIE (draws-cluster backbone buy) and the % grid showed
+  // a Mexico-shutout-only matrix. No ML leg in the book => s stays 0
+  // (neutral tilt at the market total) — approximate, never catastrophic.
   const targets = [
     [`${gameSeries}-${chunk}-${home}`, (lh, la) => _pHgtA(lh, la)],
     [`${gameSeries}-${chunk}-${away}`, (lh, la) => _pHgtA(la, lh)],
-    [`${gameSeries}-${chunk}-TIE`, (lh, la) => _pDraw(lh, la)],
   ];
   let s = 0;
   for (const [tk, fn] of targets) {
