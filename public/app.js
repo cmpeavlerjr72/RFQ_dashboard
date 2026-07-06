@@ -3301,13 +3301,14 @@ function computeRiskGrid(g, parlays, live) {
     // Current per-team scores recovered from (margin=h−a, total=a+h).
     const curH = haveScore ? Math.round((live.total + live.margin) / 2) : null;
     const curA = haveScore ? Math.round((live.total - live.margin) / 2) : null;
-    // DYNAMIC PER-AXIS SIZE: default 0..5, but once a team's CURRENT (or final)
-    // score reaches the axis midpoint (3), grow that axis's top by 1 per goal so
-    // the live score never falls off the grid (Germany 6-1 used to clamp at 5).
+    // DYNAMIC PER-AXIS SIZE: default 0..3 (7/5 operator: knockout-round
+    // games haven't seen 4+ goals a side — 0..5 was mostly dead cells), but
+    // grow the axis with the CURRENT (or final) score (+3 headroom) so a
+    // live score never falls off the grid (Germany 6-1 used to clamp at 5).
     // Each axis sizes to ITS OWN team's score (rectangular), capped at 11.
-    const axisMax = (cur) => Math.min(11, Math.max(5, (cur || 0) + 3));
-    const scoresH = Array.from({ length: (haveScore ? axisMax(curH) : 5) + 1 }, (_, i) => i);
-    const scoresA = Array.from({ length: (haveScore ? axisMax(curA) : 5) + 1 }, (_, i) => i);
+    const axisMax = (cur) => Math.min(11, Math.max(3, (cur || 0) + 3));
+    const scoresH = Array.from({ length: (haveScore ? axisMax(curH) : 3) + 1 }, (_, i) => i);
+    const scoresA = Array.from({ length: (haveScore ? axisMax(curA) : 3) + 1 }, (_, i) => i);
     // Reachability is exact and simple in score space: goals only increase.
     const reach = scoresA.map((a) =>
       scoresH.map((h) => !inProgress || (a >= curA && h >= curH)));
