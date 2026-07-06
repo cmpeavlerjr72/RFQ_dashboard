@@ -357,6 +357,19 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
       if (side === "yes") return `${label}: Both teams score (${aName} vs ${bName})`;
       return `${label}: Either team blanked (${aName} vs ${bName})`;
     }
+    if (pref.endsWith("SCORE")) {
+      // Lit exact-score single (2026-07-06): suffix is <TEAM1><h><TEAM2><a>,
+      // regulation time. Only full-game families are in SOCCER_LEAGUES —
+      // 1H/2H score variants are intentionally absent (not score-resolvable).
+      const mCs = (suffix || "").match(/^([A-Z]+?)(\d+)([A-Z]+?)(\d+)$/);
+      if (mCs) {
+        const n1 = teamName(SOCCER_TEAMS, mCs[1]);
+        const n2 = teamName(SOCCER_TEAMS, mCs[3]);
+        if (side === "yes") return `${label}: Exact score ${n1} ${mCs[2]}-${mCs[4]} ${n2} (reg)`;
+        return `${label}: NOT ${n1} ${mCs[2]}-${mCs[4]} ${n2} (reg)`;
+      }
+      return `${label}: Exact score (${aName} vs ${bName})`;
+    }
     if (pref.endsWith("1H")) {
       if (suffix === "TIE") {
         if (side === "yes") return `${label}: 1H draw — ${aName} vs ${bName}`;

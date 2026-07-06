@@ -132,6 +132,7 @@ export const SOCCER_LEAGUES = {
   KXWCSPREAD:       "World Cup spread",
   KXWCTOTAL:        "World Cup total",
   KXWCBTTS:         "World Cup BTTS",
+  KXWCSCORE:        "World Cup",
   KXWC1H:           "World Cup 1H",
   KXWC1HSPREAD:     "World Cup 1H spread",
   KXWC1HTOTAL:      "World Cup 1H total",

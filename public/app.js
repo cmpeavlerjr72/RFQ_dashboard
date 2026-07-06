@@ -384,6 +384,16 @@ async function refresh() {
 }
 
 async function enrichMissingLegs() {
+  // 0. Lit single markets (KXWCSCORE exact score + any game-level single
+  //    that parseGameLevelLeg understands) ARE their own leg — synthesize it
+  //    locally instead of asking Kalshi to recover a leg chain that doesn't
+  //    exist. holdYes already carries the long/short frame (2026-07-06).
+  for (const p of state.positions) {
+    if (p.legs.length === 0 && parseGameLevelLeg(p.ticker)) {
+      p.legs = [{ ticker: p.ticker, side: "yes", p: null }];
+    }
+  }
+
   // 1. Positions with rfq_id (came from local fills.jsonl) but no legs yet:
   //    fetch the RFQ directly.
   const haveRfqId = state.positions.filter((p) => p.rfq_id && p.legs.length === 0);
@@ -1063,6 +1073,24 @@ function parseGameLevelLeg(ticker) {
     if (!teams) return null;
     return { kind: "btts", sport, teams };
   }
+  // Lit exact-score single (KXWCSCORE-<chunk>-<HOME><h><AWAY><a>, 2026-07-06).
+  // FULL-GAME regulation only — 1H/2H score variants don't resolve on the
+  // final score and are rejected. Canonical twin: sandbox/cell_grid_dash_port.py.
+  const mScore = ticker.match(/^KX[A-Z0-9]+SCORE-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+?)(\d+)([A-Z]+?)(\d+)$/);
+  if (mScore) {
+    const fam = ticker.split("-")[0];
+    if (fam.includes("1H") || fam.includes("2H")) return null;
+    const teams = parseTeamsFromChunk(mScore[1], sport);
+    if (!teams) return null;
+    const [away, home] = teams;
+    const t1 = mScore[2], s1 = parseInt(mScore[3], 10);
+    const t2 = mScore[4], s2 = parseInt(mScore[5], 10);
+    let hs, as2;
+    if (t1 === home && t2 === away) { hs = s1; as2 = s2; }
+    else if (t1 === away && t2 === home) { hs = s2; as2 = s1; }
+    else return null;
+    return { kind: "cs", sport, teams, homeScore: hs, awayScore: as2 };
+  }
   return null;
 }
 
@@ -1378,6 +1406,14 @@ function _treeEvalLeg(ticker, side, asg) {
     if (gl.kind === "btts") {
       if (asg.btts == null) return "unknown";
       return _treeResolveBuyer(asg.btts, side); // yes = both teams score
+    }
+    if (gl.kind === "cs") {
+      // Exact score from (total, margin): h=(t+m)/2, a=(t-m)/2 — equality on
+      // both uniquely pins the scoreline (lit KXWCSCORE singles, 2026-07-06).
+      if (asg.total == null || asg.margin == null) return "unknown";
+      const hit = asg.total === gl.homeScore + gl.awayScore
+        && asg.margin === gl.homeScore - gl.awayScore;
+      return _treeResolveBuyer(hit, side);
     }
     return "unknown";
   }
@@ -3265,6 +3301,11 @@ function computeRiskGrid(g, parlays, live) {
           if (gl.pick === home) marginCuts.push(cut);
           else if (gl.pick === away) marginCuts.push(-cut + 1);
         }
+      }
+      else if (gl.kind === "cs") {
+        // Lit exact-score singles are score-resolvable by definition — they
+        // alone justify a scoreline grid (2026-07-06).
+        haveGameLeg = true; teams = teams || gl.teams;
       }
     }
   }
