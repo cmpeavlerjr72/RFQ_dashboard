@@ -176,7 +176,7 @@ async function refresh() {
   state.fetching = true;
   setStatus("fetching", "fetching");
   try {
-    const [bal, pos, fills, starts, momentum, takerInfo] = await Promise.all([
+    const [bal, pos, fills, starts, momentum, takerInfo, propData] = await Promise.all([
       api("/api/kalshi/balance"),
       api("/api/kalshi/positions"),
       api("/api/fills"),
@@ -188,8 +188,12 @@ async function refresh() {
       // Taker-acquired contracts per ticker (RFQ submissions / hole repairs,
       // 2026-07-03) — powers the TAKER pill on parlay cards. Non-fatal.
       api("/api/kalshi/taker-info").catch(() => ({ tickers: {} })),
+      // MLB prop-maker book (resting NO fades + fills), rendered as extra game
+      // cards in "Games On The Board". Non-fatal.
+      api("/api/props").catch(() => ({ games: [] })),
     ]);
     state.takerByTicker = (takerInfo && takerInfo.tickers) || {};
+    state.propGames = (propData && propData.games) || [];
 
     state.soccerStarts = (starts && starts.starts) || {};
     state.soccerScores = (starts && starts.scores) || {};
@@ -3946,6 +3950,77 @@ function renderMomentumHtml(g) {
     </div>`;
 }
 
+// Short player label for a prop chip: last name, dropping a trailing suffix.
+function _propLast(name) {
+  const parts = String(name || "").replace(/[.,]/g, "").split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) return name || "?";
+  const suff = new Set(["Jr", "Sr", "II", "III", "IV"]);
+  let i = parts.length - 1;
+  if (suff.has(parts[i])) i -= 1;
+  return parts[i] || parts[parts.length - 1];
+}
+
+// MLB prop-maker book as extra game cards (same .game-card / .ladder-chip
+// styling as the parlay cards). Filled = green chip, resting = grey, settled =
+// green/red. Built from state.propGames (/api/props). Independent of the parlay
+// leg engine — we only APPEND these cards, never touch aggregateGameCards.
+function propCardsHtml() {
+  const games = state.propGames || [];
+  if (!games.length) return "";
+  const chip = (p, filled) => {
+    const settled = p.status === "settled";
+    const cls = settled ? (p.won ? "pos" : "neg locked-loss") : (filled ? "pos" : "pending");
+    const mark = settled ? (p.won ? "WON" : "LOST") : (filled ? `${p.filled_ct}✓` : `${p.resting_ct}⧗`);
+    const label = `${_propLast(p.player)} ${p.kind}${p.line}+`;
+    const tip = `${p.player} — ${p.kind} ${p.line}+ · our NO @ ${(p.our_yes || 0).toFixed(2)} · ${p.status}`
+      + (p.edge_c != null ? ` · edge ${p.edge_c}c` : "")
+      + (p.cur_bid ? ` · K ${p.cur_bid.toFixed(2)}/${(p.cur_ask || 0).toFixed(2)}` : "");
+    return `<span class="ladder-chip ${cls}" title="${escapeHtml(tip)}">`
+      + `<span class="ladder-chip-thresh">${escapeHtml(label)}</span>`
+      + `<span class="ladder-chip-meta">${mark}</span></span>`;
+  };
+  return games.map((g) => {
+    const e = g.espn || {};
+    const teams = e.awayName ? `${e.awayName} @ ${e.homeName}` : `${g.away} @ ${g.home}`;
+    const logos = [g.away, g.home].map((ab) =>
+      `<img class="team-logo" src="${teamLogoUrl("mlb", ab, {})}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+    ).join("");
+    const score = (e.awayScore != null)
+      ? `<span class="score-panel">${escapeHtml(g.away)} ${e.awayScore}–${e.homeScore} ${escapeHtml(g.home)}`
+        + (e.detail ? ` <span class="period">${escapeHtml(e.detail)}</span>` : "") + `</span>`
+      : (e.detail ? `<span class="score-panel"><span class="period">${escapeHtml(e.detail)}</span></span>` : "");
+    const filled = g.props.filter((p) => p.filled_ct > 0);
+    const resting = g.props.filter((p) => p.resting_ct > 0 && !(p.filled_ct > 0));
+    const ladder = (label, items, isFilled) => items.length
+      ? `<div class="stat-ladder"><div class="stat-ladder-head"><span class="stat-label">${label}</span></div>`
+        + `<div class="stat-ladder-chips">${items.map((p) => chip(p, isFilled)).join("")}</div></div>`
+      : "";
+    return `
+      <div class="game-card" data-game-key="prop:${escapeHtml(g.chunk)}">
+        <div class="game-card-head" role="button" tabindex="0">
+          <div class="game-title">
+            <span class="card-chevron">▾</span>
+            <span class="sport-badge">MLB</span>
+            <span class="game-logos">${logos}</span>
+            <span class="game-name">${escapeHtml(teams)}</span>
+            <span class="sport-badge" title="prop maker book">PROPS</span>
+          </div>
+          ${score}
+          <div class="game-stats">
+            <span class="stat"><span class="label">props</span><span class="value">${g.props.length}</span></span>
+            <span class="stat"><span class="label">filled</span><span class="value">${filled.length}</span></span>
+            <span class="stat"><span class="label">at risk</span><span class="value">$${g.collateral.toFixed(0)}</span></span>
+          </div>
+        </div>
+        <div class="game-card-body">
+          ${ladder("Filled", filled, true)}
+          ${ladder("Resting", resting, false)}
+          ${(filled.length || resting.length) ? "" : `<div class="empty">no fills or resting orders</div>`}
+        </div>
+      </div>`;
+  }).join("");
+}
+
 function renderGameCards() {
   const wrap = $("game-cards");
   const cards = aggregateGameCards();
@@ -3953,7 +4028,8 @@ function renderGameCards() {
   // they stay visible (alive = green, dead = red+strike) so the user can
   // see how the slate landed.
   const live = cards.filter((g) => g.legs.length > 0);
-  if (!live.length) {
+  const propHtml = propCardsHtml();
+  if (!live.length && !propHtml) {
     wrap.innerHTML = `<div class="empty">no open exposure</div>`;
     return;
   }
@@ -4948,7 +5024,8 @@ function renderGameCards() {
     `;
   }).join("");
 
-  wrap.innerHTML = html;
+  // Prop-maker cards render alongside the parlay game cards, same styling.
+  wrap.innerHTML = html + propHtml;
 
   wireGridScrubbers(wrap);
 
