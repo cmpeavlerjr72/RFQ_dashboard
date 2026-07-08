@@ -44,6 +44,7 @@ import { getEngineDiag } from "./engineDiag.js";
 import { getClv } from "./clv.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
+import { getProps } from "./props.js";
 import { DASH_ACCOUNTS, byDashboardLabel, PORTFOLIO } from "./accounts.js";
 import { getMomentum } from "./momentum.js";
 
@@ -497,6 +498,16 @@ app.get("/api/recap", async (req, res, next) => {
       ? await getRecapOverall(REAL_ACCOUNTS, start, end, force)
       : await getRecap(a, start, end, force);
     res.json(payload);
+  } catch (e) { next(e); }
+});
+
+// Prop maker book: our live MLB RBI/HR positions + resting orders, grouped
+// into game cards with live ESPN scores. See dashboard/server/props.ts.
+app.get("/api/props", async (req, res, next) => {
+  try {
+    const force = String(req.query.fresh || "") === "1";
+    upstreamCallCount++;
+    res.json(await getProps(acct(req), force));
   } catch (e) { next(e); }
 });
 

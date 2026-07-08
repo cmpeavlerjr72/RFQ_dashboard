@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kalshi RFQ — Props</title>
+<link rel="stylesheet" href="/styles.css" />
+<script defer src="/brand.js"></script>
+<style>
+  .prop-summary { display:flex; gap:1.5rem; flex-wrap:wrap; margin:1rem 0; }
+  .prop-summary .kpi { background:var(--card,#161a22); border-radius:10px; padding:.6rem 1rem; min-width:110px; }
+  .prop-summary .kpi .v { font-size:1.4rem; font-weight:700; }
+  .prop-summary .kpi .l { font-size:.72rem; opacity:.7; text-transform:uppercase; letter-spacing:.04em; }
+  .game-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:1rem; }
+  .game-card { background:var(--card,#161a22); border:1px solid #232a36; border-radius:12px; padding:.8rem .9rem; }
+  .game-card .gc-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.5rem; }
+  .game-card .gc-teams { font-weight:700; font-size:1.05rem; }
+  .game-card .gc-score { font-variant-numeric:tabular-nums; font-weight:700; }
+  .gc-state { font-size:.72rem; padding:.1rem .4rem; border-radius:6px; margin-left:.4rem; }
+  .gc-state.pre { background:#2a3340; opacity:.8; }
+  .gc-state.in { background:#1e5b2e; }
+  .gc-state.post { background:#3a2530; }
+  table.props { width:100%; border-collapse:collapse; font-size:.82rem; }
+  table.props th { text-align:left; opacity:.6; font-weight:500; font-size:.7rem; text-transform:uppercase; }
+  table.props td { padding:.18rem .3rem; border-top:1px solid #222; font-variant-numeric:tabular-nums; }
+  .badge { font-size:.66rem; padding:.05rem .35rem; border-radius:5px; }
+  .badge.RBI2 { background:#3b2f5c; } .badge.RBI { background:#2f4a5c; } .badge.HR { background:#5c3b2f; }
+  .st-resting { opacity:.6; } .st-filled { color:#6fd08c; font-weight:600; }
+  .st-partial { color:#e0c05a; } .st-settled-win { color:#6fd08c; } .st-settled-loss { color:#e06a6a; }
+  .edge-pos { color:#6fd08c; } .edge-neg { color:#e06a6a; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Kalshi RFQ — Props</h1>
+    <nav class="nav-links">
+      <a href="/">Live</a>
+      <a href="/recap.html">Recap</a>
+      <a href="/comparison.html">Comparison</a>
+      <a href="/flow.html">Flow</a>
+      <a href="/builders.html">Builders</a>
+      <a href="/lines.html">Lines</a>
+      <a href="/props.html" class="active">Props</a>
+    </nav>
+    <label class="account-picker">Account <select id="account-select"></select></label>
+    <div class="status"><span class="dot" id="status-dot"></span><span id="status-text">idle</span></div>
+  </div>
+  <div class="row controls">
+    <label class="auto"><input type="checkbox" id="auto-refresh" checked /> Auto-refresh (30s)</label>
+    <button id="refresh-btn">Refresh now</button>
+    <span id="updated" style="opacity:.6;font-size:.8rem"></span>
+  </div>
+</header>
+<main>
+  <div class="prop-summary" id="summary"></div>
+  <div class="game-grid" id="games"></div>
+  <p id="empty" style="opacity:.6;display:none">No live prop positions or resting orders.</p>
+</main>
+<script type="module" src="/props.js"></script>
+</body>
+</html>
