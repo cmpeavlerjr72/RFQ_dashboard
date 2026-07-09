@@ -598,15 +598,24 @@ async function enrichLegs(account: string, rows: ParlayRow[]): Promise<void> {
   for (const r of rows) {
     const payload = markets[r.parlay_ticker];
     const m = payload?.market || payload;
-    if (!m || payload?.error) continue;
-    const legs: any[] = m?.mve_selected_legs || [];
-    r.legs = legs
-      .map((l) => ({
-        ticker: String(l?.market_ticker || ""),
-        side: String(l?.side || "yes").toLowerCase(),
-      }))
-      .filter((l) => l.ticker);
-    r.sub_title = String(m?.no_sub_title || m?.yes_sub_title || "");
+    if (m && !payload?.error) {
+      const legs: any[] = m?.mve_selected_legs || [];
+      r.legs = legs
+        .map((l) => ({
+          ticker: String(l?.market_ticker || ""),
+          side: String(l?.side || "yes").toLowerCase(),
+        }))
+        .filter((l) => l.ticker);
+      r.sub_title = String(m?.no_sub_title || m?.yes_sub_title || "");
+    }
+    // Single-market bets (MLB player props etc.) have no mve_selected_legs — the
+    // market IS the leg. Fall back to the market's own ticker so it classifies by
+    // sport (KXMLBRBI -> MLB player prop, stat RBI/HR) and renders, instead of
+    // vanishing as a legless "unknown" row. KXMVE parlays keep 0 legs on an
+    // enrichment miss (they'd mis-classify as UNKNOWN anyway, no worse than today).
+    if (r.legs.length === 0 && !r.parlay_ticker.startsWith("KXMVE")) {
+      r.legs = [{ ticker: r.parlay_ticker, side: r.side }];
+    }
   }
 }
 
@@ -810,8 +819,15 @@ export async function getRecap(account: string, startEt: string, endEt: string, 
       // settlements list, by contrast, is small and fully fetched — so drive settled P&L off
       // IT, pulling each held ticker's complete fills via a targeted query (immune to the cap)
       // for an exact cost basis. Skip markets we never held (no targeted call for those).
+      // Recap markets = our KXMVE parlays PLUS single-market sports bets we held
+      // (MLB player props KXMLBRBI / KXMLBHR carry no mve_selected_legs, so they
+      // are NOT KXMVE — the old `!startsWith("KXMVE")` guard silently dropped every
+      // settled prop from the recap, showing "no exposure" the morning after).
+      // LEG_SPORT_RE recognises the KX{SPORT} prefix; heldCt>0 below still restricts
+      // to markets we actually held, so this never pulls in a market we didn't bet.
+      const isRecapMarket = (t: string): boolean => t.startsWith("KXMVE") || LEG_SPORT_RE.test(t);
       for (const [tk, settle] of settleByTk) {
-        if (!settle.market_result || isExcluded(tk) || !tk.startsWith("KXMVE")) continue;
+        if (!settle.market_result || isExcluded(tk) || !isRecapMarket(tk)) continue;
         const heldCt = (Number((settle as any).no_count_fp) || 0) + (Number((settle as any).yes_count_fp) || 0);
         if (heldCt <= 0) continue;                       // a settled market we didn't hold
         let tf: KalshiFill[];
