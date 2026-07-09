@@ -255,6 +255,60 @@ h2 {
 .parlay .leg .meta .live-state.post { color: var(--accent); font-weight: 600; }
 .parlay .leg .meta .live-state.pre { color: var(--muted); }
 
+/* ---------- MLB prop book (bet-slip cards reuse .parlay above) ---------- */
+.prop-summary {
+  display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center;
+  margin-bottom: 12px; padding: 8px 12px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+}
+.prop-summary .prop-kpi { display: inline-flex; align-items: baseline; gap: 6px; }
+.prop-summary .prop-kpi .k {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted-2);
+}
+.prop-summary .prop-kpi .v {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14px;
+  font-weight: 700; color: var(--fg);
+}
+.prop-summary .prop-kpi .v.pos { color: var(--pos); }
+.prop-summary .prop-kpi .v.neg { color: var(--neg); }
+/* PROPS pill on the prop bet-slip card head */
+.parlay .head .top .prop-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .05em;
+  padding: 2px 7px; border-radius: 4px;
+  background: var(--accent-bg); color: var(--accent);
+}
+.parlay .head .top .game-name {
+  font-weight: 600; color: var(--fg); font-size: 13px;
+}
+/* Resting orders — compact chips grouped by game */
+.prop-resting { margin-top: 14px; }
+.prop-resting-head {
+  font-size: 12px; font-weight: 700; letter-spacing: .02em;
+  color: var(--muted); margin-bottom: 8px;
+}
+.prop-resting-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 6px 0; border-top: 1px solid var(--border);
+}
+.prop-resting-row:first-of-type { border-top: 0; }
+.prop-resting-game {
+  min-width: 150px; font-size: 12px; font-weight: 600; color: var(--muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.prop-resting-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.prop-resting-chips .ladder-chip {
+  display: inline-flex; flex-direction: column; align-items: center;
+  padding: 2px 7px 3px; border-radius: 5px; cursor: help;
+  background: var(--card-head); border: 1px solid var(--border);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.1;
+  color: var(--muted-2);
+}
+.prop-resting-chips .ladder-chip .ladder-chip-thresh { font-size: 11px; font-weight: 700; }
+.prop-resting-chips .ladder-chip .ladder-chip-meta {
+  font-size: 9px; color: var(--muted-2); margin-top: 1px; white-space: nowrap;
+}
+
 .empty {
   background: var(--card); border: 1px solid var(--border); border-radius: 8px;
   padding: 18px; color: var(--muted); text-align: center;

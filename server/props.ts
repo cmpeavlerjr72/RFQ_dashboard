@@ -22,6 +22,14 @@ const ESPN_ALIAS: Record<string, string> = {
 
 function num(x: any): number { const v = parseFloat(String(x)); return isFinite(v) ? v : 0; }
 
+const MONS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+// Today's Kalshi ticker date tag (e.g. "26JUL08"), DST-safe via currentETDate.
+// Used to keep the fills scan scoped to the current slate.
+function todayTicketTag(): string {
+  const ymd = currentETDate();                 // YYYYMMDD in America/New_York
+  return `${ymd.slice(2, 4)}${MONS[parseInt(ymd.slice(4, 6), 10) - 1]}${ymd.slice(6, 8)}`;
+}
+
 function splitTeams(pair: string): [string, string] | null {
   for (let i = 2; i <= 3; i++) {
     const a = pair.slice(0, i), b = pair.slice(i);
@@ -78,18 +86,31 @@ export async function getProps(account: string = DEFAULT_ACCOUNT, force = false)
     const ordJson = await getJson(account, "/portfolio/orders?status=resting&limit=1000");
     const orders = (ordJson?.orders || []).filter((o: any) =>
       String(o.ticker || "").startsWith("KXMLBRBI") || String(o.ticker || "").startsWith("KXMLBHR"));
-    // 2) positions (fills) — fetch directly with count_filter=position so we
-    // aren't subject to the dashboard getPositions keep()-filter that drops
-    // our short prop positions.
-    const posJson = await getJson(account, "/portfolio/positions?limit=1000&count_filter=position");
-    const positions = (posJson?.market_positions || []).filter((p: any) =>
-      (String(p.ticker || "").startsWith("KXMLBRBI") || String(p.ticker || "").startsWith("KXMLBHR"))
-      && num(p.position_fp || p.position) !== 0);
+    // 2) fills — the authoritative record of what we've filled. Positions drop
+    // to zero the instant a market settles, so sourcing from them would make
+    // settled props vanish; fills persist, so settled bets still render as
+    // WON/LOST cards. We only ever rest NO on these series, so a ticker's net
+    // long-NO size is just the sum of its fill counts. Scoped to today's slate.
+    const tag = todayTicketTag();
+    const fillJson = await getJson(account, "/portfolio/fills?limit=1000");
+    const fills = (fillJson?.fills || []).filter((f: any) => {
+      const tk = String(f.ticker || "");
+      return (tk.startsWith("KXMLBRBI") || tk.startsWith("KXMLBHR")) && tk.includes(tag);
+    });
+    const fillAgg: Record<string, { ct: number; cost: number }> = {};
+    for (const f of fills) {
+      const ct = num(f.count_fp || f.count);
+      if (!ct) continue;
+      const tk = f.ticker;
+      (fillAgg[tk] ||= { ct: 0, cost: 0 });
+      fillAgg[tk].ct += ct;
+      fillAgg[tk].cost += ct * num(f.no_price_dollars);   // NO price paid × ct
+    }
 
     // 3) union of tickers -> fetch current markets (player subtitle, bid/ask, result)
     const tickers = Array.from(new Set([
       ...orders.map((o: any) => o.ticker),
-      ...positions.map((p: any) => p.ticker),
+      ...Object.keys(fillAgg),
     ]));
     const markets = tickers.length ? await getMarketsBatch(account, tickers) : {};
 
@@ -117,11 +138,13 @@ export async function getProps(account: string = DEFAULT_ACCOUNT, force = false)
       r.resting_ct += num(o.remaining_count_fp || o.remaining_count);
       r.our_yes = num(o.yes_price_dollars) || r.our_yes;   // our resting sell-YES price
     }
-    for (const p of positions) {
-      const r = rowFor(p.ticker);
-      r.filled_ct += Math.abs(num(p.position_fp || p.position));
-      r.collat += num(p.market_exposure_dollars);
-      r.realized += num(p.realized_pnl_dollars);
+    for (const [tk, agg] of Object.entries(fillAgg)) {
+      const r = rowFor(tk);
+      r.filled_ct += agg.ct;
+      r.collat += agg.cost;                              // cost basis paid (NO × ct)
+      // our implied sell-YES price from the avg NO fill, for the edge display —
+      // don't clobber a live resting-order price if this ticker still has one.
+      if (agg.ct > 0 && !r.our_yes) r.our_yes = 1 - agg.cost / agg.ct;
     }
 
     // 5) group by game, join ESPN
@@ -146,6 +169,11 @@ export async function getProps(account: string = DEFAULT_ACCOUNT, force = false)
         : "resting");
       // win/loss if settled: we hold NO -> win when result == 'no'
       r.won = r.result ? (r.result === "no") : null;
+      // realized maker P&L once settled: a NO that holds pays $1/ct
+      // (profit = ct − cost); a NO that loses forfeits the cost basis.
+      if (r.result && r.filled_ct > 0) {
+        r.realized = r.won ? (r.filled_ct - r.collat) : -r.collat;
+      }
       g.props.push(r);
       g.collateral += r.collat + r.resting_ct * (1 - r.our_yes);
       g.filled_ct += r.filled_ct; g.resting_ct += r.resting_ct;

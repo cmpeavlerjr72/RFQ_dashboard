@@ -176,7 +176,7 @@ async function refresh() {
   state.fetching = true;
   setStatus("fetching", "fetching");
   try {
-    const [bal, pos, fills, starts, momentum, takerInfo, propData] = await Promise.all([
+    const [bal, pos, fills, starts, momentum, propData] = await Promise.all([
       api("/api/kalshi/balance"),
       api("/api/kalshi/positions"),
       api("/api/fills"),
@@ -185,16 +185,12 @@ async function refresh() {
       api("/api/start-times").catch(() => ({ starts: {} })),
       // Live FotMob match-momentum (account-independent; non-fatal).
       fetch("/api/momentum").then((r) => r.json()).catch(() => ({ games: {} })),
-      // Taker-acquired contracts per ticker (RFQ submissions / hole repairs,
-      // 2026-07-03) — powers the TAKER pill on parlay cards. Non-fatal.
-      api("/api/kalshi/taker-info").catch(() => ({ tickers: {} })),
       // MLB prop-maker book (resting NO fades + fills), rendered as extra game
       // cards in "Games On The Board". Non-fatal.
       api("/api/props").catch(() => ({ games: [] })),
     ]);
-    state.takerByTicker = (takerInfo && takerInfo.tickers) || {};
-    state.propGames = (propData && propData.games) || [];
 
+    state.propGames = (propData && propData.games) || [];
     state.soccerStarts = (starts && starts.starts) || {};
     state.soccerScores = (starts && starts.scores) || {};
     state.momentum = (momentum && momentum.games) || {};
@@ -226,14 +222,9 @@ async function refresh() {
       const qty = Math.abs(parseFloat(p.position_fp));
       const exposure = parseFloat(p.market_exposure_dollars || "0");
       const side = parseFloat(p.position_fp) > 0 ? "YES" : "NO";
-      // holdYes: we are LONG the parlay/market (position_fp > 0) — e.g. a
-      // taker hole-repair buy. Every valuation path below branches on this;
-      // the historical default (maker book) is holdYes=false = long NO.
-      const holdYes = parseFloat(p.position_fp) > 0;
-      const takerCt = Number(state.takerByTicker?.[p.ticker]?.taker_ct) || 0;
       const f = state.fillsByParlay[p.ticker] || {};
       return {
-        ticker: p.ticker, qty, side, holdYes, takerCt,
+        ticker: p.ticker, qty, side,
         cost: exposure,
         avgCostC: qty ? Math.round((exposure / qty) * 100) : 0,
         max_profit: qty - exposure,
@@ -291,17 +282,15 @@ async function refresh() {
       }
       for (const p of state.positions) {
         const m = markets[p.ticker]?.market || {};
-        // Parlay MTM on OUR side: NO for the maker book (default), YES when
-        // holdYes (taker buys / long positions, 2026-07-03).
-        const sBidC = dollarsToC(p.holdYes ? m.yes_bid_dollars : m.no_bid_dollars);
-        const sAskC = dollarsToC(p.holdYes ? m.yes_ask_dollars : m.no_ask_dollars);
-        if (sBidC && sAskC && sBidC > 0 && sAskC > 0) {
-          const sMidC = (sBidC + sAskC) / 2;
-          p.midC = sMidC;
-          p.unreal = ((sMidC - p.avgCostC) / 100) * p.qty;
+        // Parlay MTM (we hold NO of the parlay)
+        const noBidC = dollarsToC(m.no_bid_dollars);
+        const noAskC = dollarsToC(m.no_ask_dollars);
+        if (noBidC && noAskC && noBidC > 0 && noAskC > 0) {
+          const noMidC = (noBidC + noAskC) / 2;
+          p.midC = noMidC;
+          p.unreal = ((noMidC - p.avgCostC) / 100) * p.qty;
         }
-        // Per-leg odds: price the leg on OUR side — the buyer's opposite for
-        // the maker book, the leg side itself when we hold YES.
+        // Per-leg odds: buyer took side X on leg; we want the OPPOSITE side's price.
         for (const leg of p.legs) {
           const lm = markets[leg.ticker]?.market || {};
           const lLast = dollarsToC(lm.last_price_dollars);
@@ -312,9 +301,8 @@ async function refresh() {
           // Prefer direct YES prices; fall back to deriving from NO via 100-x.
           const lYesBid = lYesBidDirect != null ? lYesBidDirect : (lNoAsk != null ? 100 - lNoAsk : null);
           const lYesAsk = lYesAskDirect != null ? lYesAskDirect : (lNoBid != null ? 100 - lNoBid : null);
-          // OUR side: the buyer's opposite (maker book) or the leg side as-is
-          // when we hold YES of the parlay.
-          const ourSide = p.holdYes ? (leg.side || "yes").toLowerCase() : flipSide(leg.side);
+          // Flip the buyer's side to get OUR side
+          const ourSide = flipSide(leg.side);
           const bidC = ourSide === "yes" ? lYesBid : lNoBid;
           const askC = ourSide === "yes" ? lYesAsk : lNoAsk;
           // Mid preference order:
@@ -356,6 +344,15 @@ async function refresh() {
         if (sp && ymd) sbKeys.add(`${sp}:${ymd}`);
       }
     }
+    // Prop-maker book: load each prop game's scoreboard so its bet-slip card
+    // gets live per-leg stats + a boxscore, even with no MLB parlay open.
+    for (const g of (state.propGames || [])) {
+      for (const pr of (g.props || [])) {
+        const sp = legSport(pr.ticker);
+        const ymd = legDateYMD(pr.ticker);
+        if (sp && ymd) sbKeys.add(`${sp}:${ymd}`);
+      }
+    }
     await Promise.all([...sbKeys].map(async (k) => {
       const [sport, date] = k.split(":");
       try {
@@ -388,16 +385,6 @@ async function refresh() {
 }
 
 async function enrichMissingLegs() {
-  // 0. Lit single markets (KXWCSCORE exact score + any game-level single
-  //    that parseGameLevelLeg understands) ARE their own leg — synthesize it
-  //    locally instead of asking Kalshi to recover a leg chain that doesn't
-  //    exist. holdYes already carries the long/short frame (2026-07-06).
-  for (const p of state.positions) {
-    if (p.legs.length === 0 && parseGameLevelLeg(p.ticker)) {
-      p.legs = [{ ticker: p.ticker, side: "yes", p: null }];
-    }
-  }
-
   // 1. Positions with rfq_id (came from local fills.jsonl) but no legs yet:
   //    fetch the RFQ directly.
   const haveRfqId = state.positions.filter((p) => p.rfq_id && p.legs.length === 0);
@@ -473,6 +460,17 @@ async function fetchNeededBoxscores() {
       if (eventId) need.set(`${gl.sport}:${eventId}`, { sport: gl.sport, eventId });
     }
   }
+  // Prop-maker book: boxscore per prop game feeds the live "HR: 0 / RBI: 1"
+  // stat in each bet-slip leg.
+  for (const g of (state.propGames || [])) {
+    for (const pr of (g.props || [])) {
+      const prop = parsePlayerProp(pr.ticker);
+      if (!prop) continue;
+      const ev = findEspnEvent(prop.gameKey, state.scoreboards);
+      const eventId = String(ev?.id || "");
+      if (eventId) need.set(`${prop.sport}:${eventId}`, { sport: prop.sport, eventId });
+    }
+  }
   await Promise.all([...need.values()].map(async ({ sport, eventId }) => {
     try {
       const r = await api(`/api/boxscore?sport=${sport}&eventId=${eventId}`);
@@ -504,6 +502,18 @@ async function fetchNeededRosters() {
   for (const p of state.positions) {
     for (const leg of p.legs) {
       const prop = parsePlayerProp(leg.ticker);
+      if (!prop) continue;
+      const teamId = findEspnTeamId(prop);
+      if (!teamId) continue;
+      const k = `${prop.sport}:${teamId}`;
+      if (!need.has(k)) need.set(k, { sport: prop.sport, teamId, abbr: prop.team });
+    }
+  }
+  // Prop-maker book: rosters give headshots/jerseys so prop legs read before
+  // first pitch (boxscore is empty pregame).
+  for (const g of (state.propGames || [])) {
+    for (const pr of (g.props || [])) {
+      const prop = parsePlayerProp(pr.ticker);
       if (!prop) continue;
       const teamId = findEspnTeamId(prop);
       if (!teamId) continue;
@@ -772,6 +782,7 @@ function resolvePlayerProp(prop, scoreboards, boxscores) {
 function render() {
   renderSummary();
   renderGameCards();
+  renderPropBook();
   renderParlays();
 }
 
@@ -1077,24 +1088,6 @@ function parseGameLevelLeg(ticker) {
     if (!teams) return null;
     return { kind: "btts", sport, teams };
   }
-  // Lit exact-score single (KXWCSCORE-<chunk>-<HOME><h><AWAY><a>, 2026-07-06).
-  // FULL-GAME regulation only — 1H/2H score variants don't resolve on the
-  // final score and are rejected. Canonical twin: sandbox/cell_grid_dash_port.py.
-  const mScore = ticker.match(/^KX[A-Z0-9]+SCORE-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z]+?)(\d+)([A-Z]+?)(\d+)$/);
-  if (mScore) {
-    const fam = ticker.split("-")[0];
-    if (fam.includes("1H") || fam.includes("2H")) return null;
-    const teams = parseTeamsFromChunk(mScore[1], sport);
-    if (!teams) return null;
-    const [away, home] = teams;
-    const t1 = mScore[2], s1 = parseInt(mScore[3], 10);
-    const t2 = mScore[4], s2 = parseInt(mScore[5], 10);
-    let hs, as2;
-    if (t1 === home && t2 === away) { hs = s1; as2 = s2; }
-    else if (t1 === away && t2 === home) { hs = s2; as2 = s1; }
-    else return null;
-    return { kind: "cs", sport, teams, homeScore: hs, awayScore: as2 };
-  }
   return null;
 }
 
@@ -1338,19 +1331,19 @@ function computeGameScenarios(g, parlays) {
         // "buyer_hit" leaves allHit true; everything else flips it
       }
       if (anyBuyerMiss) {
-        // Locked: legs broke — the maker book wins, a holdYes (long) loses.
-        const v = p.holdYes ? -p.cost : p.qty - p.cost;
-        best  += v;
-        worst += v;
+        // Locked: we win this parlay.
+        const winPnl = p.qty - p.cost;
+        best  += winPnl;
+        worst += winPnl;
       } else if (anyUnknown) {
-        // Envelope: unknowns can still swing it either way in BOTH frames.
+        // Envelope: best case we still win (one unknown fails buyer),
+        // worst case we lose (every unknown hits buyer).
         best  += p.qty - p.cost;
         worst += -p.cost;
       } else if (allHit) {
-        // Locked: every leg hit — the maker book loses, a holdYes wins.
-        const v = p.holdYes ? p.qty - p.cost : -p.cost;
-        best  += v;
-        worst += v;
+        // Locked: every leg hit, we lose.
+        best  += -p.cost;
+        worst += -p.cost;
       }
     }
     return { label, best, worst };
@@ -1411,14 +1404,6 @@ function _treeEvalLeg(ticker, side, asg) {
       if (asg.btts == null) return "unknown";
       return _treeResolveBuyer(asg.btts, side); // yes = both teams score
     }
-    if (gl.kind === "cs") {
-      // Exact score from (total, margin): h=(t+m)/2, a=(t-m)/2 — equality on
-      // both uniquely pins the scoreline (lit KXWCSCORE singles, 2026-07-06).
-      if (asg.total == null || asg.margin == null) return "unknown";
-      const hit = asg.total === gl.homeScore + gl.awayScore
-        && asg.margin === gl.homeScore - gl.awayScore;
-      return _treeResolveBuyer(hit, side);
-    }
     return "unknown";
   }
   const prop = parsePlayerProp(ticker);
@@ -1433,14 +1418,9 @@ function _treeEvalLeg(ticker, side, asg) {
 // Market-implied probability that OUR side wins a leg (pUs), from the live
 // leg mid (preferred) or the fill-time fair as fallback. null when unknown.
 function _treeLegPUs(p, leg) {
-  // legMids are already stored in OUR-side terms (branch-aware since
-  // 2026-07-03); the fill-time fallback must match that frame.
   const lm = p.legMids?.[leg.ticker];
   if (lm && lm.midC != null) return Math.min(1, Math.max(0, lm.midC / 100));
-  if (leg.p != null) {
-    const buyerP = Math.min(1, Math.max(0, Number(leg.p)));
-    return p.holdYes ? buyerP : 1 - buyerP;
-  }
+  if (leg.p != null) return Math.min(1, Math.max(0, 1 - Number(leg.p)));
   return null;
 }
 
@@ -1457,12 +1437,7 @@ function _treeNodeExpected(parlays, gameKey, asg) {
       let pHit;
       if (r === "buyer_hit") pHit = 1;
       else if (r === "buyer_miss") pHit = 0;
-      else {
-        // _treeLegPUs is in OUR-side terms; the leg-hit prob is its complement
-        // for the maker book but the value itself when we hold YES.
-        const pu = _treeLegPUs(p, l);
-        pHit = pu == null ? 0.5 : (p.holdYes ? pu : 1 - pu);
-      }
+      else { const pu = _treeLegPUs(p, l); pHit = pu == null ? 0.5 : (1 - pu); }
       pAllHit *= pHit;
     }
     // Fold in the runner's fill-time correlation ratio (cosmetic first-order:
@@ -1471,10 +1446,7 @@ function _treeNodeExpected(parlays, gameKey, asg) {
     if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
       pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
     }
-    // all-legs-hit pays the maker book's counterparty — that's US when holdYes.
-    exp += p.holdYes
-      ? pAllHit * p.max_profit + (1 - pAllHit) * (-p.cost)
-      : pAllHit * (-p.cost) + (1 - pAllHit) * p.max_profit;
+    exp += pAllHit * (-p.cost) + (1 - pAllHit) * p.max_profit;
   }
   return exp;
 }
@@ -1498,9 +1470,6 @@ const _SOCCER_TREE_SPORTS = new Set(["epl", "laliga", "seriea", "bundesliga", "l
 // skipped, never used to claim a win we can't verify.
 function _impossibleSoccerParlay(p) {
   if (!p || !p.legs || !p.legs.length) return false;
-  // The sure-win shortcut is a LONG-NO property. Holding YES of an impossible
-  // parlay would be a sure LOSS — never claim the win frame (2026-07-03).
-  if (p.holdYes) return false;
   if (p.__impossible !== undefined) return p.__impossible;
   p.__impossible = (function () {
     try {
@@ -2269,20 +2238,17 @@ function aggregateLegExposure() {
   for (const p of state.positions) {
     for (const leg of p.legs) {
       const tk = leg.ticker;
-      // OUR side of this leg: the buyer's opposite for the maker book, the
-      // leg side itself when we hold YES (2026-07-03).
-      const usSide = p.holdYes ? (leg.side || "yes").toLowerCase() : flipSide(leg.side);
       // Key by ticker AND our side: a hedged market (we hold both the over and
       // the under of the same threshold — e.g. CINCBURNS26-8 yes+no) must stay
       // two rows, else the opposing legs merge into one chip with summed
       // exposure across sides and a single (wrong) label.
-      const rowKey = `${tk}|${usSide}`;
+      const rowKey = `${tk}|${leg.side}`;
       let row = byTicker.get(rowKey);
       if (!row) {
         row = {
           ticker: tk,
-          buyerSide: flipSide(usSide), // the anti-us side (leg hits against us)
-          ourSide: usSide,             // what we need
+          buyerSide: leg.side,         // what the buyer needs (parlay hits)
+          ourSide: flipSide(leg.side), // what we need (parlay voids)
           parlays: 0,
           exposure: 0,
           maxWin: 0,
@@ -2296,8 +2262,7 @@ function aggregateLegExposure() {
       row.maxWin += p.max_profit;
       const lm = p.legMids[tk];
       if (lm && lm.midC != null) row.legMid = lm;
-      // Normalize the fill-time fair to the ANTI-us frame (pUs = 1 - fillP).
-      if (leg.p != null) row.fillP = p.holdYes ? 1 - Number(leg.p) : Number(leg.p);
+      if (leg.p != null) row.fillP = Number(leg.p);
     }
   }
 
@@ -2469,13 +2434,13 @@ function computeGameNetting(positions, gameKey) {
         if (cur == null || lc.team < cur) marginRef.set(lc.varKey, lc.team);
       }
     }
-    raw.push({ c, cp, cons, legCount: (pos.legs || []).length, hy: !!pos.holdYes });
+    raw.push({ c, cp, cons, legCount: (pos.legs || []).length });
   }
 
   // Pass 2: canonicalise margin specs onto the reference axis (flip legs about
   // the other team: margin_other = -margin_ref, so ">L" <=> "<=-L"), then build
   // the variable tables.
-  for (const { c, cp, cons, legCount, hy } of raw) {
+  for (const { c, cp, cons, legCount } of raw) {
     const idx = posList.length;
     const ccons = [];
     for (const lc0 of cons) {
@@ -2496,7 +2461,7 @@ function computeGameNetting(positions, gameKey) {
       if (!varPositions.has(lc.varKey)) varPositions.set(lc.varKey, new Set());
       varPositions.get(lc.varKey).add(idx);
     }
-    posList.push({ c, cp, cons: ccons, legCount, hy });
+    posList.push({ c, cp, cons: ccons, legCount });
   }
 
   const candOf = (v) => {
@@ -2569,16 +2534,8 @@ function computeGameNetting(positions, gameKey) {
             if (!sat) allHit = false;
             if (v === undefined || !_satNet(c, v)) pinnedLose = false;
           }
-          // holdYes positions have the MIRROR payoff: all-legs-hit is their
-          // WIN. Conservative both ways: worst assumes free legs break
-          // against a long, best assumes they break for it (2026-07-03).
-          if (pos.hy) {
-            netW += pinnedLose ? win : lose;
-            netB += allHit ? win : lose;
-          } else {
-            netW += allHit ? lose : win;
-            netB += pinnedLose ? lose : win;
-          }
+          netW += allHit ? lose : win;
+          netB += pinnedLose ? lose : win;
         }
         if (bestNet === null || netW < bestNet) bestNet = netW;
         if (bestGain === null || netB > bestGain) bestGain = netB;
@@ -2619,13 +2576,8 @@ function computeGameNetting(positions, gameKey) {
         let netW = 0, netB = 0;
         for (const pos of posList) {
           const win = (1 - pos.cp) * pos.c, lose = -pos.cp * pos.c;
-          if (pos.hy) {   // mirror payoff for long (holdYes) positions
-            netW += voidsBest(pos, asg) ? lose : win;
-            netB += allHits(pos, asg) ? win : lose;
-          } else {
-            netW += allHits(pos, asg) ? lose : win;
-            netB += voidsBest(pos, asg) ? win : lose;
-          }
+          netW += allHits(pos, asg) ? lose : win;
+          netB += voidsBest(pos, asg) ? win : lose;
         }
         if (bestNet === null || netW < bestNet) bestNet = netW;
         if (bestGain === null || netB > bestGain) bestGain = netB;
@@ -2666,7 +2618,6 @@ function computePortfolioNetting() {
   const parlays = state.positions.filter((p) => !_impossibleSoccerParlay(p)).map((p) => ({
     contracts: p.qty || 0,
     costPer: (p.qty > 0 ? (p.cost || 0) / p.qty : 0),
-    holdYes: !!p.holdYes,
     legs: p.legs || [],
     games: [...new Set((p.legs || []).map((l) => legGameGroupKey(l.ticker)).filter(Boolean))],
   }));
@@ -2804,8 +2755,7 @@ function aggregateGameCards() {
         if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
           pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
         }
-        // all-legs-hit pays the parlay holder — that's US when holdYes.
-        const pWeWin = p.holdYes ? pAllHit : 1 - pAllHit;
+        const pWeWin = 1 - pAllHit;
         g.expectedPnl = (g.expectedPnl || 0) + (pWeWin * p.qty - p.cost);
         g.expectedCovered = (g.expectedCovered || 0) + 1;
       }
@@ -2824,7 +2774,6 @@ function aggregateGameCards() {
       .map((p) => ({
         contracts: p.qty || 0,
         costPer: (p.qty > 0 ? p.cost / p.qty : 0),
-        holdYes: !!p.holdYes,
         legs: p.legs,
       }));
     const net = computeGameNetting(gpos, g.key);
@@ -2976,12 +2925,9 @@ function _legYesProbNow(ticker) {
     const lm = p.legMids?.[ticker];
     if (lm && lm.midC != null) {
       const leg = (p.legs || []).find((l) => l.ticker === ticker);
-      // stored midC is in OUR-side terms; our side depends on the frame:
-      // maker book = buyer's opposite, holdYes = the leg side itself.
-      const legSide = leg ? (leg.side || "yes").toLowerCase() : "yes";
-      const ourS = p.holdYes ? legSide : flipSide(legSide);
+      const buyerYes = !leg || (leg.side || "yes").toLowerCase() === "yes";
       const v = Math.min(1, Math.max(0, lm.midC / 100));
-      return ourS === "yes" ? v : 1 - v;
+      return buyerYes ? 1 - v : v;   // buyer yes => our (stored) side is NO
     }
   }
   for (const f of state.fillRows) {
@@ -3305,11 +3251,6 @@ function computeRiskGrid(g, parlays, live) {
           if (gl.pick === home) marginCuts.push(cut);
           else if (gl.pick === away) marginCuts.push(-cut + 1);
         }
-      }
-      else if (gl.kind === "cs") {
-        // Lit exact-score singles are score-resolvable by definition — they
-        // alone justify a scoreline grid (2026-07-06).
-        haveGameLeg = true; teams = teams || gl.teams;
       }
     }
   }
@@ -3950,6 +3891,12 @@ function renderMomentumHtml(g) {
     </div>`;
 }
 
+// "HR 1+" / "RBI 1+" / "RBI 2+" — kind ("RBI2") already encodes the line, so
+// derive the market label from the numeric line rather than concatenating both.
+function _propKind(p) {
+  return p.kind === "HR" ? "HR 1+" : `RBI ${p.line}+`;
+}
+
 // Short player label for a prop chip: last name, dropping a trailing suffix.
 function _propLast(name) {
   const parts = String(name || "").replace(/[.,]/g, "").split(/\s+/).filter(Boolean);
@@ -3960,65 +3907,214 @@ function _propLast(name) {
   return parts[i] || parts[parts.length - 1];
 }
 
-// MLB prop-maker book as extra game cards (same .game-card / .ladder-chip
-// styling as the parlay cards). Filled = green chip, resting = grey, settled =
-// green/red. Built from state.propGames (/api/props). Independent of the parlay
-// leg engine — we only APPEND these cards, never touch aggregateGameCards.
-function propCardsHtml() {
+// MLB prop-maker book, rendered with the SAME bet-slip card + chip components
+// as the RFQ parlays. Filled / settled props become one bet-slip card per game
+// (each prop a leg with our-side label, live win-chance, and live stat); still-
+// resting orders show as compact chips grouped by game. Built from
+// state.propGames (/api/props); independent of the parlay leg engine.
+
+// A prop position as a single NO "leg" the shared resolver understands: the
+// buyer took YES on the longshot, we hold the opposite (NO).
+function _propLeg(pr) { return { ticker: pr.ticker, side: "yes", p: null }; }
+
+// One filled/settled prop -> a bet-slip .leg row, mirroring renderParlayCard.
+function propLegRow(pr) {
+  const res = legResolutionForUs(_propLeg(pr), state.scoreboards, state.boxscores);
+  const desc = legLabel(pr.ticker, "no", state.athleteIdx, _floorStrikeByTicker[pr.ticker]);
+  const mid = (pr.cur_bid && pr.cur_ask) ? (pr.cur_bid + pr.cur_ask) / 2 : null; // YES mid 0..1
+  const pUs = mid != null ? (1 - mid) : null;                                    // our NO win chance
+
+  let cls = "", check = "", statusHtml;
+  if (pr.status === "settled") {
+    if (pr.won) { cls = "alive"; check = "✓"; statusHtml = `<span class="v pos">WON</span>`; }
+    else { cls = "dead"; check = "✗"; statusHtml = `<span class="v neg">LOST</span>`; }
+  } else if (res.status === "alive") {
+    cls = "alive"; check = "✓"; statusHtml = `<span class="v pos">winning</span>`;
+  } else if (res.status === "dead") {
+    cls = "dead"; check = "✗"; statusHtml = `<span class="v neg">losing</span>`;
+  } else {
+    if (res.status === "alive_pending") cls = "partial";
+    statusHtml = pUs != null
+      ? `<span class="k">Win chance</span> <span class="v">${(pUs * 100).toFixed(0)}%</span>`
+      : `<span class="k">Win chance</span> <span class="v">—</span>`;
+  }
+
+  const { sport, teams: logoTeams, league } = legTeams(pr.ticker, "no");
+  const logoHtml = logoTeams.map((abbr) =>
+    `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+  ).join("");
+
+  const liveText = res.live || "";
+  const liveCls = res.status === "alive_pending" ? "in"
+    : (res.status === "alive" || res.status === "dead") ? "post" : "";
+  const edgeText = pr.edge_c != null ? `${pr.edge_c >= 0 ? "+" : ""}${pr.edge_c}c edge` : "";
+  const statText = res.stat || edgeText;
+
+  return `<div class="leg ${cls}">
+    <div class="desc">
+      ${logoHtml}
+      <span>${escapeHtml(desc)}</span>
+      ${check ? `<span class="check">${check}</span>` : ""}
+    </div>
+    <div class="meta">
+      ${statusHtml}
+      ${liveText ? `<span class="live-state ${liveCls}">${escapeHtml(liveText)}</span>` : ""}
+      ${statText ? `<span class="v">${escapeHtml(statText)}</span>` : ""}
+    </div>
+  </div>`;
+}
+
+// A game's filled/settled props -> one bet-slip card (aggregate stake in the
+// head, props as legs when expanded).
+function propGameCard(g, n) {
+  const filled = g.props.filter((p) => p.filled_ct > 0 || p.status === "settled");
+  if (!filled.length) return "";
+  const restingCt = g.props
+    .filter((p) => (p.resting_ct || 0) > 0 && !(p.filled_ct > 0) && p.status !== "settled")
+    .reduce((s, p) => s + (p.resting_ct || 0), 0);
+  const key = `prop:${g.chunk}`;
+  const expanded = state.parlayExpanded.has(key);
+
+  let risk = 0, toWin = 0, won = 0, lost = 0, settled = 0, realized = 0;
+  for (const p of filled) {
+    const cost = p.collat || 0;
+    risk += cost;
+    toWin += (p.filled_ct || 0) - cost;            // each NO pays $1 if it holds
+    if (p.status === "settled") { settled++; p.won ? won++ : lost++; realized += (p.realized || 0); }
+  }
+
+  const e = g.espn || {};
+  const st = e.state || "pre";
+  let badge = "PENDING", badgeCls = "";
+  if (filled.length && settled === filled.length) {
+    badge = won > lost ? "AHEAD" : won < lost ? "BEHIND" : "EVEN";
+    badgeCls = won > lost ? "alive" : won < lost ? "dead" : "";
+  } else if (st === "in") { badge = "LIVE"; badgeCls = "partial"; }
+  else if (st === "post") { badge = "FINAL"; }
+
+  const teams = e.awayName ? `${e.awayName} @ ${e.homeName}` : `${g.away} @ ${g.home}`;
+  const logos = [g.away, g.home].map((ab) =>
+    `<img class="team-logo" src="${teamLogoUrl("mlb", ab, {})}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+  ).join("");
+  const score = (e.awayScore != null && (st === "in" || st === "post"))
+    ? `<span class="live-state ${st === "in" ? "in" : "post"}">${escapeHtml(g.away)} ${e.awayScore}–${e.homeScore} ${escapeHtml(g.home)}${e.detail ? ` · ${escapeHtml(e.detail)}` : ""}</span>`
+    : (e.detail ? `<span class="live-state pre">${escapeHtml(e.detail)}</span>` : "");
+
+  const realizedHtml = settled
+    ? `<div class="col"><div class="lbl">Realized</div><div class="val ${realized >= 0 ? "pos" : "neg"}">${realized >= 0 ? "+" : ""}${realized.toFixed(2)}</div></div>`
+    : "";
+  const restHtml = restingCt
+    ? `<div class="col"><div class="lbl">Resting</div><div class="val">${restingCt.toFixed(0)} ct</div></div>`
+    : "";
+
+  const legHtml = filled
+    .slice().sort((a, b) => (b.edge_c || 0) - (a.edge_c || 0))
+    .map(propLegRow).join("");
+
+  return `<div class="parlay prop-card ${expanded ? "expanded" : "collapsed"}">
+    <div class="head" data-prop-key="${escapeHtml(key)}" role="button" aria-expanded="${expanded}" tabindex="0">
+      <div class="top">
+        <span class="badge ${badgeCls}">#${n} · ${badge}</span>
+        <span class="parlay-logos">${logos}</span>
+        <span class="game-name">${escapeHtml(teams)}</span>
+        <span class="prop-tag" title="MLB prop maker book">PROPS</span>
+        ${score}
+        <span class="chev" aria-hidden="true">${expanded ? "▾" : "▸"}</span>
+      </div>
+      <div class="stake">
+        <div class="col"><div class="lbl">Risk</div><div class="val">${fmtMoney(risk)}</div></div>
+        <div class="col"><div class="lbl">To win</div><div class="val pos">+${toWin.toFixed(2)}</div></div>
+        <div class="col"><div class="lbl">Fades</div><div class="val">${filled.length}${settled ? ` · ${won}W ${lost}L` : ""}</div></div>
+        ${realizedHtml}
+        ${restHtml}
+      </div>
+    </div>
+    ${expanded ? `<div class="legs">${legHtml}</div>` : ""}
+  </div>`;
+}
+
+// Resting (unfilled) orders — compact chips grouped by game.
+function propRestingHtml() {
+  const rows = [];
+  for (const g of (state.propGames || [])) {
+    const resting = g.props
+      .filter((p) => (p.resting_ct || 0) > 0 && !(p.filled_ct > 0) && p.status !== "settled")
+      .slice().sort((a, b) => (b.edge_c || 0) - (a.edge_c || 0));
+    if (!resting.length) continue;
+    const chips = resting.map((p) => {
+      const label = `${_propLast(p.player)} ${_propKind(p)}`;
+      const tip = `${p.player} — ${_propKind(p)} · our NO @ ${(1 - (p.our_yes || 0)).toFixed(2)}`
+        + (p.edge_c != null ? ` · edge ${p.edge_c}c` : "")
+        + (p.cur_bid ? ` · K ${p.cur_bid.toFixed(2)}/${(p.cur_ask || 0).toFixed(2)}` : "");
+      return `<span class="ladder-chip pending" title="${escapeHtml(tip)}">`
+        + `<span class="ladder-chip-thresh">${escapeHtml(label)}</span>`
+        + `<span class="ladder-chip-meta">${(p.resting_ct || 0).toFixed(0)}⧗</span></span>`;
+    }).join("");
+    const teams = g.espn?.awayName ? `${g.espn.awayName} @ ${g.espn.homeName}` : `${g.away} @ ${g.home}`;
+    rows.push(`<div class="prop-resting-row">
+      <span class="prop-resting-game">${escapeHtml(teams)}</span>
+      <div class="prop-resting-chips">${chips}</div>
+    </div>`);
+  }
+  return rows.join("");
+}
+
+function renderPropBook() {
+  const section = $("prop-book-section");
+  const cardsWrap = $("prop-cards");
+  const restWrap = $("prop-resting");
+  const sumWrap = $("prop-summary");
+  if (!section || !cardsWrap || !restWrap || !sumWrap) return;
+
   const games = state.propGames || [];
-  if (!games.length) return "";
-  const chip = (p, filled) => {
-    const settled = p.status === "settled";
-    const cls = settled ? (p.won ? "pos" : "neg locked-loss") : (filled ? "pos" : "pending");
-    const mark = settled ? (p.won ? "WON" : "LOST") : (filled ? `${p.filled_ct}✓` : `${p.resting_ct}⧗`);
-    const label = `${_propLast(p.player)} ${p.kind}${p.line}+`;
-    const tip = `${p.player} — ${p.kind} ${p.line}+ · our NO @ ${(p.our_yes || 0).toFixed(2)} · ${p.status}`
-      + (p.edge_c != null ? ` · edge ${p.edge_c}c` : "")
-      + (p.cur_bid ? ` · K ${p.cur_bid.toFixed(2)}/${(p.cur_ask || 0).toFixed(2)}` : "");
-    return `<span class="ladder-chip ${cls}" title="${escapeHtml(tip)}">`
-      + `<span class="ladder-chip-thresh">${escapeHtml(label)}</span>`
-      + `<span class="ladder-chip-meta">${mark}</span></span>`;
-  };
-  return games.map((g) => {
-    const e = g.espn || {};
-    const teams = e.awayName ? `${e.awayName} @ ${e.homeName}` : `${g.away} @ ${g.home}`;
-    const logos = [g.away, g.home].map((ab) =>
-      `<img class="team-logo" src="${teamLogoUrl("mlb", ab, {})}" alt="${escapeHtml(ab)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
-    ).join("");
-    const score = (e.awayScore != null)
-      ? `<span class="score-panel">${escapeHtml(g.away)} ${e.awayScore}–${e.homeScore} ${escapeHtml(g.home)}`
-        + (e.detail ? ` <span class="period">${escapeHtml(e.detail)}</span>` : "") + `</span>`
-      : (e.detail ? `<span class="score-panel"><span class="period">${escapeHtml(e.detail)}</span></span>` : "");
-    const filled = g.props.filter((p) => p.filled_ct > 0);
-    const resting = g.props.filter((p) => p.resting_ct > 0 && !(p.filled_ct > 0));
-    const ladder = (label, items, isFilled) => items.length
-      ? `<div class="stat-ladder"><div class="stat-ladder-head"><span class="stat-label">${label}</span></div>`
-        + `<div class="stat-ladder-chips">${items.map((p) => chip(p, isFilled)).join("")}</div></div>`
-      : "";
-    return `
-      <div class="game-card" data-game-key="prop:${escapeHtml(g.chunk)}">
-        <div class="game-card-head" role="button" tabindex="0">
-          <div class="game-title">
-            <span class="card-chevron">▾</span>
-            <span class="sport-badge">MLB</span>
-            <span class="game-logos">${logos}</span>
-            <span class="game-name">${escapeHtml(teams)}</span>
-            <span class="sport-badge" title="prop maker book">PROPS</span>
-          </div>
-          ${score}
-          <div class="game-stats">
-            <span class="stat"><span class="label">props</span><span class="value">${g.props.length}</span></span>
-            <span class="stat"><span class="label">filled</span><span class="value">${filled.length}</span></span>
-            <span class="stat"><span class="label">at risk</span><span class="value">$${g.collateral.toFixed(0)}</span></span>
-          </div>
-        </div>
-        <div class="game-card-body">
-          ${ladder("Filled", filled, true)}
-          ${ladder("Resting", resting, false)}
-          ${(filled.length || resting.length) ? "" : `<div class="empty">no fills or resting orders</div>`}
-        </div>
-      </div>`;
-  }).join("");
+  if (!games.length) { section.style.display = "none"; return; }
+  section.style.display = "";
+
+  // Summary strip across the whole book.
+  let filledCt = 0, restingCt = 0, risk = 0, toWin = 0, realized = 0, settledN = 0, wonN = 0;
+  for (const g of games) {
+    for (const p of g.props) {
+      if (p.filled_ct > 0 || p.status === "settled") {
+        filledCt += p.filled_ct || 0;
+        const cost = p.collat || 0;
+        risk += cost; toWin += (p.filled_ct || 0) - cost;
+      }
+      if ((p.resting_ct || 0) > 0 && !(p.filled_ct > 0) && p.status !== "settled") restingCt += p.resting_ct || 0;
+      if (p.status === "settled") { settledN++; realized += p.realized || 0; if (p.won) wonN++; }
+    }
+  }
+  sumWrap.innerHTML = `
+    <span class="prop-kpi"><span class="k">Filled</span><span class="v">${filledCt.toFixed(0)} ct</span></span>
+    <span class="prop-kpi"><span class="k">Resting</span><span class="v">${restingCt.toFixed(0)} ct</span></span>
+    <span class="prop-kpi"><span class="k">At risk</span><span class="v">${fmtMoney(risk)}</span></span>
+    <span class="prop-kpi"><span class="k">To win</span><span class="v pos">+${toWin.toFixed(2)}</span></span>
+    ${settledN ? `<span class="prop-kpi"><span class="k">Settled</span><span class="v ${realized >= 0 ? "pos" : "neg"}">${wonN}/${settledN} won · ${realized >= 0 ? "+" : ""}${realized.toFixed(2)}</span></span>` : ""}`;
+
+  // Bet-slip cards: one per game with filled/settled props.
+  const withFilled = games.filter((g) => g.props.some((p) => p.filled_ct > 0 || p.status === "settled"));
+  cardsWrap.innerHTML = withFilled.length
+    ? withFilled.map((g, i) => propGameCard(g, i + 1)).join("")
+    : `<div class="empty">no filled prop positions yet — all orders still resting below</div>`;
+
+  cardsWrap.querySelectorAll(".parlay > .head").forEach((head) => {
+    const toggle = (ev) => {
+      if (ev.target.closest("a, button")) return;
+      const k = head.getAttribute("data-prop-key");
+      if (!k) return;
+      if (state.parlayExpanded.has(k)) state.parlayExpanded.delete(k);
+      else state.parlayExpanded.add(k);
+      renderPropBook();
+    };
+    head.addEventListener("click", toggle);
+    head.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(ev); }
+    });
+  });
+
+  const restHtml = propRestingHtml();
+  restWrap.innerHTML = restHtml
+    ? `<div class="prop-resting-head">Resting orders <span class="hint">working — the exchange cancels each 60s before its first pitch</span></div>${restHtml}`
+    : "";
 }
 
 function renderGameCards() {
@@ -4028,8 +4124,7 @@ function renderGameCards() {
   // they stay visible (alive = green, dead = red+strike) so the user can
   // see how the slate landed.
   const live = cards.filter((g) => g.legs.length > 0);
-  const propHtml = propCardsHtml();
-  if (!live.length && !propHtml) {
+  if (!live.length) {
     wrap.innerHTML = `<div class="empty">no open exposure</div>`;
     return;
   }
@@ -5024,8 +5119,7 @@ function renderGameCards() {
     `;
   }).join("");
 
-  // Prop-maker cards render alongside the parlay game cards, same styling.
-  wrap.innerHTML = html + propHtml;
+  wrap.innerHTML = html;
 
   wireGridScrubbers(wrap);
 
@@ -5373,30 +5467,21 @@ function effectiveStatus(res, legMid) {
 function computeParlayProbabilities(p) {
   // Returns { pWin, pLose, expectedPnl, breakdownLegs:[{p_buyer, p_us, eff}], unknown:bool }
   const impossible = _impossibleSoccerParlay(p);
-  let pAllHit = 1.0;   // P(every leg's market side hits) — the parlay paying out
+  let pLose = 1.0;
   let unknown = false;
   const breakdown = [];
   for (const leg of p.legs) {
     const lm = p.legMids[leg.ticker] || {};
-    // legResolutionForUs / pBuyerWinsLeg are ANTI-buyer framed. For a holdYes
-    // (long) parlay WE are the buyer, so feed them the side-flipped leg —
-    // then "alive"/p_us keep meaning OUR way in both frames (2026-07-03).
-    const legF = p.holdYes
-      ? { ...leg, side: flipSide(leg.side), p: leg.p != null ? 1 - Number(leg.p) : null }
-      : leg;
-    const res = legResolutionForUs(legF, state.scoreboards, state.boxscores);
+    const res = legResolutionForUs(leg, state.scoreboards, state.boxscores);
     const eff = effectiveStatus(res, lm);
     // Promote market-implied resolution into the prob so locked legs short-circuit
     const resForProb = eff !== res.status
       ? { ...res, status: eff }
       : res;
-    const pb = pBuyerWinsLeg(legF, lm, resForProb);  // P(anti-us side hits)
+    const pb = pBuyerWinsLeg(leg, lm, resForProb);
     if (pb == null) { unknown = true; }
-    else { pAllHit *= p.holdYes ? 1 - pb : pb; }     // P(market leg side hits)
-    breakdown.push({
-      p_buyer: pb == null ? null : (p.holdYes ? 1 - pb : pb),
-      p_us: pb == null ? null : 1 - pb, res, eff, leg,
-    });
+    else { pLose *= pb; }
+    breakdown.push({ p_buyer: pb, p_us: pb == null ? null : 1 - pb, res, eff, leg });
   }
   // IMPOSSIBLE PARLAY: the YES can never resolve, so our NO is a 100% sure win —
   // win prob 1, zero loss-risk, profit = the full premium. Overrides the naive
@@ -5410,14 +5495,12 @@ function computeParlayProbabilities(p) {
     return { pWin: null, pLose: null, expectedPnl: null, unknown: true, breakdown };
   }
   // Bake in the runner's fill-time correlation ratio (see corrRatio above):
-  // pAllHit is the independent product, which overstates the joint-hit prob
-  // on negatively-correlated parlays. Skip decided parlays (0/1).
-  if (p.corrRatio != null && pAllHit > 0 && pAllHit < 1) {
-    pAllHit = Math.min(1, Math.max(0, pAllHit * p.corrRatio));
+  // pLose is the independent product, which overstates the loss prob on
+  // negatively-correlated parlays. Skip decided parlays (pLose 0/1).
+  if (p.corrRatio != null && pLose > 0 && pLose < 1) {
+    pLose = Math.min(1, Math.max(0, pLose * p.corrRatio));
   }
-  // The parlay paying out is our LOSS on the maker book, our WIN when holdYes.
-  const pWin = p.holdYes ? pAllHit : 1 - pAllHit;
-  const pLose = 1 - pWin;
+  const pWin = 1 - pLose;
   const expectedPnl = pWin * p.max_profit - pLose * p.cost;
   return { pWin, pLose, expectedPnl, unknown: false, breakdown };
 }
@@ -5460,11 +5543,8 @@ function renderParlayCard(p, n, probs) {
   const expanded = state.parlayExpanded.has(p.ticker);
 
   const legHtml = p.legs.map((leg, i) => {
-    // legResolutionForUs is anti-buyer framed — flip the side in when WE are
-    // the buyer (holdYes) so alive/dead keep meaning OUR way (2026-07-03).
-    const legF = p.holdYes ? { ...leg, side: flipSide(leg.side) } : leg;
-    const res = legResolutionForUs(legF, state.scoreboards, state.boxscores);
-    const ourSide = p.holdYes ? (leg.side || "yes").toLowerCase() : flipSide(leg.side);
+    const res = legResolutionForUs(leg, state.scoreboards, state.boxscores);
+    const ourSide = flipSide(leg.side);
     const desc = legLabel(leg.ticker, ourSide, state.athleteIdx, _floorStrikeByTicker[leg.ticker]);
     const lm = p.legMids[leg.ticker] || {};
     const eff = probs.breakdown[i]?.eff || res.status;
@@ -5491,8 +5571,9 @@ function renderParlayCard(p, n, probs) {
                    : res.status === "dead" ? "post" : "";
     const statText = res.stat || "";
 
-    // Pass OUR side so game-pick legs show our rooting interest's logo
-    // (maker book: the opposite team; holdYes: the picked team itself).
+    // Pass our flipped side so game-pick legs show the OPPOSITE team's logo
+    // (e.g. parlay leg picks ATL but we hold long-NO → show COL logo, our
+    // rooting interest).
     const { sport, teams: logoTeams, league } = legTeams(leg.ticker, ourSide);
     const logoHtml = logoTeams.map(abbr =>
       `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
@@ -5564,23 +5645,12 @@ function renderParlayCard(p, n, probs) {
     ? `<span class="merged-badge" title="${escapeHtml(`${p.mergedCount} fills with identical legs combined into one. Risk / To win / qty are summed.\n${p.mergedTickers.join("\n")}`)}">⧉ ${p.mergedCount} fills</span>`
     : "";
 
-  // TAKER pill (2026-07-03): this ticker includes taker-side fills — an RFQ
-  // submission / hole-repair buy, not our passive maker flow. LONG marks a
-  // net long-YES holding (the position's whole valuation runs in the
-  // holdYes frame).
-  const takerHtml = (p.takerCt > 0)
-    ? `<span class="corr-badge corr-pos" title="${escapeHtml(`${p.takerCt.toFixed(2)} contracts on this ticker filled as TAKER (our RFQ submission / hole repair), the rest as maker.${p.holdYes ? "\nPosition is net LONG (YES) — priced in the long frame." : ""}`)}">⚡ TAKER${p.holdYes ? " · LONG" : ""}</span>`
-    : (p.holdYes
-      ? `<span class="corr-badge corr-pos" title="Net long-YES holding — priced in the long frame (we win when the legs hit).">▲ LONG</span>`
-      : "");
-
   return `<div class="parlay ${expanded ? "expanded" : "collapsed"}">
     <div class="head" data-ticker="${escapeHtml(p.ticker)}" role="button" aria-expanded="${expanded}" tabindex="0">
       <div class="top">
         <span class="badge ${cardBadgeCls}">#${n} · ${cardBadge}</span>
         ${parlayLegLogosHtml(p)}
         ${probs.impossible ? `<span class="corr-badge corr-neg" title="Impossible parlay: the YES can never resolve on any scoreline, so our NO is a 100% sure win — zero loss-risk, profit = the premium.">🎁 SURE WIN</span>` : ""}
-        ${takerHtml}
         ${corrBadge}
         ${mergedHtml}
         ${fillTsHtml}
@@ -5621,7 +5691,6 @@ function resetForAccountSwitch() {
   state.balance = null;
   state.positions = [];
   state.fillsByParlay = {};
-  state.takerByTicker = {};
   state.scoreboards = {};
   state.boxscores = {};
   state.rosters = {};
