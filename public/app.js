@@ -4275,8 +4275,9 @@ function ufcFightInfo(g) {
     if (sideCost[c] == null) sideCost[c] = 0;
     sideCost[c] += p.cost || 0;
   }
-  // What we WIN per side if that fighter LOSES (our NO-side payout across the
-  // legs whose buyers picked him) — the MLB-chip analog for a 2-way fight.
+  // NO-side payout per PICKED fighter (collected when he loses). Rendered on
+  // the OPPOSITE fighter as "+X if he wins" — the chip sits under the guy
+  // whose win pays us, i.e. the one we're rooting for.
   const sideWin = {};
   for (const r of (g.legs || [])) {
     let c = (r.ticker.split("-")[2] || "").replace(/\d+$/, "");
@@ -4333,7 +4334,7 @@ function ufcFightInfo(g) {
       record: cm?.records?.[0]?.summary || idxF?.record || "",
       winner: cm?.winner === true,
       cost: sideCost[code] || 0,
-      weWin: sideWin[code] || 0,
+      winPays: sideWin[sides.find((s) => s !== code)] || 0,
     };
   });
   // Fight time: Kalshi expected_expiration ≈ fight start + ~4.4h settlement
@@ -4383,7 +4384,7 @@ function ufcFightSectionHtml(g, info) {
       ${tape}
       <div class="ufc-pills">
         <span class="ufc-pill" title="Parlay cost riding on ${escapeHtml(x.name)} winning (buyers' side).">${fmtMoney(x.cost)} on him</span>
-        ${x.weWin > 0.005 ? `<span class="ufc-pill pos" title="What we collect across those parlays if ${escapeHtml(x.name)} LOSES.">+${x.weWin.toFixed(2)} if he loses</span>` : ""}
+        ${x.winPays > 0.005 ? `<span class="ufc-pill pos" title="What we collect if ${escapeHtml(x.name)} WINS — the parlays that picked his opponent die.">+${x.winPays.toFixed(2)} if he wins</span>` : ""}
       </div>
     </div>`;
   };
