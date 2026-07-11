@@ -367,6 +367,7 @@ async function refresh() {
 
     state.athleteIdx = buildAthleteIndex(state.scoreboards);
     setLogoContext({ playerFlagIdx: buildAthleteFlagIndex(state.scoreboards) });
+    buildUfcIdx();
 
     // For player props, pull the boxscore for each game we have a prop on,
     // plus the team roster (boxscore is empty pregame; roster gives us
@@ -4148,6 +4149,93 @@ function renderPropBook() {
 }
 
 // ── UFC fight-card enrichment ───────────────────────────────────────────────
+function _ufcNorm(s) { return String(s || "").toUpperCase().replace(/[^A-Z]/g, ""); }
+
+function _ufcIdFromLinks(a) {
+  for (const l of (a?.links || [])) {
+    const m = String(l.href || "").match(/\/id\/(\d+)(\/|$)/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// Index of every fighter on today's fetched UFC cards — powers headshot lookup
+// by 3-letter ticker code anywhere (parlay cards, collapsed game heads).
+// ESPN's MMA scoreboard has NO headshot/id fields; the id hides in the
+// playercard link and the headshot CDN is deterministic from it.
+function buildUfcIdx() {
+  const list = [];
+  for (const [k, sb] of Object.entries(state.scoreboards || {})) {
+    if (!k.startsWith("ufc:")) continue;
+    for (const ev of (sb?.events || [])) {
+      for (const c of (ev.competitions || [])) {
+        for (const cm of (c.competitors || [])) {
+          const a = cm.athlete || {};
+          const id = _ufcIdFromLinks(a);
+          const dn = a.displayName || "";
+          if (!dn) continue;
+          list.push({
+            id,
+            name: dn,
+            short: a.shortName || dn,
+            last: _ufcNorm(dn.split(/\s+/).slice(-1)[0]),
+            full: _ufcNorm(dn),
+            headshot: id ? `https://a.espncdn.com/i/headshots/mma/players/full/${id}.png` : null,
+            flag: a.flag?.href || null,
+            record: cm.records?.[0]?.summary || "",
+          });
+        }
+      }
+    }
+  }
+  state.ufcIdx = list;
+}
+
+function _ufcFindByCode(code) {
+  const c = _ufcNorm(code);
+  if (!c || c.length < 2 || !state.ufcIdx) return null;
+  return state.ufcIdx.find((f) => f.last.startsWith(c))
+      || state.ufcIdx.find((f) => f.full.includes(c))
+      || null;
+}
+
+// Lazy per-fighter extras: UFC.com full-body hero cutout (via our server
+// lookup) + ESPN tale-of-the-tape stats. Fetched once, cached on state, with a
+// debounced re-render when anything lands.
+function _ufcRenderSoon() {
+  if (state._ufcRerenderT) return;
+  state._ufcRerenderT = setTimeout(() => { state._ufcRerenderT = null; render(); }, 300);
+}
+
+function ensureUfcExtras(info) {
+  state.ufcBody = state.ufcBody || {};
+  state.ufcStats = state.ufcStats || {};
+  for (const f of (info?.fighters || [])) {
+    if (f.name && f.name !== f.code && state.ufcBody[f.name] === undefined) {
+      state.ufcBody[f.name] = null;   // pending
+      api(`/api/ufc/athlete-image?name=${encodeURIComponent(f.name)}`)
+        .then((r) => { state.ufcBody[f.name] = (r && r.url) || ""; _ufcRenderSoon(); })
+        .catch(() => { state.ufcBody[f.name] = ""; });
+    }
+    const idm = String(f.headshot || "").match(/\/full\/(\d+)\.png/);
+    const aid = idm ? idm[1] : null;
+    if (aid && state.ufcStats[aid] === undefined) {
+      state.ufcStats[aid] = null;     // pending
+      fetch(`https://site.web.api.espn.com/apis/common/v3/sports/mma/ufc/athletes/${aid}`)
+        .then((r) => r.json())
+        .then((d) => {
+          const a = d?.athlete || d || {};
+          state.ufcStats[aid] = {
+            age: a.age, ht: a.displayHeight, reach: a.displayReach,
+            stance: a.stance?.text || null, wt: a.displayWeight,
+          };
+          _ufcRenderSoon();
+        })
+        .catch(() => { state.ufcStats[aid] = {}; });
+    }
+  }
+}
+
 // ESPN MMA scoreboards carry one EVENT per card with one COMPETITION per
 // fight; competitors are athletes (headshot, record, winner). Match this
 // card's fight by last-name prefix against the fighter codes from the ticker.
@@ -4187,6 +4275,14 @@ function ufcFightInfo(g) {
     if (sideCost[c] == null) sideCost[c] = 0;
     sideCost[c] += p.cost || 0;
   }
+  // What we WIN per side if that fighter LOSES (our NO-side payout across the
+  // legs whose buyers picked him) — the MLB-chip analog for a 2-way fight.
+  const sideWin = {};
+  for (const r of (g.legs || [])) {
+    let c = (r.ticker.split("-")[2] || "").replace(/\d+$/, "");
+    if ((r.buyerSide || "yes").toLowerCase() === "no") c = sides.find((s) => s !== c) || c;
+    sideWin[c] = (sideWin[c] || 0) + (r.maxWin || 0);
+  }
   const norm = (s) => String(s || "").toUpperCase().replace(/[^A-Z]/g, "");
   const nameMatches = (cm, code) => {
     const last = norm(cm?.athlete?.lastName);
@@ -4223,15 +4319,21 @@ function ufcFightInfo(g) {
     const cm = (comp?.competitors || []).find((x) => nameMatches(x, code));
     const hs = cm?.athlete?.headshot;
     const aid = idFromLinks(cm?.athlete);
+    // Scoreboard miss (e.g. Kalshi lists a fight ESPN doesn't) → fall back to
+    // the global fighter index so headshot/name still resolve by code.
+    const idxF = cm ? null : _ufcFindByCode(code);
     return {
       code,
-      name: cm?.athlete?.displayName || code,
-      short: cm?.athlete?.shortName || cm?.athlete?.displayName || code,
+      name: cm?.athlete?.displayName || idxF?.name || code,
+      short: cm?.athlete?.shortName || idxF?.short || cm?.athlete?.displayName || code,
       headshot: (hs && (hs.href || (typeof hs === "string" ? hs : null)))
-        || (aid ? `https://a.espncdn.com/i/headshots/mma/players/full/${aid}.png` : null),
-      record: cm?.records?.[0]?.summary || "",
+        || (aid ? `https://a.espncdn.com/i/headshots/mma/players/full/${aid}.png` : null)
+        || idxF?.headshot || null,
+      flag: cm?.athlete?.flag?.href || idxF?.flag || null,
+      record: cm?.records?.[0]?.summary || idxF?.record || "",
       winner: cm?.winner === true,
       cost: sideCost[code] || 0,
+      weWin: sideWin[code] || 0,
     };
   });
   // Fight time: Kalshi expected_expiration ≈ fight start + ~4.4h settlement
@@ -4253,22 +4355,50 @@ function ufcFightInfo(g) {
 
 function ufcFightSectionHtml(g, info) {
   if (!info || info.fighters.length < 2) return "";
-  const fighterHtml = (x, cls) => `
+  ensureUfcExtras(info);   // kick off full-body + tale-of-the-tape fetches
+  const fighterHtml = (x, cls) => {
+    const body = state.ufcBody?.[x.name];
+    const idm = String(x.headshot || "").match(/\/full\/(\d+)\.png/);
+    const stats = idm ? state.ufcStats?.[idm[1]] : null;
+    // Image preference: UFC.com hero cutout (the ufc.com front-page style) →
+    // large ESPN headshot via their resize combiner → boxing-glove placeholder.
+    const img = body
+      ? `<img class="ufc-body-img" src="${escapeHtml(body)}" alt="${escapeHtml(x.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+      : x.headshot
+        ? `<img class="ufc-headshot-lg" src="${escapeHtml(`https://a.espncdn.com/combiner/i?img=/i/headshots/mma/players/full/${idm ? idm[1] : ""}.png&w=350&h=254`)}" alt="${escapeHtml(x.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+        : `<div class="ufc-headshot ufc-headshot-blank">🥊</div>`;
+    const tape = stats && (stats.age || stats.ht || stats.reach)
+      ? `<div class="ufc-tape">${[
+          stats.age ? `${stats.age} yrs` : null,
+          stats.ht || null,
+          stats.reach ? `${stats.reach} reach` : null,
+          stats.stance || null,
+        ].filter(Boolean).join(" · ")}</div>`
+      : "";
+    return `
     <div class="ufc-fighter ${cls}${x.winner ? " won" : ""}">
-      ${x.headshot ? `<img class="ufc-headshot" src="${escapeHtml(x.headshot)}" alt="${escapeHtml(x.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">` : `<div class="ufc-headshot ufc-headshot-blank">🥊</div>`}
-      <div class="ufc-fighter-name">${escapeHtml(x.name)}${x.winner ? " ✓" : ""}</div>
+      ${img}
+      <div class="ufc-fighter-name">${x.flag ? `<img class="ufc-flag" src="${escapeHtml(x.flag)}" alt="" loading="lazy">` : ""}${escapeHtml(x.name)}${x.winner ? " ✓" : ""}</div>
       ${x.record ? `<div class="ufc-fighter-rec">${escapeHtml(x.record)}</div>` : ""}
-      <div class="ufc-fighter-cost" title="Parlay cost riding on ${escapeHtml(x.name)} winning — the gross loss if this side hits and every other leg holds.">${fmtMoney(x.cost)} on ${escapeHtml(x.code)}</div>
+      ${tape}
+      <div class="ufc-pills">
+        <span class="ufc-pill" title="Parlay cost riding on ${escapeHtml(x.name)} winning (buyers' side).">${fmtMoney(x.cost)} on him</span>
+        ${x.weWin > 0.005 ? `<span class="ufc-pill pos" title="What we collect across those parlays if ${escapeHtml(x.name)} LOSES.">+${x.weWin.toFixed(2)} if he loses</span>` : ""}
+      </div>
     </div>`;
+  };
   return `<div class="card-section">
     <div class="section-title">Fight</div>
     <div class="ufc-fight-row">
       ${fighterHtml(info.fighters[0], "left")}
       <div class="ufc-vs">
         <div class="ufc-vs-txt">vs</div>
-        ${info.timeLabel ? `<div class="ufc-time" title="Scheduled start (ET)">🕒 ${escapeHtml(info.timeLabel)}</div>` : ""}
+        ${info.timeLabel ? `<div class="ufc-time" title="Estimated start (ET) — derived from Kalshi's per-fight settlement window">🕒 ${escapeHtml(info.timeLabel)}</div>` : ""}
         ${info.statusTxt ? `<div class="ufc-status">${escapeHtml(info.statusTxt)}</div>` : ""}
-        <div class="ufc-maxrisk" title="The two sides can't both lose — worst case = the bigger side, net of the other side's premium.">max risk −${(g.worstCase || 0).toFixed(2)}</div>
+        ${g.hedged ? `
+          <div class="ufc-atrisk" title="The two sides can't both lose — worst case nets to the bigger side.">at risk ${fmtMoney(g.worstCase || 0)}</div>
+          <div class="ufc-deployed">(${fmtMoney(g.exposure || 0)} deployed)</div>
+          <div class="hedge-chip">⇄ hedged ${g.offsetPct}%</div>` : ""}
       </div>
       ${fighterHtml(info.fighters[1], "right")}
     </div>
@@ -4288,9 +4418,16 @@ function renderGameCards() {
   }
 
   const html = live.map((g) => {
-    const logos = (g.teams || []).map((abbr) =>
-      `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
-    ).join("");
+    // UFC: resolve fighters (names/headshots/time/sides) up front — feeds the
+    // collapsed head (headshot "logos", real-name title, time chip) + strip.
+    const ufcInfo = g.sport === "ufc" ? ufcFightInfo(g) : null;
+    const logos = ufcInfo && ufcInfo.fighters.some((f) => f.headshot)
+      ? ufcInfo.fighters.map((f) => f.headshot
+          ? `<img class="team-logo ufc-logo" src="${escapeHtml(f.headshot)}" alt="${escapeHtml(f.code)}" title="${escapeHtml(f.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+          : "").join("")
+      : (g.teams || []).map((abbr) =>
+          `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+        ).join("");
     const sport = (g.sport || "").toUpperCase();
     const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
     // Pregame soccer: prefer our actual kickoff time (Kalshi milestone feed)
@@ -4306,9 +4443,6 @@ function renderGameCards() {
     // index, then the raw code.
     const isTennisCard = g.sport === "atp" || g.sport === "wta";
     const isNationalCard = g.sport === "wcup" || g.sport === "intlfriendly";
-    // UFC: resolve fighter names/headshots/time once — used for the collapsed
-    // title (real names, not ticker codes), the head time chip, and the strip.
-    const ufcInfo = g.sport === "ufc" ? ufcFightInfo(g) : null;
     const title = ufcInfo && ufcInfo.fighters.length === 2
       ? ufcInfo.fighters.map((f) => f.short || f.name || f.code).join(" vs ")
       : isTennisCard
@@ -4983,7 +5117,10 @@ function renderGameCards() {
     // draw") instead of the 2-way "ML".
     const isSoccerGame = g.legs.length > 0 &&
       _SOCCER_TREE_SPORTS.has(legSport(g.legs[0].ticker));
-    if (teamBuckets.size > 0 || sharedTotal.length > 0 || sharedBtts.length > 0 || sharedDraw.length > 0 || sharedRfi.length > 0 || sharedOther.size > 0 || otherLegs.length > 0) {
+    // UFC cards: the fight strip carries the whole story (fighters, sides,
+    // pills) — the generic "UFC: X d. Y" cheer-rows are redundant noise.
+    if (g.sport !== "ufc" &&
+        (teamBuckets.size > 0 || sharedTotal.length > 0 || sharedBtts.length > 0 || sharedDraw.length > 0 || sharedRfi.length > 0 || sharedOther.size > 0 || otherLegs.length > 0)) {
       // Team display order: away then home (matches the score panel). Falls
       // back to insertion order when there's no ESPN match.
       const orderedTeams = live
@@ -5744,9 +5881,17 @@ function parlayLegLogosHtml(p, max = 8) {
   const extra = out.length > max
     ? `<span class="parlay-logo-more">+${out.length - max}</span>`
     : "";
-  const imgs = truncated.map(({ sport, abbr, league }) =>
-    `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
-  ).join("");
+  const imgs = truncated.map(({ sport, abbr, league }) => {
+    // UFC "teams" are fighter codes — swap the (nonexistent) team crest for
+    // the fighter's ESPN headshot via the global fighter index.
+    if (sport === "ufc") {
+      const f = _ufcFindByCode(abbr);
+      if (f?.headshot) {
+        return `<img class="team-logo ufc-logo" src="${escapeHtml(f.headshot)}" alt="${escapeHtml(abbr)}" title="${escapeHtml(f.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
+      }
+    }
+    return `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
+  }).join("");
   return `<span class="parlay-logos">${imgs}${extra}</span>`;
 }
 
@@ -5788,9 +5933,15 @@ function renderParlayCard(p, n, probs) {
     // (e.g. parlay leg picks ATL but we hold long-NO → show COL logo, our
     // rooting interest).
     const { sport, teams: logoTeams, league } = legTeams(leg.ticker, ourSide);
-    const logoHtml = logoTeams.map(abbr =>
-      `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
-    ).join("");
+    const logoHtml = logoTeams.map((abbr) => {
+      if (sport === "ufc") {
+        const f = _ufcFindByCode(abbr);
+        if (f?.headshot) {
+          return `<img class="team-logo ufc-logo" src="${escapeHtml(f.headshot)}" alt="${escapeHtml(abbr)}" title="${escapeHtml(f.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
+        }
+      }
+      return `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
+    }).join("");
 
     // Date tag — disambiguates same-matchup legs across multiple dates
     // (e.g. a 3-game ATL@COL series stack).

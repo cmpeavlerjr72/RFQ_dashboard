@@ -1705,3 +1705,15 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 /* hedged/netting chips + KPI sub-lines (2026-07-11) */
 .hedge-chip { display: inline-block; font-size: 9px; font-weight: 700; color: var(--pos); border: 1px solid var(--pos); border-radius: 8px; padding: 0 5px; vertical-align: middle; text-transform: none; letter-spacing: 0; }
 .kpi-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+/* UFC v2: headshot logos, hero cutouts, tale-of-the-tape, side pills */
+.ufc-logo { border-radius: 50%; object-fit: cover; object-position: top; background: var(--card-head); }
+.ufc-body-img { height: 190px; max-width: 160px; object-fit: contain; object-position: bottom; filter: drop-shadow(0 2px 3px rgba(0,0,0,.18)); }
+.ufc-headshot-lg { width: 130px; height: 95px; object-fit: cover; object-position: top; border-radius: 10px; background: var(--card-head); border: 1px solid var(--border); }
+.ufc-flag { width: 16px; height: 11px; margin-right: 5px; vertical-align: baseline; border-radius: 2px; }
+.ufc-tape { font-size: 0.72rem; color: var(--muted); }
+.ufc-pills { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin-top: 3px; }
+.ufc-pill { font-size: 0.75rem; color: var(--fg); background: var(--card-head); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
+.ufc-pill.pos { color: var(--pos); border-color: var(--pos); }
+.ufc-atrisk { font-size: 0.82rem; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.ufc-deployed { font-size: 0.7rem; color: var(--muted); }

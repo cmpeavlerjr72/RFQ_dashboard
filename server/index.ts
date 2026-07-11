@@ -41,6 +41,7 @@ import { getImpFlow } from "./impflow.js";
 import { getBuilders } from "./builders.js";
 import { getRester } from "./rester.js";
 import { getEngineDiag } from "./engineDiag.js";
+import { getUfcAthleteImage } from "./ufcimg.js";
 import { getClv } from "./clv.js";
 import { getPartnerRecap, partnerCacheStats } from "./partner.js";
 import { getLinesCatalog, getLinesSeries } from "./lines.js";
@@ -288,6 +289,16 @@ app.get("/api/scoreboard", async (req, res, next) => {
     upstreamCallCount++;
     const payload = await getScoreboard(sport, date, force);
     res.json({ sport, date, payload, cached_at: new Date().toISOString() });
+  } catch (e) { next(e); }
+});
+
+// UFC.com athlete full-body image (hero cutout) — cached server-side lookup.
+app.get("/api/ufc/athlete-image", async (req, res, next) => {
+  try {
+    const name = String(req.query.name || "").trim();
+    if (!name) return res.status(400).json({ error: "name required" });
+    const url = await getUfcAthleteImage(name);
+    res.json({ name, url });
   } catch (e) { next(e); }
 });
 
