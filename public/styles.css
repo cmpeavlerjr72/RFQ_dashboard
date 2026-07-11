@@ -1701,3 +1701,7 @@ main .breakdown-table .bk-stat-cell { justify-content: flex-start !important; }
 .ufc-status { font-size: 0.74rem; color: var(--muted); }
 .ufc-maxrisk { font-size: 0.8rem; font-weight: 600; color: var(--neg); white-space: nowrap; }
 .offset-mini { font-size: 0.68rem; font-weight: 700; color: var(--pos); }
+
+/* hedged/netting chips + KPI sub-lines (2026-07-11) */
+.hedge-chip { display: inline-block; font-size: 9px; font-weight: 700; color: var(--pos); border: 1px solid var(--pos); border-radius: 8px; padding: 0 5px; vertical-align: middle; text-transform: none; letter-spacing: 0; }
+.kpi-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }

@@ -331,7 +331,10 @@ async function refresh() {
           } else if (askC != null && askC > 0 && askC < 100) {
             midC = askC;  // losing side, no bids above
           }
-          p.legMids[leg.ticker] = { midC, bidC, askC, status: lm.status };
+          p.legMids[leg.ticker] = { midC, bidC, askC, status: lm.status,
+            // Kalshi's per-market settlement estimate — the only PER-FIGHT time
+            // signal for UFC (ESPN only carries card-segment starts).
+            expTs: lm.expected_expiration_time ? Date.parse(lm.expected_expiration_time) : null };
         }
       }
     }
@@ -4155,11 +4158,14 @@ function ufcFightInfo(g) {
   // Fighter side codes: prefer strike codes seen on legs (covers both sides
   // when we hold offsetting flow), else 3/3-split the 6-char chunk.
   const codes = new Set();
+  let expMin = null;   // earliest Kalshi expected_expiration across this fight's legs
   for (const p of state.positions) {
     for (const l of p.legs || []) {
       if (legGameGroupKey(l.ticker) !== g.key) continue;
       const c = (l.ticker.split("-")[2] || "").replace(/\d+$/, "");
       if (c) codes.add(c);
+      const ets = p.legMids?.[l.ticker]?.expTs;
+      if (ets) expMin = expMin == null ? ets : Math.min(expMin, ets);
     }
   }
   const chunkTeams = String(g.key.split("|")[2] || "");
@@ -4203,25 +4209,44 @@ function ufcFightInfo(g) {
       }
     }
   }
+  // ESPN's MMA scoreboard carries NO headshot/id fields on athletes — but the
+  // playercard link embeds the athlete id, and ESPN's headshot CDN is
+  // deterministic from it (a.espncdn.com/i/headshots/mma/players/full/{id}.png).
+  const idFromLinks = (a) => {
+    for (const l of (a?.links || [])) {
+      const m = String(l.href || "").match(/\/id\/(\d+)(\/|$)/);
+      if (m) return m[1];
+    }
+    return null;
+  };
   const fighters = sides.map((code) => {
     const cm = (comp?.competitors || []).find((x) => nameMatches(x, code));
     const hs = cm?.athlete?.headshot;
+    const aid = idFromLinks(cm?.athlete);
     return {
       code,
       name: cm?.athlete?.displayName || code,
-      headshot: (hs && (hs.href || (typeof hs === "string" ? hs : null))) || null,
+      short: cm?.athlete?.shortName || cm?.athlete?.displayName || code,
+      headshot: (hs && (hs.href || (typeof hs === "string" ? hs : null)))
+        || (aid ? `https://a.espncdn.com/i/headshots/mma/players/full/${aid}.png` : null),
       record: cm?.records?.[0]?.summary || "",
       winner: cm?.winner === true,
       cost: sideCost[code] || 0,
     };
   });
+  // Fight time: Kalshi expected_expiration ≈ fight start + ~4.4h settlement
+  // buffer (measured across the full 7/11 card vs Pinnacle starts, ±30min) —
+  // per-fight, unlike ESPN's card-segment date (every prelim says 5:00 PM).
+  // Rounded to the 15-min grid and labelled "est.". ESPN segment = fallback.
+  const fmtET = (d) => d.toLocaleTimeString("en-US",
+    { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET";
   let timeLabel = null;
-  if (when) {
+  if (expMin != null) {
+    const est = new Date(Math.round((expMin - 4.4 * 3600e3) / (15 * 60e3)) * (15 * 60e3));
+    if (!isNaN(est)) timeLabel = "est. " + fmtET(est);
+  } else if (when) {
     const d = new Date(when);
-    if (!isNaN(d)) {
-      timeLabel = d.toLocaleTimeString("en-US",
-        { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET";
-    }
+    if (!isNaN(d)) timeLabel = "card " + fmtET(d);
   }
   return { fighters, timeLabel, statusTxt, matched: !!comp };
 }
@@ -4281,13 +4306,18 @@ function renderGameCards() {
     // index, then the raw code.
     const isTennisCard = g.sport === "atp" || g.sport === "wta";
     const isNationalCard = g.sport === "wcup" || g.sport === "intlfriendly";
-    const title = isTennisCard
-      ? (live
-          ? [live.away.name, live.home.name].filter(Boolean).join(" vs ")
-          : (g.teams || []).map((a) => state.athleteIdx[a] || a).join(" vs "))
-      : isNationalCard
-        ? (g.teams || []).map((a) => NATIONAL_TEAMS[a] || a).join(" vs ")
-        : (g.teams || []).join(" @ ");
+    // UFC: resolve fighter names/headshots/time once — used for the collapsed
+    // title (real names, not ticker codes), the head time chip, and the strip.
+    const ufcInfo = g.sport === "ufc" ? ufcFightInfo(g) : null;
+    const title = ufcInfo && ufcInfo.fighters.length === 2
+      ? ufcInfo.fighters.map((f) => f.short || f.name || f.code).join(" vs ")
+      : isTennisCard
+        ? (live
+            ? [live.away.name, live.home.name].filter(Boolean).join(" vs ")
+            : (g.teams || []).map((a) => state.athleteIdx[a] || a).join(" vs "))
+        : isNationalCard
+          ? (g.teams || []).map((a) => NATIONAL_TEAMS[a] || a).join(" vs ")
+          : (g.teams || []).join(" @ ");
     const dateHtml = g.dateLabel ? `<span class="game-date">${escapeHtml(g.dateLabel)}</span>` : "";
     const collapsed = !state.gameExpanded.has(g.key);
     const chevron = collapsed ? "▸" : "▾";
@@ -5177,7 +5207,6 @@ function renderGameCards() {
 
     // UFC cards get a fight strip: headshots + records + start time + per-side
     // deployed $ (the offsetting-flow view: the sides can't both lose).
-    const ufcInfo = g.sport === "ufc" ? ufcFightInfo(g) : null;
     const ufcSection = ufcInfo ? ufcFightSectionHtml(g, ufcInfo) : "";
     const bodyContent = `${ufcSection}${gameSection}${playerSection}`;
 
@@ -5231,14 +5260,16 @@ function renderGameCards() {
           ${scorePanel}
           <div class="game-stats">
             <span class="stat"><span class="label">parlays</span><span class="value">${g.parlayTickers.size}</span></span>
-            <span class="stat" title="Total cost paid across every parlay touching this game.">
-              <span class="label">cost</span>
-              <span class="value">${fmtMoney(g.exposure)}</span>
-            </span>
-            <span class="stat" title="Worst-case NET loss on this game's book: offsetting flow (opposite sides of the same fight/game) nets — they can't all lose at once. Gross if everything here lost: ${fmtMoney(g.gross || 0)}${(g.offsetPct || 0) >= 1 ? ` — offsets net ${g.offsetPct}% away` : ""}.">
-              <span class="label">max risk${g.hedged ? ` <span class="offset-mini">⇄${g.offsetPct}%</span>` : ""}</span>
-              <span class="value neg">−${(g.worstCase || 0).toFixed(2)}</span>
-            </span>
+            ${g.hedged ? `
+              <span class="stat" title="Offsetting flow on this game nets: opposite sides can't all lose at once, so the worst-case NET loss is ${fmtMoney(g.worstCase || 0)} of the ${fmtMoney(g.exposure)} deployed (offsets cancel ${g.offsetPct}% of gross).">
+                <span class="label">at risk <span class="hedge-chip">⇄ hedged ${g.offsetPct}%</span></span>
+                <span class="value">${fmtMoney(g.worstCase || 0)}</span>
+                <span class="stat-sub">(${fmtMoney(g.exposure)} deployed)</span>
+              </span>` : `
+              <span class="stat" title="Total cost paid across every parlay touching this game.">
+                <span class="label">cost</span>
+                <span class="value">${fmtMoney(g.exposure)}</span>
+              </span>`}
             <span class="stat" title="Most we win if every parlay touching this game hits (the sure-win payout).">
               <span class="label">to win</span>
               <span class="value ${g.maxWin >= 0 ? "pos" : "neg"}">${g.maxWin >= 0 ? "+" : ""}${g.maxWin.toFixed(2)}</span>
@@ -5252,6 +5283,11 @@ function renderGameCards() {
               <span class="stat" title="ROI = expected return ÷ cost paid on this game (${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)} / ${fmtMoney(g.exposure)}).">
                 <span class="label">ROI</span>
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.exposure * 100).toFixed(0)}%</span>
+              </span>` : ""}
+            ${g.expectedPnl != null && (g.worstCase || 0) > 0.005 ? `
+              <span class="stat" title="Return on risk = expected return ÷ worst-case net loss (${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)} / ${fmtMoney(g.worstCase)}). What the expectation pays per dollar actually at risk after netting.">
+                <span class="label">RoR</span>
+                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.worstCase * 100).toFixed(0)}%</span>
               </span>` : ""}
           </div>
         </div>
@@ -5377,9 +5413,16 @@ function renderSummary() {
       <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
       <div class="kpi-half"><div class="label">deployment</div><div class="value">${deployPct != null ? deployPct.toFixed(0) + "%" : "—"}</div></div>
     </div>
-    <div class="kpi" title="${escapeHtml(`Worst-case NET loss across joint outcomes of every open position. Offsetting flow nets (opposite sides of one fight/game can't both lose); unmodelled legs assumed to hit — pessimistic. Gross (everything loses at once): ${fmtMoney(netting.gross)}${netting.offsetPct > 0 ? ` — offsetting flow nets ${netting.offsetPct}% away` : ""}.`)}">
-      <div class="label">max risk${netting.offsetPct >= 3 ? ` <span class="offset-mini">⇄${netting.offsetPct}%</span>` : ""}</div>
-      <div class="value neg">−${netting.worstCase.toFixed(2)}</div>
+    <div class="kpi kpi-split" title="${escapeHtml(`Max risk = worst-case NET loss across joint outcomes of every open position. Offsetting flow nets (opposite sides of one fight/game can't both lose); unmodelled legs assumed to hit — pessimistic. Gross (everything loses at once): ${fmtMoney(netting.gross)}${netting.offsetPct > 0 ? ` — offsetting flow nets ${netting.offsetPct}% away` : ""}. Return on risk = expected return ÷ max risk.`)}">
+      <div class="kpi-half">
+        <div class="label">max risk${netting.offsetPct >= 3 ? ` <span class="hedge-chip">⇄ ${netting.offsetPct}%</span>` : ""}</div>
+        <div class="value">${fmtMoney(netting.worstCase)}</div>
+        <div class="kpi-sub">(${fmtMoney(totalCost)} deployed)</div>
+      </div>
+      <div class="kpi-half">
+        <div class="label">return on risk</div>
+        <div class="value ${pnlClass(expReturn)}">${netting.worstCase > 0.005 ? `${expReturn >= 0 ? "+" : ""}${(expReturn / netting.worstCase * 100).toFixed(0)}%` : "—"}</div>
+      </div>
     </div>
     <div class="kpi kpi-split" title="${escapeHtml(`Expected return = probability-weighted P&L of every open position at current market prices (live leg mids, locked legs, fill-time correlation). ROI = expected return ÷ cost paid (${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)} / ${fmtMoney(totalCost)}).${unpriced ? ` ${unpriced} position(s) not yet priced.` : ""}`)}">
       <div class="kpi-half"><div class="label">expected return</div><div class="value ${pnlClass(expReturn)}">${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)}</div></div>
