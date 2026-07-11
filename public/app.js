@@ -3976,11 +3976,18 @@ function propGameCard(g, n) {
   const expanded = state.parlayExpanded.has(key);
 
   let risk = 0, toWin = 0, won = 0, lost = 0, settled = 0, realized = 0;
+  let expected = 0, expPriced = 0;
   for (const p of filled) {
     const cost = p.collat || 0;
     risk += cost;
     toWin += (p.filled_ct || 0) - cost;            // each NO pays $1 if it holds
     if (p.status === "settled") { settled++; p.won ? won++ : lost++; realized += (p.realized || 0); }
+    else {
+      // Expected P&L at the CURRENT market price: our NO position is worth
+      // ct x (1 - yes_mid) right now; expected = current value - cost paid.
+      const mid = (p.cur_bid && p.cur_ask) ? (p.cur_bid + p.cur_ask) / 2 : null;
+      if (mid != null) { expected += (p.filled_ct || 0) * (1 - mid) - cost; expPriced++; }
+    }
   }
 
   const e = g.espn || {};
@@ -4024,6 +4031,7 @@ function propGameCard(g, n) {
       <div class="stake">
         <div class="col"><div class="lbl">Risk</div><div class="val">${fmtMoney(risk)}</div></div>
         <div class="col"><div class="lbl">To win</div><div class="val pos">+${toWin.toFixed(2)}</div></div>
+        ${expPriced ? `<div class="col"><div class="lbl">Expected</div><div class="val ${expected >= 0 ? "pos" : "neg"}">${expected >= 0 ? "+" : ""}${expected.toFixed(2)}</div></div>` : ""}
         <div class="col"><div class="lbl">Fades</div><div class="val">${filled.length}${settled ? ` · ${won}W ${lost}L` : ""}</div></div>
         ${realizedHtml}
         ${restHtml}
@@ -4070,14 +4078,20 @@ function renderPropBook() {
   if (!games.length) { section.style.display = "none"; return; }
   section.style.display = "";
 
-  // Summary strip across the whole book.
-  let filledCt = 0, restingCt = 0, risk = 0, toWin = 0, realized = 0, settledN = 0, wonN = 0;
+  // Summary strip across the whole book. Expected = probability-weighted P&L
+  // of the unsettled filled book at CURRENT market mids (replaces the old
+  // everything-wins "to win" headline).
+  let filledCt = 0, restingCt = 0, risk = 0, expected = 0, expPriced = 0, realized = 0, settledN = 0, wonN = 0;
   for (const g of games) {
     for (const p of g.props) {
       if (p.filled_ct > 0 || p.status === "settled") {
         filledCt += p.filled_ct || 0;
         const cost = p.collat || 0;
-        risk += cost; toWin += (p.filled_ct || 0) - cost;
+        risk += cost;
+        if (p.status !== "settled") {
+          const mid = (p.cur_bid && p.cur_ask) ? (p.cur_bid + p.cur_ask) / 2 : null;
+          if (mid != null) { expected += (p.filled_ct || 0) * (1 - mid) - cost; expPriced++; }
+        }
       }
       if ((p.resting_ct || 0) > 0 && !(p.filled_ct > 0) && p.status !== "settled") restingCt += p.resting_ct || 0;
       if (p.status === "settled") { settledN++; realized += p.realized || 0; if (p.won) wonN++; }
@@ -4087,7 +4101,7 @@ function renderPropBook() {
     <span class="prop-kpi"><span class="k">Filled</span><span class="v">${filledCt.toFixed(0)} ct</span></span>
     <span class="prop-kpi"><span class="k">Resting</span><span class="v">${restingCt.toFixed(0)} ct</span></span>
     <span class="prop-kpi"><span class="k">At risk</span><span class="v">${fmtMoney(risk)}</span></span>
-    <span class="prop-kpi"><span class="k">To win</span><span class="v pos">+${toWin.toFixed(2)}</span></span>
+    ${expPriced ? `<span class="prop-kpi"><span class="k">Expected</span><span class="v ${expected >= 0 ? "pos" : "neg"}">${expected >= 0 ? "+" : ""}${expected.toFixed(2)}</span></span>` : ""}
     ${settledN ? `<span class="prop-kpi"><span class="k">Settled</span><span class="v ${realized >= 0 ? "pos" : "neg"}">${wonN}/${settledN} won · ${realized >= 0 ? "+" : ""}${realized.toFixed(2)}</span></span>` : ""}`;
 
   // Bet-slip cards: one per game with filled/settled props.
@@ -5192,18 +5206,30 @@ function renderSummary() {
   const pvKalshi = pvRaw - (state.excludedPortfolioValue || 0);
   const totalCost   = state.positions.reduce((s, p) => s + p.cost, 0);
 
-  // TO WIN = sum of every open parlay's max profit. For our sure-win-NO
-  // impossible parlays this IS the outcome (they always settle our way), so we
-  // show this single number — no separate probability-weighted "expected".
-  const maxWin = state.positions.reduce((s, p) => s + (p.max_profit || 0), 0);
+  // EXPECTED RETURN = probability-weighted P&L of every open parlay at CURRENT
+  // prices (live leg mids + ESPN resolution + fill-time correlation). Standard-
+  // book replacement for the impossible-era sure-win "to win" number — the book
+  // now carries real loss risk, so the honest headline is the expectation, not
+  // the everything-wins ceiling. Unpriced parlays (no leg mids yet) count at
+  // cost (expected 0) and are flagged in the tooltip.
+  let expReturn = 0, unpriced = 0;
+  for (const p of state.positions) {
+    const pr = computeParlayProbabilities(p);
+    if (pr.expectedPnl != null) expReturn += pr.expectedPnl;
+    else unpriced += 1;
+  }
+  // Standard ROI = expected return ÷ capital deployed.
+  const roiPct = totalCost > 0.005 ? (expReturn / totalCost * 100) : null;
   // DEPLOYMENT = how much capital is working in the market: cost paid /
   // (cost paid + free cash). No netting / worst-case / at-risk framing.
-  const roiPct = totalCost > 0.005 ? (maxWin / totalCost * 100) : null;
   const deployBase = totalCost + cash;
   const deployPct = deployBase > 0.005 ? (totalCost / deployBase * 100) : null;
-  // Portfolio value = free cash + open cost paid + to win (the sure-win payout).
-  const pv = cash + totalCost + maxWin;
-  const pvTip = `free cash (${fmtMoney(cash)}) + cost paid (${fmtMoney(totalCost)}) + to win (${fmtMoney(maxWin)}). Kalshi's liquidation-value reading (incl. cash): ${fmtMoney(pvKalshi + cash)}.`;
+  // Portfolio value = free cash + current value of positions
+  //                 = cash + cost paid + expected return.
+  const pv = cash + totalCost + expReturn;
+  const pvTip = `free cash (${fmtMoney(cash)}) + cost paid (${fmtMoney(totalCost)}) + expected return (${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)})`
+    + (unpriced ? ` · ${unpriced} position(s) unpriced yet, counted at cost` : "")
+    + `. Kalshi's liquidation-value reading (incl. cash): ${fmtMoney(pvKalshi + cash)}.`;
 
   $("summary").innerHTML = `
     <div class="kpi"><div class="label">cash</div><div class="value">${fmtMoney(cash)}</div></div>
@@ -5212,8 +5238,8 @@ function renderSummary() {
       <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
       <div class="kpi-half"><div class="label">deployment</div><div class="value">${deployPct != null ? deployPct.toFixed(0) + "%" : "—"}</div></div>
     </div>
-    <div class="kpi kpi-split" title="${escapeHtml(`To win = sum of every open parlay's max profit (the sure-win payout). ROI = to win ÷ cost paid (${fmtMoney(maxWin)} / ${fmtMoney(totalCost)}).`)}">
-      <div class="kpi-half"><div class="label">to win</div><div class="value pos">+${maxWin.toFixed(2)}</div></div>
+    <div class="kpi kpi-split" title="${escapeHtml(`Expected return = probability-weighted P&L of every open position at current market prices (live leg mids, locked legs, fill-time correlation). ROI = expected return ÷ cost paid (${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)} / ${fmtMoney(totalCost)}).${unpriced ? ` ${unpriced} position(s) not yet priced.` : ""}`)}">
+      <div class="kpi-half"><div class="label">expected return</div><div class="value ${pnlClass(expReturn)}">${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)}</div></div>
       <div class="kpi-half"><div class="label">ROI</div><div class="value ${pnlClass(roiPct)}">${roiPct != null ? roiPct.toFixed(0) + "%" : "—"}</div></div>
     </div>
   `;
@@ -5226,7 +5252,8 @@ const PARLAY_SORT_OPTIONS = [
   { key: "cost",   label: "Risk",     get: (p, x) => p.cost },
   { key: "maxWin", label: "To Win",   get: (p, x) => p.max_profit },
   { key: "pWin",   label: "Win Chance", get: (p, x) => x.probs.pWin ?? -1 },
-  { key: "roi",    label: "ROI", get: (p, x) => (p.cost > 0 ? (p.max_profit / p.cost) : -Infinity) },
+  { key: "evPnl",  label: "Expected", get: (p, x) => x.probs.expectedPnl ?? -Infinity },
+  { key: "roi",    label: "ROI", get: (p, x) => (p.cost > 0 && x.probs.expectedPnl != null ? (x.probs.expectedPnl / p.cost) : -Infinity) },
 ];
 
 function renderParlaySortBar() {
@@ -5629,10 +5656,14 @@ function renderParlayCard(p, n, probs) {
   const corrBadge = (p.corrRatio != null && Math.abs(p.corrRatio - 1) >= 0.005)
     ? `<span class="corr-badge ${p.corrRatio < 1 ? "corr-neg" : "corr-pos"}" title="Runner's fill-time correlation: joint probability = ×${p.corrRatio.toFixed(3)} the independent leg product. Baked into Win chance / EV / ROI.">⛓ corr ×${p.corrRatio.toFixed(2)}</span>`
     : "";
-  // ROI on the sure-win basis = to win ÷ cost (no separate probability-weighted
-  // "expected current outcome" — for these parlays the outcome IS the to-win).
-  const roiHtml = (p.cost > 0)
-    ? `<div class="col"><div class="lbl">ROI</div><div class="val pos">${(p.max_profit/p.cost*100).toFixed(0)}%</div></div>`
+  // EXPECTED = probability-weighted P&L at current prices (live leg mids +
+  // locked legs + fill-time correlation). ROI = expected ÷ cost — the standard
+  // basis, replacing the impossible-era sure-win ROI (to win ÷ cost).
+  const expHtml = probs.expectedPnl != null
+    ? `<div class="col"><div class="lbl">Expected</div><div class="val ${pnlClass(probs.expectedPnl)}">${probs.expectedPnl >= 0 ? "+" : ""}${probs.expectedPnl.toFixed(2)}</div></div>`
+    : `<div class="col"><div class="lbl">Expected</div><div class="val">—</div></div>`;
+  const roiHtml = (p.cost > 0 && probs.expectedPnl != null)
+    ? `<div class="col"><div class="lbl">ROI</div><div class="val ${pnlClass(probs.expectedPnl)}">${(probs.expectedPnl/p.cost*100).toFixed(0)}%</div></div>`
     : "";
 
   const fillStr = fmtFillTs(p);
@@ -5660,6 +5691,7 @@ function renderParlayCard(p, n, probs) {
         <div class="col"><div class="lbl">Risk</div><div class="val ${probs.impossible ? "pos" : ""}">${probs.impossible ? fmtMoney(0) : fmtMoney(p.cost)}</div>${probs.impossible ? `<div class="stat-sub">cost ${fmtMoney(p.cost)}</div>` : ""}</div>
         <div class="col"><div class="lbl">To win</div><div class="val pos">+${p.max_profit.toFixed(2)}</div></div>
         ${pWinHtml}
+        ${expHtml}
         ${roiHtml}
       </div>
     </div>
