@@ -273,7 +273,7 @@ app.get("/api/start-times", async (req, res, next) => {
 // ESPN endpoint
 // ----------------------------------------------------------------------------
 
-const VALID_SPORTS: Sport[] = ["mlb", "nhl", "nba", "ufc", "atp", "wta",
+const VALID_SPORTS: Sport[] = ["mlb", "nhl", "nba", "wnba", "ufc", "atp", "wta",
   "epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl",
   "wcup", "intlfriendly"];
 

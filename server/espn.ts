@@ -7,7 +7,7 @@
 import { TTLCache, fetchJsonWithTimeout } from "./cache.js";
 
 export type Sport =
-  | "mlb" | "nhl" | "nba" | "ufc" | "atp" | "wta"
+  | "mlb" | "nhl" | "nba" | "wnba" | "ufc" | "atp" | "wta"
   // Soccer leagues — each maps to its own ESPN slug. Game cards + live
   // score/clock tracking; no player props (no boxscore/roster use, but the
   // slug maps below carry entries so the Record<Sport,string> stays total).
@@ -68,6 +68,8 @@ function espnUrl(sport: Sport, dateYYYYMMDD: string): string {
       return `https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard?dates=${d}&limit=300`;
     case "nba":
       return `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${d}&limit=300`;
+    case "wnba":
+      return `https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard?dates=${d}&limit=300`;
     case "ufc":
       return `https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard?dates=${d}&limit=300`;
     case "atp":
@@ -122,6 +124,7 @@ function boxscoreUrl(sport: Sport, eventId: string): string {
     mlb: "baseball/mlb",
     nhl: "hockey/nhl",
     nba: "basketball/nba",
+    wnba: "basketball/wnba",
     ufc: "mma/ufc",
     atp: "tennis/atp",
     wta: "tennis/wta",
@@ -180,6 +183,7 @@ function rosterUrl(sport: Sport, teamId: string): string {
     mlb: "baseball/mlb",
     nhl: "hockey/nhl",
     nba: "basketball/nba",
+    wnba: "basketball/wnba",
     ufc: "mma/ufc",
     atp: "tennis/atp",
     wta: "tennis/wta",

@@ -141,8 +141,9 @@ function dollarsToC(s) {
 }
 
 const SPORT_PREFIXES = {
-  KXMLB: "mlb", KXNHL: "nhl", KXNBA: "nba",
+  KXMLB: "mlb", KXNHL: "nhl", KXNBA: "nba", KXWNBA: "wnba",
   KXATPMATCH: "atp", KXWTAMATCH: "wta", KXUFCFIGHT: "ufc",
+  KXATPCHALLENGERMATCH: "atp", KXWTACHALLENGERMATCH: "wta",
   // Soccer — per-league sport codes (each maps to its own ESPN slug
   // server-side). Enables game cards + live score/clock tracking. Game-level
   // only (ML/spread/total/BTTS); soccer has no player props in our universe.
@@ -2332,6 +2333,18 @@ const _SOCCER_NET_SPORTS = new Set(["wcup", "intlfriendly", "epl", "laliga",
 
 function _legConstraintNet(ticker, buyerSide) {
   const yes = (buyerSide || "yes").toLowerCase() !== "no";
+  // 2-way HEAD-TO-HEAD market (UFC fight / tennis match / WNBA game): one
+  // market per side, winner-take-all. Both sides share one per-game
+  // categorical axis (varKey carries the chunk so portfolio-scope components
+  // can't collide across games) so opposing fills NET: MCG-side and HOL-side
+  // parlays on the same fight can't both lose — max risk = the bigger side.
+  // (2026-07-11: these legs previously returned null = unmodelled, so the
+  // netting engine never saw the offset and overstated risk.)
+  const h2h = ticker.match(/^(?:KXUFCFIGHT|KXATPMATCH|KXWTAMATCH|KXATPCHALLENGERMATCH|KXWTACHALLENGERMATCH|KXWNBAGAME)-(\d{2}[A-Z]{3}\d{2}(?:\d{4})?[A-Z]+)-([A-Z0-9]+)$/);
+  if (h2h) {
+    return { varKey: `h2h|${h2h[1]}`, vtype: "cat",
+             op: yes ? "in" : "notin", set: [h2h[2]] };
+  }
   const gl = parseGameLevelLeg(ticker);
   if (gl) {
     if (gl.kind === "ml" || gl.kind === "spread") {
@@ -4131,6 +4144,112 @@ function renderPropBook() {
     : "";
 }
 
+// ── UFC fight-card enrichment ───────────────────────────────────────────────
+// ESPN MMA scoreboards carry one EVENT per card with one COMPETITION per
+// fight; competitors are athletes (headshot, record, winner). Match this
+// card's fight by last-name prefix against the fighter codes from the ticker.
+function ufcFightInfo(g) {
+  const ticker0 = g.legs?.[0]?.ticker || "";
+  const ymd = legDateYMD(ticker0);
+  const sb = ymd ? state.scoreboards[`ufc:${ymd}`] : null;
+  // Fighter side codes: prefer strike codes seen on legs (covers both sides
+  // when we hold offsetting flow), else 3/3-split the 6-char chunk.
+  const codes = new Set();
+  for (const p of state.positions) {
+    for (const l of p.legs || []) {
+      if (legGameGroupKey(l.ticker) !== g.key) continue;
+      const c = (l.ticker.split("-")[2] || "").replace(/\d+$/, "");
+      if (c) codes.add(c);
+    }
+  }
+  const chunkTeams = String(g.key.split("|")[2] || "");
+  if (codes.size < 2 && chunkTeams.length === 6) {
+    codes.add(chunkTeams.slice(0, 3));
+    codes.add(chunkTeams.slice(3));
+  }
+  const sides = [...codes].slice(0, 2);
+  // Per-side deployed $: a parlay's cost rides on the side its leg PICKED
+  // (buyer-no flips to the opposite side). The two sides can't both lose —
+  // that's the offset the max-risk number nets.
+  const sideCost = {};
+  for (const s of sides) sideCost[s] = 0;
+  for (const p of state.positions) {
+    const leg = (p.legs || []).find((l) => legGameGroupKey(l.ticker) === g.key);
+    if (!leg) continue;
+    let c = (leg.ticker.split("-")[2] || "").replace(/\d+$/, "");
+    if ((leg.side || "yes").toLowerCase() === "no") c = sides.find((s) => s !== c) || c;
+    if (sideCost[c] == null) sideCost[c] = 0;
+    sideCost[c] += p.cost || 0;
+  }
+  const norm = (s) => String(s || "").toUpperCase().replace(/[^A-Z]/g, "");
+  const nameMatches = (cm, code) => {
+    const last = norm(cm?.athlete?.lastName);
+    const full = norm(cm?.athlete?.displayName);
+    return (last && (last.startsWith(code) || last.includes(code)))
+        || (full && full.includes(code));
+  };
+  let comp = null, when = null, statusTxt = null;
+  const evs = Array.isArray(sb?.events) ? sb.events : [];
+  outer:
+  for (const ev of evs) {
+    for (const c of (ev.competitions || [])) {
+      const cms = c.competitors || [];
+      if (cms.length >= 2 && sides.length === 2 &&
+          sides.every((code) => cms.some((cm) => nameMatches(cm, code)))) {
+        comp = c;
+        when = c.date || ev.date || null;
+        statusTxt = c.status?.type?.shortDetail || ev.status?.type?.shortDetail || "";
+        break outer;
+      }
+    }
+  }
+  const fighters = sides.map((code) => {
+    const cm = (comp?.competitors || []).find((x) => nameMatches(x, code));
+    const hs = cm?.athlete?.headshot;
+    return {
+      code,
+      name: cm?.athlete?.displayName || code,
+      headshot: (hs && (hs.href || (typeof hs === "string" ? hs : null))) || null,
+      record: cm?.records?.[0]?.summary || "",
+      winner: cm?.winner === true,
+      cost: sideCost[code] || 0,
+    };
+  });
+  let timeLabel = null;
+  if (when) {
+    const d = new Date(when);
+    if (!isNaN(d)) {
+      timeLabel = d.toLocaleTimeString("en-US",
+        { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" }) + " ET";
+    }
+  }
+  return { fighters, timeLabel, statusTxt, matched: !!comp };
+}
+
+function ufcFightSectionHtml(g, info) {
+  if (!info || info.fighters.length < 2) return "";
+  const fighterHtml = (x, cls) => `
+    <div class="ufc-fighter ${cls}${x.winner ? " won" : ""}">
+      ${x.headshot ? `<img class="ufc-headshot" src="${escapeHtml(x.headshot)}" alt="${escapeHtml(x.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">` : `<div class="ufc-headshot ufc-headshot-blank">🥊</div>`}
+      <div class="ufc-fighter-name">${escapeHtml(x.name)}${x.winner ? " ✓" : ""}</div>
+      ${x.record ? `<div class="ufc-fighter-rec">${escapeHtml(x.record)}</div>` : ""}
+      <div class="ufc-fighter-cost" title="Parlay cost riding on ${escapeHtml(x.name)} winning — the gross loss if this side hits and every other leg holds.">${fmtMoney(x.cost)} on ${escapeHtml(x.code)}</div>
+    </div>`;
+  return `<div class="card-section">
+    <div class="section-title">Fight</div>
+    <div class="ufc-fight-row">
+      ${fighterHtml(info.fighters[0], "left")}
+      <div class="ufc-vs">
+        <div class="ufc-vs-txt">vs</div>
+        ${info.timeLabel ? `<div class="ufc-time" title="Scheduled start (ET)">🕒 ${escapeHtml(info.timeLabel)}</div>` : ""}
+        ${info.statusTxt ? `<div class="ufc-status">${escapeHtml(info.statusTxt)}</div>` : ""}
+        <div class="ufc-maxrisk" title="The two sides can't both lose — worst case = the bigger side, net of the other side's premium.">max risk −${(g.worstCase || 0).toFixed(2)}</div>
+      </div>
+      ${fighterHtml(info.fighters[1], "right")}
+    </div>
+  </div>`;
+}
+
 function renderGameCards() {
   const wrap = $("game-cards");
   const cards = aggregateGameCards();
@@ -5056,7 +5175,11 @@ function renderGameCards() {
         </div>`;
     }
 
-    const bodyContent = `${gameSection}${playerSection}`;
+    // UFC cards get a fight strip: headshots + records + start time + per-side
+    // deployed $ (the offsetting-flow view: the sides can't both lose).
+    const ufcInfo = g.sport === "ufc" ? ufcFightInfo(g) : null;
+    const ufcSection = ufcInfo ? ufcFightSectionHtml(g, ufcInfo) : "";
+    const bodyContent = `${ufcSection}${gameSection}${playerSection}`;
 
     // resolvedNote retired — resolved legs now render inline (green for
     // wins, red+strikethrough for losses) so the count line is redundant.
@@ -5103,6 +5226,7 @@ function renderGameCards() {
             <span class="game-logos">${logos}</span>
             <span class="game-name">${escapeHtml(title)}</span>
             ${dateHtml}
+            ${ufcInfo?.timeLabel ? `<span class="ufc-time-chip" title="Scheduled start (ET)">🕒 ${escapeHtml(ufcInfo.timeLabel)}</span>` : ""}
           </div>
           ${scorePanel}
           <div class="game-stats">
@@ -5111,14 +5235,23 @@ function renderGameCards() {
               <span class="label">cost</span>
               <span class="value">${fmtMoney(g.exposure)}</span>
             </span>
+            <span class="stat" title="Worst-case NET loss on this game's book: offsetting flow (opposite sides of the same fight/game) nets — they can't all lose at once. Gross if everything here lost: ${fmtMoney(g.gross || 0)}${(g.offsetPct || 0) >= 1 ? ` — offsets net ${g.offsetPct}% away` : ""}.">
+              <span class="label">max risk${g.hedged ? ` <span class="offset-mini">⇄${g.offsetPct}%</span>` : ""}</span>
+              <span class="value neg">−${(g.worstCase || 0).toFixed(2)}</span>
+            </span>
             <span class="stat" title="Most we win if every parlay touching this game hits (the sure-win payout).">
               <span class="label">to win</span>
               <span class="value ${g.maxWin >= 0 ? "pos" : "neg"}">${g.maxWin >= 0 ? "+" : ""}${g.maxWin.toFixed(2)}</span>
             </span>
-            ${g.exposure > 0 ? `
-              <span class="stat" title="ROI = to win ÷ cost paid on this game (${fmtMoney(g.maxWin)} / ${fmtMoney(g.exposure)}).">
+            ${g.expectedPnl != null ? `
+              <span class="stat" title="Probability-weighted P&L across this game's parlays at current prices (live leg mids, fill-time fair fallback, correlation baked in). ${g.expectedCovered || 0}/${g.parlayCount || 0} parlays priced.">
+                <span class="label">expected</span>
+                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
+              </span>` : ""}
+            ${g.exposure > 0 && g.expectedPnl != null ? `
+              <span class="stat" title="ROI = expected return ÷ cost paid on this game (${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)} / ${fmtMoney(g.exposure)}).">
                 <span class="label">ROI</span>
-                <span class="value ${g.maxWin >= 0 ? "pos" : "neg"}">${g.maxWin >= 0 ? "+" : ""}${(g.maxWin / g.exposure * 100).toFixed(0)}%</span>
+                <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${(g.expectedPnl / g.exposure * 100).toFixed(0)}%</span>
               </span>` : ""}
           </div>
         </div>
@@ -5218,6 +5351,12 @@ function renderSummary() {
     if (pr.expectedPnl != null) expReturn += pr.expectedPnl;
     else unpriced += 1;
   }
+  // MAX RISK = worst-case net loss across the joint outcomes of every open
+  // parlay: offsetting flow (e.g. MCG-side vs HOL-side parlays on one fight)
+  // nets — they can't all lose at once — while unmodelled legs are assumed to
+  // hit (pessimistic). This is the honest at-risk number for a netted book;
+  // "cost paid" is the gross ceiling.
+  const netting = computePortfolioNetting();
   // Standard ROI = expected return ÷ capital deployed.
   const roiPct = totalCost > 0.005 ? (expReturn / totalCost * 100) : null;
   // DEPLOYMENT = how much capital is working in the market: cost paid /
@@ -5237,6 +5376,10 @@ function renderSummary() {
     <div class="kpi kpi-split" title="${escapeHtml(`Cost paid = total premium out the door across every open parlay — the capital deployed. Deployment % = cost paid / (cost paid + free cash) = how much of this book's capital is working in the market right now.`)}">
       <div class="kpi-half"><div class="label">cost paid</div><div class="value">${fmtMoney(totalCost)}</div></div>
       <div class="kpi-half"><div class="label">deployment</div><div class="value">${deployPct != null ? deployPct.toFixed(0) + "%" : "—"}</div></div>
+    </div>
+    <div class="kpi" title="${escapeHtml(`Worst-case NET loss across joint outcomes of every open position. Offsetting flow nets (opposite sides of one fight/game can't both lose); unmodelled legs assumed to hit — pessimistic. Gross (everything loses at once): ${fmtMoney(netting.gross)}${netting.offsetPct > 0 ? ` — offsetting flow nets ${netting.offsetPct}% away` : ""}.`)}">
+      <div class="label">max risk${netting.offsetPct >= 3 ? ` <span class="offset-mini">⇄${netting.offsetPct}%</span>` : ""}</div>
+      <div class="value neg">−${netting.worstCase.toFixed(2)}</div>
     </div>
     <div class="kpi kpi-split" title="${escapeHtml(`Expected return = probability-weighted P&L of every open position at current market prices (live leg mids, locked legs, fill-time correlation). ROI = expected return ÷ cost paid (${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)} / ${fmtMoney(totalCost)}).${unpriced ? ` ${unpriced} position(s) not yet priced.` : ""}`)}">
       <div class="kpi-half"><div class="label">expected return</div><div class="value ${pnlClass(expReturn)}">${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)}</div></div>
