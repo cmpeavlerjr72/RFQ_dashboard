@@ -5520,11 +5520,29 @@ function renderSummary() {
   // the everything-wins ceiling. Unpriced parlays (no leg mids yet) count at
   // cost (expected 0) and are flagged in the tooltip.
   let expReturn = 0, unpriced = 0;
+  // ODDS-ON OUTCOME = the book settled along the single most likely path at
+  // current odds (every leg to its >=50% side). One possible outcome, not an
+  // average — sits beside expected return per operator request (7/11).
+  let chalk = 0, chalkDies = 0, chalkPays = 0, chalkUnknown = 0;
+  const chalkLegs = new Map();   // unique leg ticker -> p_buyer (for P(path))
   for (const p of state.positions) {
     const pr = computeParlayProbabilities(p);
     if (pr.expectedPnl != null) expReturn += pr.expectedPnl;
     else unpriced += 1;
+    const ch = computeChalkPnl(p, pr);
+    if (ch == null) chalkUnknown += 1;
+    else {
+      chalk += ch;
+      if (ch >= 0) chalkDies += 1; else chalkPays += 1;
+      for (const b of pr.breakdown) {
+        if (b.p_buyer != null && b.p_buyer > 0 && b.p_buyer < 1) {
+          chalkLegs.set(b.leg.ticker, b.p_buyer);
+        }
+      }
+    }
   }
+  let pChalk = 1;
+  for (const pb of chalkLegs.values()) pChalk *= Math.max(pb, 1 - pb);
   // MAX RISK = worst-case net loss across the joint outcomes of every open
   // parlay: offsetting flow (e.g. MCG-side vs HOL-side parlays on one fight)
   // nets — they can't all lose at once — while unmodelled legs are assumed to
@@ -5561,6 +5579,10 @@ function renderSummary() {
         <div class="label">return on risk</div>
         <div class="value ${pnlClass(expReturn)}">${netting.worstCase > 0.005 ? `${expReturn >= 0 ? "+" : ""}${(expReturn / netting.worstCase * 100).toFixed(0)}%` : "—"}</div>
       </div>
+    </div>
+    <div class="kpi kpi-split" title="${escapeHtml(`Odds-on outcome = the book settled along the SINGLE most likely path at current odds: every unresolved leg lands on its 50%+ side (live mids; locked legs stay locked). Unlike expected return — the average over all outcomes, usually not itself possible — this is one outcome that can actually happen: ${chalkDies} parlay(s) die (premium kept), ${chalkPays} pay out.${chalkUnknown ? ` ${chalkUnknown} unpriced, excluded.` : ""} Chance the board lands exactly this way: ~${(pChalk * 100).toFixed(pChalk < 0.095 ? 1 : 0)}% (independent-leg estimate) — every other path lands elsewhere, averaging out to the expected return.`)}">
+      <div class="kpi-half"><div class="label">odds-on outcome</div><div class="value ${pnlClass(chalk)}">${chalk >= 0 ? "+" : ""}${chalk.toFixed(2)}</div></div>
+      <div class="kpi-half"><div class="label">chalk path</div><div class="value">${chalkDies} die · ${chalkPays} hit</div></div>
     </div>
     <div class="kpi kpi-split" title="${escapeHtml(`Expected return = probability-weighted P&L of every open position at current market prices (live leg mids, locked legs, fill-time correlation). ROI = expected return ÷ cost paid (${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)} / ${fmtMoney(totalCost)}).${unpriced ? ` ${unpriced} position(s) not yet priced.` : ""}`)}">
       <div class="kpi-half"><div class="label">expected return</div><div class="value ${pnlClass(expReturn)}">${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)}</div></div>
@@ -5854,6 +5876,19 @@ function computeParlayProbabilities(p) {
   const pWin = 1 - pLose;
   const expectedPnl = pWin * p.max_profit - pLose * p.cost;
   return { pWin, pLose, expectedPnl, unknown: false, breakdown };
+}
+
+// ODDS-ON OUTCOME (chalk path): settle THIS parlay along the single most
+// likely joint outcome at current odds — every unresolved leg lands on its
+// >=50% side (locked legs stay locked). Returns an actually-possible P&L
+// (+max_profit if the parlay dies on that path, -cost if it pays out), the
+// operator's companion number to expectedPnl, which is an average over ALL
+// outcomes and is usually not itself a possible result.
+function computeChalkPnl(p, pr) {
+  if (pr.impossible) return p.max_profit;
+  if (pr.unknown || !pr.breakdown?.length) return null;
+  const buyerHitsAll = pr.breakdown.every((b) => (b.p_buyer ?? 0) >= 0.5);
+  return buyerHitsAll ? -p.cost : p.max_profit;
 }
 
 /**
