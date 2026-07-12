@@ -2749,6 +2749,7 @@ function aggregateGameCards() {
       // fails the buyer, so pWeWin = 1 - prod(pBuyerHitsLeg).
       let pAllHit = 1;
       let havePrice = true;
+      let allOddsOn = true;   // every buyer leg >=50%? (leg-rounding grade)
       for (const lg of p.legs) {
         let pBuyerHits = null;
         const lm = p.legMids?.[lg.ticker];
@@ -2763,6 +2764,7 @@ function aggregateGameCards() {
           havePrice = false;
           break;
         }
+        if (pBuyerHits < 0.5) allOddsOn = false;
         pAllHit *= Math.min(1, Math.max(0, pBuyerHits));
       }
       if (havePrice) {
@@ -2777,14 +2779,11 @@ function aggregateGameCards() {
         const pWeWin = 1 - pAllHit;
         g.expectedPnl = (g.expectedPnl || 0) + (pWeWin * p.qty - p.cost);
         g.expectedCovered = (g.expectedCovered || 0) + 1;
-        // ODDS-ON OUTCOME: grade the PARLAY as a binary at current odds —
-        // it settles as paying out iff its own (corr-adjusted) hit prob is
-        // >=50%, else it dies. NOT per-leg favorites: a parlay of three 60%
-        // legs hits only ~22% of the time and grades as dying (operator
-        // spec, 7/11).
-        const chalkHit = pAllHit >= 0.5;
-        g.chalkPnl = (g.chalkPnl || 0) + (chalkHit ? -p.cost : p.max_profit);
-        if (chalkHit) g.chalkHits = (g.chalkHits || 0) + 1;
+        // ODDS-ON OUTCOME (leg-rounding, operator spec v3 7/11): round every
+        // leg to its odds-on side — the parlay pays out iff ALL buyer legs
+        // are >=50%, dies as soon as one of OUR legs is the favorite.
+        g.chalkPnl = (g.chalkPnl || 0) + (allOddsOn ? -p.cost : p.max_profit);
+        if (allOddsOn) g.chalkHits = (g.chalkHits || 0) + 1;
         else g.chalkDies = (g.chalkDies || 0) + 1;
       }
       g.parlayCount = (g.parlayCount || 0) + 1;
@@ -5429,7 +5428,7 @@ function renderGameCards() {
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
               </span>` : ""}
             ${g.chalkPnl != null ? `
-              <span class="stat" title="Odds-on outcome = every parlay touching this game graded as its own binary at current odds (50%+ hit prob pays out, else it dies), summed: ${g.chalkDies || 0} die (premium kept), ${g.chalkHits || 0} pay out. Each graded result is a real possible outcome — unlike expected, which is the average.">
+              <span class="stat" title="Odds-on outcome = every leg rounded to its odds-on side at current odds, then this game's parlays settled on that board (a parlay pays out only when ALL its buyer legs are 50%+): ${g.chalkDies || 0} die (premium kept), ${g.chalkHits || 0} pay out. A real possible outcome — unlike expected, which is the average.">
                 <span class="label">odds-on</span>
                 <span class="value ${g.chalkPnl >= 0 ? "pos" : "neg"}">${g.chalkPnl >= 0 ? "+" : ""}${g.chalkPnl.toFixed(2)}</span>
               </span>` : ""}
@@ -5589,7 +5588,7 @@ function renderSummary() {
         <div class="value ${pnlClass(expReturn)}">${netting.worstCase > 0.005 ? `${expReturn >= 0 ? "+" : ""}${(expReturn / netting.worstCase * 100).toFixed(0)}%` : "—"}</div>
       </div>
     </div>
-    <div class="kpi kpi-split" title="${escapeHtml(`Odds-on outcome = every open parlay graded as its own BINARY at current odds: a parlay whose corr-adjusted hit probability is 50%+ settles as paying out (we lose its cost), every other parlay dies (we keep its premium). Each graded result is a real possible outcome of that parlay — unlike expected return, which is the average over all outcomes and usually not itself possible. ${chalkDies} die (premium kept), ${chalkPays} pay out.${chalkUnknown ? ` ${chalkUnknown} unpriced, excluded.` : ""}`)}">
+    <div class="kpi kpi-split" title="${escapeHtml(`Odds-on outcome = every LEG rounded to its odds-on side at current odds, then the book settled on that board: a parlay pays out only when ALL its buyer legs are 50%+ (it dies as soon as one of our legs is the favorite). Every graded result is a real possible outcome — unlike expected return, which is the average over all outcomes and usually not itself possible. ${chalkDies} die (premium kept), ${chalkPays} pay out.${chalkUnknown ? ` ${chalkUnknown} unpriced, excluded.` : ""}`)}">
       <div class="kpi-half"><div class="label">odds-on outcome</div><div class="value ${pnlClass(chalk)}">${chalk >= 0 ? "+" : ""}${chalk.toFixed(2)}</div></div>
       <div class="kpi-half"><div class="label">graded</div><div class="value">${chalkDies} die · ${chalkPays} hit</div></div>
     </div>
@@ -5887,17 +5886,21 @@ function computeParlayProbabilities(p) {
   return { pWin, pLose, expectedPnl, unknown: false, breakdown };
 }
 
-// ODDS-ON OUTCOME: grade THIS parlay as a single binary at current odds —
-// it settles as paying out iff its own corr-adjusted hit probability is
-// >=50%, else it dies. NOT per-leg favorites (a parlay of three 60% legs
-// hits ~22% of the time and grades as dying — operator spec, 7/11).
-// Returns an actually-possible P&L (+max_profit die / -cost pay out), the
-// companion to expectedPnl, which is an average over ALL outcomes and is
+// ODDS-ON OUTCOME: round every LEG to its odds-on side at current odds and
+// settle — the buyer's parlay PAYS OUT iff every buyer leg is >=50% (it dies
+// the moment one of OUR legs is the favorite). Operator spec v3 (7/11):
+// parlay-as-binary grading degenerated on a maker book (our win chance is
+// >50% on nearly every card — that's the business — so everything graded as
+// dying); leg-rounding surfaces the real projected losers, e.g. a card with
+// 51% win chance for us whose buyer legs are 71% and 68.5% grades as paying
+// out. Returns an actually-possible P&L (+max_profit die / -cost pay out),
+// the companion to expectedPnl, which is an average over ALL outcomes and
 // usually not itself a possible result.
 function computeChalkPnl(p, pr) {
   if (pr.impossible) return p.max_profit;
-  if (pr.unknown || pr.pLose == null) return null;
-  return pr.pLose >= 0.5 ? -p.cost : p.max_profit;
+  if (pr.unknown || !pr.breakdown?.length) return null;
+  const buyerHitsAll = pr.breakdown.every((b) => (b.p_buyer ?? 0) >= 0.5);
+  return buyerHitsAll ? -p.cost : p.max_profit;
 }
 
 /**
