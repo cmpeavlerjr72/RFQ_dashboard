@@ -2738,6 +2738,8 @@ function aggregateGameCards() {
       if (_impossibleSoccerParlay(p)) {
         g.expectedPnl = (g.expectedPnl || 0) + p.max_profit;
         g.expectedCovered = (g.expectedCovered || 0) + 1;
+        g.chalkPnl = (g.chalkPnl || 0) + p.max_profit;   // sure win on any path
+        g.chalkDies = (g.chalkDies || 0) + 1;
         g.parlayCount = (g.parlayCount || 0) + 1;
         continue;
       }
@@ -2775,6 +2777,15 @@ function aggregateGameCards() {
         const pWeWin = 1 - pAllHit;
         g.expectedPnl = (g.expectedPnl || 0) + (pWeWin * p.qty - p.cost);
         g.expectedCovered = (g.expectedCovered || 0) + 1;
+        // ODDS-ON OUTCOME: grade the PARLAY as a binary at current odds —
+        // it settles as paying out iff its own (corr-adjusted) hit prob is
+        // >=50%, else it dies. NOT per-leg favorites: a parlay of three 60%
+        // legs hits only ~22% of the time and grades as dying (operator
+        // spec, 7/11).
+        const chalkHit = pAllHit >= 0.5;
+        g.chalkPnl = (g.chalkPnl || 0) + (chalkHit ? -p.cost : p.max_profit);
+        if (chalkHit) g.chalkHits = (g.chalkHits || 0) + 1;
+        else g.chalkDies = (g.chalkDies || 0) + 1;
       }
       g.parlayCount = (g.parlayCount || 0) + 1;
     }
@@ -5417,6 +5428,11 @@ function renderGameCards() {
                 <span class="label">expected</span>
                 <span class="value ${g.expectedPnl >= 0 ? "pos" : "neg"}">${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)}</span>
               </span>` : ""}
+            ${g.chalkPnl != null ? `
+              <span class="stat" title="Odds-on outcome = every parlay touching this game graded as its own binary at current odds (50%+ hit prob pays out, else it dies), summed: ${g.chalkDies || 0} die (premium kept), ${g.chalkHits || 0} pay out. Each graded result is a real possible outcome — unlike expected, which is the average.">
+                <span class="label">odds-on</span>
+                <span class="value ${g.chalkPnl >= 0 ? "pos" : "neg"}">${g.chalkPnl >= 0 ? "+" : ""}${g.chalkPnl.toFixed(2)}</span>
+              </span>` : ""}
             ${g.exposure > 0 && g.expectedPnl != null ? `
               <span class="stat" title="ROI = expected return ÷ cost paid on this game (${g.expectedPnl >= 0 ? "+" : ""}${g.expectedPnl.toFixed(2)} / ${fmtMoney(g.exposure)}).">
                 <span class="label">ROI</span>
@@ -5520,11 +5536,11 @@ function renderSummary() {
   // the everything-wins ceiling. Unpriced parlays (no leg mids yet) count at
   // cost (expected 0) and are flagged in the tooltip.
   let expReturn = 0, unpriced = 0;
-  // ODDS-ON OUTCOME = the book settled along the single most likely path at
-  // current odds (every leg to its >=50% side). One possible outcome, not an
-  // average — sits beside expected return per operator request (7/11).
+  // ODDS-ON OUTCOME = every open parlay graded as a binary at current odds
+  // (>=50% hit prob -> pays out, else dies), summed. One number built from
+  // possible per-parlay results — sits beside expected return (the average)
+  // per operator request (7/11).
   let chalk = 0, chalkDies = 0, chalkPays = 0, chalkUnknown = 0;
-  const chalkLegs = new Map();   // unique leg ticker -> p_buyer (for P(path))
   for (const p of state.positions) {
     const pr = computeParlayProbabilities(p);
     if (pr.expectedPnl != null) expReturn += pr.expectedPnl;
@@ -5534,15 +5550,8 @@ function renderSummary() {
     else {
       chalk += ch;
       if (ch >= 0) chalkDies += 1; else chalkPays += 1;
-      for (const b of pr.breakdown) {
-        if (b.p_buyer != null && b.p_buyer > 0 && b.p_buyer < 1) {
-          chalkLegs.set(b.leg.ticker, b.p_buyer);
-        }
-      }
     }
   }
-  let pChalk = 1;
-  for (const pb of chalkLegs.values()) pChalk *= Math.max(pb, 1 - pb);
   // MAX RISK = worst-case net loss across the joint outcomes of every open
   // parlay: offsetting flow (e.g. MCG-side vs HOL-side parlays on one fight)
   // nets — they can't all lose at once — while unmodelled legs are assumed to
@@ -5580,9 +5589,9 @@ function renderSummary() {
         <div class="value ${pnlClass(expReturn)}">${netting.worstCase > 0.005 ? `${expReturn >= 0 ? "+" : ""}${(expReturn / netting.worstCase * 100).toFixed(0)}%` : "—"}</div>
       </div>
     </div>
-    <div class="kpi kpi-split" title="${escapeHtml(`Odds-on outcome = the book settled along the SINGLE most likely path at current odds: every unresolved leg lands on its 50%+ side (live mids; locked legs stay locked). Unlike expected return — the average over all outcomes, usually not itself possible — this is one outcome that can actually happen: ${chalkDies} parlay(s) die (premium kept), ${chalkPays} pay out.${chalkUnknown ? ` ${chalkUnknown} unpriced, excluded.` : ""} Chance the board lands exactly this way: ~${(pChalk * 100).toFixed(pChalk < 0.095 ? 1 : 0)}% (independent-leg estimate) — every other path lands elsewhere, averaging out to the expected return.`)}">
+    <div class="kpi kpi-split" title="${escapeHtml(`Odds-on outcome = every open parlay graded as its own BINARY at current odds: a parlay whose corr-adjusted hit probability is 50%+ settles as paying out (we lose its cost), every other parlay dies (we keep its premium). Each graded result is a real possible outcome of that parlay — unlike expected return, which is the average over all outcomes and usually not itself possible. ${chalkDies} die (premium kept), ${chalkPays} pay out.${chalkUnknown ? ` ${chalkUnknown} unpriced, excluded.` : ""}`)}">
       <div class="kpi-half"><div class="label">odds-on outcome</div><div class="value ${pnlClass(chalk)}">${chalk >= 0 ? "+" : ""}${chalk.toFixed(2)}</div></div>
-      <div class="kpi-half"><div class="label">chalk path</div><div class="value">${chalkDies} die · ${chalkPays} hit</div></div>
+      <div class="kpi-half"><div class="label">graded</div><div class="value">${chalkDies} die · ${chalkPays} hit</div></div>
     </div>
     <div class="kpi kpi-split" title="${escapeHtml(`Expected return = probability-weighted P&L of every open position at current market prices (live leg mids, locked legs, fill-time correlation). ROI = expected return ÷ cost paid (${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)} / ${fmtMoney(totalCost)}).${unpriced ? ` ${unpriced} position(s) not yet priced.` : ""}`)}">
       <div class="kpi-half"><div class="label">expected return</div><div class="value ${pnlClass(expReturn)}">${expReturn >= 0 ? "+" : ""}${expReturn.toFixed(2)}</div></div>
@@ -5878,17 +5887,17 @@ function computeParlayProbabilities(p) {
   return { pWin, pLose, expectedPnl, unknown: false, breakdown };
 }
 
-// ODDS-ON OUTCOME (chalk path): settle THIS parlay along the single most
-// likely joint outcome at current odds — every unresolved leg lands on its
-// >=50% side (locked legs stay locked). Returns an actually-possible P&L
-// (+max_profit if the parlay dies on that path, -cost if it pays out), the
-// operator's companion number to expectedPnl, which is an average over ALL
-// outcomes and is usually not itself a possible result.
+// ODDS-ON OUTCOME: grade THIS parlay as a single binary at current odds —
+// it settles as paying out iff its own corr-adjusted hit probability is
+// >=50%, else it dies. NOT per-leg favorites (a parlay of three 60% legs
+// hits ~22% of the time and grades as dying — operator spec, 7/11).
+// Returns an actually-possible P&L (+max_profit die / -cost pay out), the
+// companion to expectedPnl, which is an average over ALL outcomes and is
+// usually not itself a possible result.
 function computeChalkPnl(p, pr) {
   if (pr.impossible) return p.max_profit;
-  if (pr.unknown || !pr.breakdown?.length) return null;
-  const buyerHitsAll = pr.breakdown.every((b) => (b.p_buyer ?? 0) >= 0.5);
-  return buyerHitsAll ? -p.cost : p.max_profit;
+  if (pr.unknown || pr.pLose == null) return null;
+  return pr.pLose >= 0.5 ? -p.cost : p.max_profit;
 }
 
 /**
