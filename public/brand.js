@@ -18,6 +18,20 @@
           brand + "</span>"
         );
       }
+      // Admin-only nav: the Grids tab (same-game quadrant feasibility) exists
+      // ONLY on the admin instance — other brands never render the link and
+      // the /api/grids endpoint refuses them anyway.
+      if ((c.portfolio === "admin" || c.portfolio === "all") &&
+          !document.querySelector('.nav-links a[href="/grids.html"]')) {
+        var nav = document.querySelector(".nav-links");
+        if (nav) {
+          var a = document.createElement("a");
+          a.href = "/grids.html";
+          a.textContent = "Grids";
+          if (location.pathname === "/grids.html") a.className = "active";
+          nav.appendChild(a);
+        }
+      }
     })
     .catch(function () {});
 })();

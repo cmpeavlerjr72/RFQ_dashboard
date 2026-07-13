@@ -39,6 +39,7 @@ import { getRecap, getRecapOverall } from "./recap.js";
 import { getFlow } from "./flow.js";
 import { getImpFlow } from "./impflow.js";
 import { getBuilders } from "./builders.js";
+import { getGrids } from "./grids.js";
 import { getRester } from "./rester.js";
 import { getEngineDiag } from "./engineDiag.js";
 import { getUfcAthleteImage } from "./ufcimg.js";
@@ -459,6 +460,13 @@ app.get("/api/builders", async (req, res, next) => {
     const date = String(req.query.date || "").trim();
     const force = String(req.query.fresh || "") === "1";
     res.json(await getBuilders(date, force));
+  } catch (e) { next(e); }
+});
+
+// Same-game quadrant grids (admin-only): grid-tester feasibility snapshots.
+app.get("/api/grids", async (req, res, next) => {
+  try {
+    res.json(await getGrids(String(req.query.fresh || "") === "1"));
   } catch (e) { next(e); }
 });
 
