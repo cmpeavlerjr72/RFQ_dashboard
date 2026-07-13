@@ -8,22 +8,34 @@
 <script defer src="/brand.js"></script>
 <style>
   .grid-card { border: 1px solid rgba(128,128,128,.25); border-radius: 10px;
-               padding: 12px 14px; margin: 10px 0; }
-  .grid-card h3 { margin: 0 0 2px 0; }
-  .grid-kpis { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+               padding: 12px 14px; margin: 12px 0; max-width: 720px; }
+  .grid-card h3 { margin: 0 0 8px 0; }
   .kpi-chip { border: 1px solid rgba(128,128,128,.3); border-radius: 999px;
               padding: 2px 10px; font-size: .85em; }
-  .kpi-chip.good { border-color: #16a34a; color: #16a34a; font-weight: 700; }
-  .kpi-chip.warn { border-color: #f59e0b; color: #b45309; }
-  .quad-table { width: 100%; border-collapse: collapse; font-size: .88em; }
-  .quad-table th, .quad-table td { padding: 4px 8px; text-align: right;
-      border-bottom: 1px solid rgba(128,128,128,.15); }
-  .quad-table th:first-child, .quad-table td:first-child { text-align: left; }
-  .quad-dead td { opacity: .45; }
-  .quad-hot td:first-child { font-weight: 700; }
+  .locked { border-radius: 8px; padding: 6px 12px; margin: 6px 0 10px;
+            font-weight: 700; font-size: .95em; }
+  .locked-win  { background: rgba(22,163,74,.16); color: #15803d;
+                 border: 1px solid #16a34a; }
+  .locked-loss { background: rgba(220,38,38,.14); color: #b91c1c;
+                 border: 1px solid #dc2626; }
+  .locked-na   { background: rgba(128,128,128,.10); opacity: .8;
+                 border: 1px dashed rgba(128,128,128,.4); font-weight: 500; }
+  .matrix { width: 100%; border-collapse: separate; border-spacing: 6px;
+            font-size: .88em; table-layout: fixed; }
+  .matrix thead th { text-align: center; font-size: .92em; padding: 2px; }
+  .matrix tbody th { text-align: right; font-size: .92em; padding: 4px 8px;
+                     width: 22%; }
+  .matrix td { border-radius: 8px; padding: 8px 10px; vertical-align: top; }
+  .cell-ok   { background: rgba(22,163,74,.14); border: 1px solid #16a34a; }
+  .cell-dead { background: rgba(220,38,38,.10); border: 1px solid rgba(220,38,38,.55);
+               opacity: .85; }
+  .matrix .c-price { display: flex; justify-content: space-between; gap: 8px; }
+  .matrix .c-price span { opacity: .6; }
+  .matrix .c-price em { opacity: .7; font-style: normal; font-size: .9em; }
+  .matrix .c-meta { margin-top: 3px; font-size: .85em; opacity: .75; }
   @media (prefers-color-scheme: dark) {
-    .kpi-chip.good { color: #4ade80; border-color: #4ade80; }
-    .kpi-chip.warn { color: #fbbf24; border-color: #f59e0b; }
+    .locked-win  { color: #4ade80; }
+    .locked-loss { color: #f87171; }
   }
 </style>
 </head>
