@@ -194,15 +194,97 @@ function _ediagSvg(pts, opts) {
   </svg>`;
 }
 
+function _nowLegs(o) {
+  const legs = (o.legs || []).map(escapeHtml).join(" + ");
+  return legs || `<span class="muted" title="${escapeHtml(o.tk || o.mt || "")}">${escapeHtml((o.tk || o.mt || "?").slice(-22))}</span>`;
+}
+
+// "Right now" block: chaser leaderboard, canon resting book per account, and
+// WHY shapes are being skipped (cell caps / cancel reasons / fail-safe).
+function renderEngineNow(n) {
+  const el = $("ediag-now");
+  if (!el) return;
+  if (!n || n.error) { el.innerHTML = n?.error ? `<div class="muted">now-state error: ${escapeHtml(n.error)}</div>` : ""; return; }
+  const ch = n.chaser || {}, b = ch.board || {}, sk = ch.skips || {};
+  const health = ch.alive
+    ? `<span class="pos">chaser LIVE</span>${b.hold ? ' · <span class="neg">PLACEMENT HOLD</span>' : ""}${ch.fail_safe === "fail_safe_hold" ? ' · <span class="neg">FAIL-SAFE</span>' : ""} · ws ${b.ws ? "ok" : '<span class="neg">DOWN</span>'} · headroom ${fmtMoney(b.headroom || 0)} · ${fmtInt(b.rfq_seen || 0)} RFQs seen`
+    : '<span class="neg">chaser NOT RUNNING (no board in 5 min)</span>';
+  const topRows = (b.top || []).map(t => `<tr>
+      <td>${_nowLegs(t)}</td>
+      <td class="num">${((t.fair || 0) * 100).toFixed(1)}c</td>
+      <td class="num">${((t.p || 0) * 100).toFixed(1)}c</td>
+      <td class="num pos">+${((t.edge || 0) * 100).toFixed(2)}c</td>
+      <td class="num">${(t.vel || 0).toFixed(1)}/min</td>
+      <td class="num">${t.tau_s != null ? Math.round(t.tau_s) + "s" : "—"}</td>
+    </tr>`).join("");
+  const lbHtml = `<div class="shp-sub-head">Leaderboard now — ${b.feasible || 0}/${b.n || 0} velocity-feasible</div>
+    ${topRows ? `<table class="rester-tbl"><thead><tr><th>shape</th><th class="num">fair</th><th class="num">ask</th><th class="num">edge</th><th class="num">velocity</th><th class="num">fill ETA</th></tr></thead><tbody>${topRows}</tbody></table>`
+              : '<div class="muted">no shapes passing the edge x velocity gate right now (tape lull or all hot shapes capped below)</div>'}`;
+
+  const divRows = (sk.diversity || []).map(s => `<tr>
+      <td>${escapeHtml(s.side)}</td><td class="num">$${escapeHtml(String(s.cap))}</td>
+      <td class="num">${s.n}</td>
+      <td class="num">${s.last_ts ? new Date(s.last_ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+    </tr>`).join("");
+  const cancels = Object.entries(sk.cancels || {}).map(([r, c]) => `${escapeHtml(r)}: ${c}`).join(" · ");
+  const skipHtml = `<div class="shp-sub-head">Skips — last hour, with reasons</div>
+    ${divRows ? `<table class="rester-tbl"><thead><tr><th>cell side at cap (flow wants this, Kelly cap says no)</th><th class="num">cap left</th><th class="num">blocked</th><th class="num">last</th></tr></thead><tbody>${divRows}</tbody></table>` : '<div class="muted">no cell-cap blocks in the last hour</div>'}
+    ${cancels ? `<div class="muted" style="margin-top:4px">slot cancels: ${cancels}</div>` : ""}
+    ${sk.post_fail ? `<div class="neg" style="margin-top:4px">post failures: ${sk.post_fail}</div>` : ""}`;
+
+  const restBlocks = Object.entries(n.resting || {}).map(([acct, r]) => {
+    const rows = (r.orders || []).map(o => `<tr>
+        <td>${_nowLegs(o)}</td>
+        <td class="num">${((o.ask || 0) * 100).toFixed(1)}c</td>
+        <td class="num">${(o.ct || 0).toFixed(1)}</td>
+        <td class="num">${o.filled_ct ? o.filled_ct.toFixed(1) : "—"}</td>
+      </tr>`).join("");
+    return `<div style="margin-top:6px"><b>${escapeHtml(acct)}</b> <span class="muted">(${escapeHtml(r.engine || "")})</span>
+      ${r.error ? '<span class="neg">fetch error</span>'
+                : rows ? `<table class="rester-tbl"><thead><tr><th>shape</th><th class="num">ask</th><th class="num">resting ct</th><th class="num">filled</th></tr></thead><tbody>${rows}</tbody></table>`
+                       : '<span class="muted">nothing resting</span>'}</div>`;
+  }).join("");
+  const restHtml = `<div class="shp-sub-head">Resting book — canon /portfolio/orders</div>${restBlocks}`;
+
+  let gridHtml = "";
+  const g = n.grid_rester;
+  if (g && (g.board || g.stopped)) {
+    const st = g.stopped;
+    if (st && !g.alive) {
+      const f = st.filled || {};
+      gridHtml = `<div class="shp-sub-head">Grid rester — ${escapeHtml(g.grid || "")}</div>
+        <div class="muted">stopped · sets ${st.sets ?? 0} · locked ${fmtMoney(st.locked_margin || 0)} · committed ${fmtMoney(st.committed || 0)} · fills: ${Object.entries(f).map(([k, v]) => `${escapeHtml(k)} ${v}`).join(" / ")}</div>`;
+    } else if (g.board) {
+      const rows = (g.board.corners || []).map(c => `<tr>
+          <td>${escapeHtml(c.corner)}</td><td class="num">${((c.fair || 0) * 100).toFixed(1)}c</td>
+          <td class="num">${((c.ask || 0) * 100).toFixed(1)}c</td>
+          <td class="num">${(c.filled || 0).toFixed(1)}</td>
+          <td class="num">${(c.allowed || 0).toFixed(0)}</td>
+          <td>${c.tape ? "tape" : "fallback"}</td>
+        </tr>`).join("");
+      gridHtml = `<div class="shp-sub-head">Grid rester LIVE — ${escapeHtml(g.grid || "")} · sets ${g.board.sets ?? 0} · committed ${fmtMoney(g.board.committed || 0)}</div>
+        <table class="rester-tbl"><thead><tr><th>corner</th><th class="num">fair</th><th class="num">ask</th><th class="num">filled</th><th class="num">band room</th><th>pricing</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+  }
+
+  el.innerHTML = `<div class="muted" style="margin-bottom:4px">${health}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div>${lbHtml}${gridHtml ? `<div style="margin-top:10px">${gridHtml}</div>` : ""}</div>
+      <div>${skipHtml}<div style="margin-top:10px">${restHtml}</div></div>
+    </div>`;
+}
+
 function renderEngineDiag() {
   const wrap = $("ediag-wrap");
   if (!wrap) return;
   const d = state.ediag;
-  if (!d || d.source === "admin-only" || d.source === "empty" || !(d.fills || []).length) {
+  const hasNow = d && d.now && !d.now.error && (d.now.chaser || d.now.grid_rester);
+  if (!d || d.source === "admin-only" || d.source === "empty" || (!(d.fills || []).length && !hasNow)) {
     wrap.style.display = "none";
     return;
   }
   wrap.style.display = "block";
+  renderEngineNow(d.now);
   const t = d.totals || {};
   const rails = d.rails || {};
   const last = (d.series || []).slice(-1)[0] || {};
