@@ -1331,6 +1331,8 @@ footer {
 #day-table-wrap,
 #their-prop-wrap,
 #our-prop-wrap,
+#ediag-table,
+.tbl-scroll,
 .breakdown-wrap {
   max-width: 100%;
   overflow-x: auto;

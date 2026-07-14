@@ -218,7 +218,7 @@ function renderEngineNow(n) {
       <td class="num">${t.tau_s != null ? Math.round(t.tau_s) + "s" : "—"}</td>
     </tr>`).join("");
   const lbHtml = `<div class="shp-sub-head">Leaderboard now — ${b.feasible || 0}/${b.n || 0} velocity-feasible</div>
-    ${topRows ? `<table class="rester-tbl"><thead><tr><th>shape</th><th class="num">fair</th><th class="num">ask</th><th class="num">edge</th><th class="num">velocity</th><th class="num">fill ETA</th></tr></thead><tbody>${topRows}</tbody></table>`
+    ${topRows ? `<div class="tbl-scroll"><table class="rester-tbl"><thead><tr><th>shape</th><th class="num">fair</th><th class="num">ask</th><th class="num">edge</th><th class="num">velocity</th><th class="num">fill ETA</th></tr></thead><tbody>${topRows}</tbody></table></div>`
               : '<div class="muted">no shapes passing the edge x velocity gate right now (tape lull or all hot shapes capped below)</div>'}`;
 
   const divRows = (sk.diversity || []).map(s => `<tr>
@@ -228,7 +228,7 @@ function renderEngineNow(n) {
     </tr>`).join("");
   const cancels = Object.entries(sk.cancels || {}).map(([r, c]) => `${escapeHtml(r)}: ${c}`).join(" · ");
   const skipHtml = `<div class="shp-sub-head">Skips — last hour, with reasons</div>
-    ${divRows ? `<table class="rester-tbl"><thead><tr><th>cell side at cap (flow wants this, Kelly cap says no)</th><th class="num">cap left</th><th class="num">blocked</th><th class="num">last</th></tr></thead><tbody>${divRows}</tbody></table>` : '<div class="muted">no cell-cap blocks in the last hour</div>'}
+    ${divRows ? `<div class="tbl-scroll"><table class="rester-tbl"><thead><tr><th>cell side at cap (flow wants this, Kelly cap says no)</th><th class="num">cap left</th><th class="num">blocked</th><th class="num">last</th></tr></thead><tbody>${divRows}</tbody></table></div>` : '<div class="muted">no cell-cap blocks in the last hour</div>'}
     ${cancels ? `<div class="muted" style="margin-top:4px">slot cancels: ${cancels}</div>` : ""}
     ${sk.post_fail ? `<div class="neg" style="margin-top:4px">post failures: ${sk.post_fail}</div>` : ""}`;
 
@@ -241,7 +241,7 @@ function renderEngineNow(n) {
       </tr>`).join("");
     return `<div style="margin-top:6px"><b>${escapeHtml(acct)}</b> <span class="muted">(${escapeHtml(r.engine || "")})</span>
       ${r.error ? '<span class="neg">fetch error</span>'
-                : rows ? `<table class="rester-tbl"><thead><tr><th>shape</th><th class="num">ask</th><th class="num">resting ct</th><th class="num">filled</th></tr></thead><tbody>${rows}</tbody></table>`
+                : rows ? `<div class="tbl-scroll"><table class="rester-tbl"><thead><tr><th>shape</th><th class="num">ask</th><th class="num">resting ct</th><th class="num">filled</th></tr></thead><tbody>${rows}</tbody></table></div>`
                        : '<span class="muted">nothing resting</span>'}</div>`;
   }).join("");
   const restHtml = `<div class="shp-sub-head">Resting book — canon /portfolio/orders</div>${restBlocks}`;
@@ -263,12 +263,12 @@ function renderEngineNow(n) {
           <td>${c.tape ? "tape" : "fallback"}</td>
         </tr>`).join("");
       gridHtml = `<div class="shp-sub-head">Grid rester LIVE — ${escapeHtml(g.grid || "")} · sets ${g.board.sets ?? 0} · committed ${fmtMoney(g.board.committed || 0)}</div>
-        <table class="rester-tbl"><thead><tr><th>corner</th><th class="num">fair</th><th class="num">ask</th><th class="num">filled</th><th class="num">band room</th><th>pricing</th></tr></thead><tbody>${rows}</tbody></table>`;
+        <div class="tbl-scroll"><table class="rester-tbl"><thead><tr><th>corner</th><th class="num">fair</th><th class="num">ask</th><th class="num">filled</th><th class="num">band room</th><th>pricing</th></tr></thead><tbody>${rows}</tbody></table></div>`;
     }
   }
 
   el.innerHTML = `<div class="muted" style="margin-bottom:4px">${health}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="two-col-tables">
       <div>${lbHtml}${gridHtml ? `<div style="margin-top:10px">${gridHtml}</div>` : ""}</div>
       <div>${skipHtml}<div style="margin-top:10px">${restHtml}</div></div>
     </div>`;
