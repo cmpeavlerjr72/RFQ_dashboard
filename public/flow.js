@@ -11,7 +11,7 @@
 
 import { teamLogoUrl } from "/labels.js";
 import { NATIONAL_TEAMS } from "/national_teams.js";
-import { MLB_TEAMS, NHL_TEAMS, NBA_TEAMS } from "/teams.js";
+import { MLB_TEAMS, NHL_TEAMS, NBA_TEAMS, WNBA_TEAMS } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
 const NATIONAL = new Set(["WC", "INTLFRIENDLY", "UCL", "EPL", "SOCCER"]);
@@ -86,6 +86,7 @@ function teamName(sport, code) {
   if (s === "MLB") return MLB_TEAMS[code] || code;
   if (s === "NHL") return NHL_TEAMS[code] || code;
   if (s === "NBA") return NBA_TEAMS[code] || code;
+  if (s === "WNBA") return WNBA_TEAMS[code] || code;
   return code;
 }
 function flagImg(sport, code) {

@@ -8,7 +8,7 @@
 //   ("KXMLBHRR-26APR281915DETATL-ATLMOLSON28-1", "yes") → "MLB: Olson 1+ hits/runs/RBIs"
 
 import {
-  NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
+  NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, WNBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
   MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl, soccerLogoUrl,
 } from "/teams.js";
 import { NATIONAL_TEAMS, countryFlagUrl } from "/national_teams.js";
@@ -39,6 +39,7 @@ const TEAM_BY_LEN_HINT = {
   KXMLB: MLB_TEAMS,
   KXNHL: NHL_TEAMS,
   KXNBA: NBA_TEAMS,
+  KXWNBA: WNBA_TEAMS,
   KXIPL: IPL_TEAMS,
 };
 
@@ -384,16 +385,62 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
   }
 
   // ---------- WNBA ----------
+  // Own table, NOT NBA_TEAMS: WNBA codes collide with NBA meanings (TOR/ATL)
+  // and include 2- and 4-char codes (GS, LA, CONN, PDX). The NBA table sent
+  // splitTeams to its 50/50 last resort ("PDXCONN" -> "PDXC"|"ONN", rendering
+  // "PDX win vs PDXC" — fixed 2026-07-14).
   if (ticker.startsWith("KXWNBAGAME-")) {
     const rest = ticker.slice("KXWNBAGAME-".length);
     const [dt, pickAbbr] = rest.split("-");
     const { teams } = parseDateTeams(dt);
-    const [a, b] = splitTeams(teams, NBA_TEAMS); // WNBA uses similar abbrev system
+    const [a, b] = splitTeams(teams, WNBA_TEAMS);
     const opp = pickAbbr === a ? b : a;
-    const pickName = teamName(NBA_TEAMS, pickAbbr);
-    const oppName = teamName(NBA_TEAMS, opp);
+    const pickName = teamName(WNBA_TEAMS, pickAbbr);
+    const oppName = teamName(WNBA_TEAMS, opp);
     if (side === "yes") return `WNBA: ${pickName} win vs ${oppName}`;
     return `WNBA: ${oppName} win vs ${pickName}`;
+  }
+  // WNBA totals/spreads (KXWNBATOTAL/KXWNBASPREAD, tradable since the 7/14
+  // same-game gate change). Lines are N−0.5 like MLB (verified floor_strike
+  // 2026-07-14: "-180" = 179.5, "IND7" = 6.5) — "wnba" correctly misses the
+  // nhl/nba +0.5 branch in _fallbackHalfLine.
+  if (ticker.startsWith("KXWNBATOTAL-")) {
+    const rest = ticker.slice("KXWNBATOTAL-".length);
+    const [dt, n] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, WNBA_TEAMS);
+    const matchup = `${teamName(WNBA_TEAMS, a)} vs ${teamName(WNBA_TEAMS, b)}`;
+    if (side === "yes") return `WNBA: ${matchup} OVER ${totalLine(n, floorStrike, "wnba")} points`;
+    return `WNBA: ${matchup} UNDER ${totalLine(n, floorStrike, "wnba")} points`;
+  }
+  if (ticker.startsWith("KXWNBASPREAD-")) {
+    const rest = ticker.slice("KXWNBASPREAD-".length);
+    const [dt, line] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, WNBA_TEAMS);
+    return `WNBA: ${teamName(WNBA_TEAMS, a)} vs ${teamName(WNBA_TEAMS, b)} · ${line.replace(/\d+$/, "")} -${spreadLine(line, floorStrike, "wnba")}` + (side === "yes" ? "" : " (no)");
+  }
+  // WNBA player props — same blob shape as NBA but the jersey digits are
+  // OPTIONAL (KXWNBAPTS-26JUL14PDXCONN-PDXSBARKER-20 has none, WSHSCITRON22
+  // does), hence \d* where the NBA regex has \d+.
+  const wnbaPlayerMatch = ticker.match(/^KXWNBA([A-Z0-9]+)-(\d{2}[A-Z]{3}\d{2}[A-Z]+)-([A-Z]+\d*)-(\d+)$/);
+  if (wnbaPlayerMatch && !["GAME", "SPREAD", "TOTAL"].includes(wnbaPlayerMatch[1])) {
+    const [, stat, , playerBlob, threshold] = wnbaPlayerMatch;
+    const statLabel = NBA_STAT_LABELS[stat] || stat.toLowerCase();
+    let teamAbbr = "";
+    let lastName = "";
+    for (let teamLen = 4; teamLen >= 2; teamLen--) {
+      const candidate = playerBlob.slice(0, teamLen);
+      if (WNBA_TEAMS[candidate]) {
+        teamAbbr = candidate;
+        const tail = playerBlob.slice(teamLen).replace(/\d+$/, "");
+        lastName = tail.length > 1 ? tail.slice(1) : tail;
+        break;
+      }
+    }
+    const lnPretty = lastName ? lastName.charAt(0) + lastName.slice(1).toLowerCase() : "?";
+    if (side === "yes") return `WNBA: ${lnPretty} ${threshold}+ ${statLabel}`;
+    return `WNBA: ${lnPretty} UNDER ${threshold} ${statLabel}`;
   }
 
   // ---------- MLB Run-in-First-Inning ----------
@@ -621,17 +668,35 @@ export function legTeams(ticker, side) {
     return { sport: "soccer", league, teams: [a, b] };
   }
 
-  // WNBA — same structure as NBA team-side
+  // WNBA — same structure as NBA team-side, but its OWN abbr table
+  // (NBA_TEAMS mis-split every WNBA chunk with a 2/4-char code).
   if (ticker.startsWith("KXWNBAGAME-")) {
     const rest = ticker.slice("KXWNBAGAME-".length);
     const [dt, pickAbbr] = rest.split("-");
     if (side === "no") {
       const { teams } = parseDateTeams(dt);
-      const [a, b] = splitTeams(teams, NBA_TEAMS);
+      const [a, b] = splitTeams(teams, WNBA_TEAMS);
       const opp = pickAbbr === a ? b : a;
       return { sport: "wnba", teams: [opp] };
     }
     return { sport: "wnba", teams: [pickAbbr] };
+  }
+  if (ticker.startsWith("KXWNBASPREAD-") || ticker.startsWith("KXWNBATOTAL-")) {
+    const prefixLen = (ticker.startsWith("KXWNBASPREAD-") ? "KXWNBASPREAD-" : "KXWNBATOTAL-").length;
+    const rest = ticker.slice(prefixLen);
+    const [dt] = rest.split("-");
+    const { teams } = parseDateTeams(dt);
+    const [a, b] = splitTeams(teams, WNBA_TEAMS);
+    return { sport: "wnba", teams: [a, b] };
+  }
+  // WNBA player props (jersey digits optional — see legLabel)
+  const wnbaPlayer = ticker.match(/^KXWNBA([A-Z0-9]+)-(\d{2}[A-Z]{3}\d{2}[A-Z]+)-([A-Z]+\d*)-(\d+)$/);
+  if (wnbaPlayer && !["GAME", "SPREAD", "TOTAL"].includes(wnbaPlayer[1])) {
+    const blob = wnbaPlayer[3];
+    for (let n = 4; n >= 2; n--) {
+      const cand = blob.slice(0, n);
+      if (WNBA_TEAMS[cand]) return { sport: "wnba", teams: [cand] };
+    }
   }
 
   // NHL player props (PTS, AST, FIRSTGOAL) — return the player's team
@@ -737,7 +802,11 @@ export function teamLogoUrl(sport, abbr, opts = {}) {
   }
   if (s === "wnba") {
     // ESPN WNBA logos at the same path as NBA but in the wnba category.
-    return `https://a.espncdn.com/i/teamlogos/wnba/500/${abbr.toLowerCase()}.png`;
+    // Kalshi PDX (Portland Fire) has no pdx.png on the CDN — ESPN's slug is
+    // por (verified 2026-07-14; conn.png exists so CONN lowercases fine).
+    const overrides = { PDX: "por" };
+    const a = overrides[abbr] || abbr.toLowerCase();
+    return `https://a.espncdn.com/i/teamlogos/wnba/500/${a}.png`;
   }
   if (s === "nba" || s === "nhl" || s === "mlb") {
     const overrides = ESPN_ABBR_OVERRIDES[s] || {};
@@ -823,6 +892,38 @@ export function parsePlayerProp(ticker) {
       // entry in legGameKey().
       gameKey: `NBA ${dt}`,
       sport: "nba",
+    };
+  }
+  // WNBA: same blob shape as NBA except jersey digits are OPTIONAL
+  // (KXWNBAPTS-26JUL14PDXCONN-PDXSBARKER-20 has none, WSHSCITRON22 does).
+  const wnba = ticker.match(/^KXWNBA([A-Z0-9]+)-(\d{2}[A-Z]{3}\d{2}[A-Z]+)-([A-Z]+\d*)-(\d+)$/);
+  if (wnba && !["GAME", "SPREAD", "TOTAL"].includes(wnba[1])) {
+    const [, stat, dt, playerBlob, thresholdStr] = wnba;
+    let teamAbbr = "";
+    let lastName = "";
+    let jersey = "";
+    for (let teamLen = 4; teamLen >= 2; teamLen--) {
+      const candidate = playerBlob.slice(0, teamLen);
+      if (WNBA_TEAMS[candidate]) {
+        teamAbbr = candidate;
+        const tail = playerBlob.slice(teamLen);
+        const jerseyMatch = tail.match(/^([A-Z]+)(\d*)$/);
+        if (jerseyMatch) {
+          const initialAndLast = jerseyMatch[1];
+          lastName = initialAndLast.length > 1 ? initialAndLast.slice(1) : initialAndLast;
+          jersey = jerseyMatch[2];
+        }
+        break;
+      }
+    }
+    return {
+      stat,
+      team: teamAbbr,
+      lastName,
+      jersey,
+      threshold: parseInt(thresholdStr, 10),
+      gameKey: `WNBA ${dt}`,
+      sport: "wnba",
     };
   }
   // NHL: KXNHL<STAT>-<dateTeams>-<TEAM><initial><LAST><jersey>-<thr>

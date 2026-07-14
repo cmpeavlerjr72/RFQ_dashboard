@@ -154,6 +154,18 @@ export const NBA_TEAMS = {
   UTA: "Jazz", WAS: "Wizards",
 };
 
+// WNBA — Kalshi abbreviations, enumerated from the live 2026 KXWNBAGAME
+// season markets (2026-07-14). NOT the NBA table: codes collide with
+// different meanings (TOR = Tempo not Raptors, ATL = Dream not Hawks) and
+// several are 2- or 4-char (GS, LA, LV, NY, CONN). ESPN diverges on two:
+// Kalshi CONN = ESPN CON, Kalshi PDX = ESPN POR (Portland Fire).
+export const WNBA_TEAMS = {
+  ATL: "Dream", CHI: "Sky", CONN: "Sun", DAL: "Wings",
+  GS: "Valkyries", IND: "Fever", LA: "Sparks", LV: "Aces",
+  MIN: "Lynx", NY: "Liberty", PDX: "Fire", PHX: "Mercury",
+  SEA: "Storm", TOR: "Tempo", WSH: "Mystics",
+};
+
 // Stat-suffix decoder for MLB player props
 // Ticker forms (suffix after the team-player block + dash + threshold):
 //   KXMLBHR-...  → home runs

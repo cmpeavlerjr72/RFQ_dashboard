@@ -5,7 +5,7 @@
 import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp, setLogoContext } from "/labels.js";
 import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker,
          allCompetitions, athleteCodeCandidates,
-         NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
+         NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, WNBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
 import { NATIONAL_TEAMS } from "/national_teams.js";
 import { teamBarColors } from "/team_colors.js";
 import { initAccountPicker, withAccount } from "/account.js";
@@ -825,6 +825,13 @@ const ESPN_TO_KALSHI_ABBR = {
     UTAH: "UTA",  // Jazz
     WSH: "WAS",   // Wizards (note: inverse of MLB Nationals!)
   },
+  // WNBA divergences verified vs the ESPN scoreboard 2026-07-14. Everything
+  // else (GS, LA, LV, NY, TOR, WSH, ...) matches Kalshi exactly — note GS/NY/
+  // WSH resolve DIFFERENTLY here than in the NBA map above.
+  wnba: {
+    CON: "CONN",  // Sun
+    POR: "PDX",   // Portland Fire
+  },
   // Soccer: ESPN club codes diverge from Kalshi's. Keyed by the per-league
   // sport code (legSport). Add entries as encountered.
   ligue1: { NICE: "NIC", ASSE: "STE" },  // Ligue 1 barrage 2026-05-29
@@ -1130,6 +1137,10 @@ const KNOWN_ABBRS = {
   mlb: new Set(Object.keys(MLB_TEAMS)),
   nhl: new Set(Object.keys(NHL_TEAMS)),
   nba: new Set(Object.keys(NBA_TEAMS)),
+  // Without this entry parseTeamsFromChunk fell to the 3/2/4 length heuristic,
+  // which mangles every WNBA chunk with a 2/4-char code: LAMIN -> LAM|IN,
+  // GSIND -> GSI|ND, CONNNY -> CON|NNY (found 2026-07-14 via "PDX vs PDXC").
+  wnba: new Set(Object.keys(WNBA_TEAMS)),
   epl: new Set(Object.keys(SOCCER_TEAMS)),
   laliga: new Set(Object.keys(SOCCER_TEAMS)),
   seriea: new Set(Object.keys(SOCCER_TEAMS)),
