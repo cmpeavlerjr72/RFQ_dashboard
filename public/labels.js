@@ -10,7 +10,8 @@
 import {
   NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, WNBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
   MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl, soccerLogoUrl,
-  resolveAthleteName, athletePairLookup,
+  resolveAthleteName, resolveAthleteNameForEvent, athletePairLookup,
+  kalshiEventName, athleteValueByName,
 } from "/teams.js";
 import { NATIONAL_TEAMS, countryFlagUrl } from "/national_teams.js";
 
@@ -270,8 +271,8 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const m = dt.match(/^(\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3})$/);
     let oppAbbr = "";
     if (m) oppAbbr = m[2] === pickAbbr ? m[3] : m[2];
-    const pickName = resolveAthleteName(athleteIdx, pickAbbr, oppAbbr);
-    const oppName = resolveAthleteName(athleteIdx, oppAbbr, pickAbbr);
+    const pickName = resolveAthleteNameForEvent(athleteIdx, dt, pickAbbr, oppAbbr);
+    const oppName = resolveAthleteNameForEvent(athleteIdx, dt, oppAbbr, pickAbbr);
     if (side === "yes") return `${tour}: ${pickName} beats ${oppName}`;
     return `${tour}: ${oppName} beats ${pickName}`;
   }
@@ -322,8 +323,8 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     if (m) {
       oppAbbr = m[2] === winnerAbbr ? m[3] : m[2];
     }
-    const winnerName = resolveAthleteName(athleteIdx, winnerAbbr, oppAbbr);
-    const oppName = resolveAthleteName(athleteIdx, oppAbbr, winnerAbbr);
+    const winnerName = resolveAthleteNameForEvent(athleteIdx, dt, winnerAbbr, oppAbbr);
+    const oppName = resolveAthleteNameForEvent(athleteIdx, dt, oppAbbr, winnerAbbr);
     if (side === "yes") return `UFC: ${winnerName} d. ${oppName}`;
     return `UFC: ${oppName} d. ${winnerName}`;
   }
@@ -781,29 +782,60 @@ const ESPN_ABBR_OVERRIDES = {
 
 // Logo context — module-level state so teamLogoUrl can resolve tennis flags
 // without recap.js / app.js having to pass scoreboards through every call.
-// Initialise via setLogoContext({ playerFlagIdx: { SIN: "https://...png" } }).
-let _logoCtx = { playerFlagIdx: {} };
+// Initialise via setLogoContext({ playerFlagIdx: buildAthleteFlagIndex(sbs),
+// athleteIdx: buildAthleteIndex(sbs) }) — athleteIdx lets flags resolve
+// through the PLAYER'S NAME (see tennisPlayerFlag).
+let _logoCtx = { playerFlagIdx: {}, athleteIdx: null };
 export function setLogoContext(ctx) {
   if (!ctx) return;
   if (ctx.playerFlagIdx) _logoCtx.playerFlagIdx = { ..._logoCtx.playerFlagIdx, ...ctx.playerFlagIdx };
+  if (ctx.athleteIdx) _logoCtx.athleteIdx = ctx.athleteIdx;
 }
 
-/** Logo URL for a (sport, abbr). Optionally pass {league} for soccer, and
- *  {pairWith: oppAbbr} for tennis so the flag resolves against the exact
- *  fixture (3-letter codes collide across a tournament — TAB as Tabur is
- *  France, TAB as Tabilo is Chile).
+// Tennis flags resolve like tennis names: identify the PLAYER first (Kalshi's
+// own market naming, else the exact ESPN fixture), then the flag by name; the
+// flat 3-letter index is only trusted when the code is unambiguous. Hidden
+// ("") beats the wrong country's flag. Fixture context comes from
+// opts.eventToken ("26JUL14RINTAB"), opts.ticker (parsed), or opts.pairWith.
+function tennisPlayerFlag(abbr, opts) {
+  const fi = _logoCtx.playerFlagIdx || {};
+  const ni = _logoCtx.athleteIdx;
+  let token = opts.eventToken || "";
+  let pairWith = opts.pairWith || "";
+  if (!token && opts.ticker) {
+    const m = String(opts.ticker).match(/-(\d{2}[A-Z]{3}\d{2}[A-Z]{6})(?:-|$)/);
+    if (m) token = m[1];
+  }
+  if (!pairWith && token) {
+    const m = token.match(/^\d{2}[A-Z]{3}\d{2}([A-Z]{3})([A-Z]{3})$/);
+    if (m) pairWith = m[1] === abbr ? m[2] : m[1];
+  }
+  let name = token ? kalshiEventName(token, abbr) : "";
+  if (!name && ni) {
+    const r = resolveAthleteName(ni, abbr, pairWith || undefined);
+    if (r && r !== abbr) name = r;
+  }
+  if (name) {
+    const u = athleteValueByName(fi, name);
+    if (u) return u;
+  }
+  const pair = athletePairLookup(fi, abbr, pairWith || undefined);
+  if (pair && pair[abbr]) return pair[abbr];
+  if ((pairWith && fi.__partnered?.[abbr]) || fi.__contested?.[abbr]) return "";
+  return fi[abbr] || tennisFlagUrl(abbr);
+}
+
+/** Logo URL for a (sport, abbr). Optionally pass {league} for soccer, and for
+ *  tennis any of {ticker}, {eventToken}, {pairWith} so the flag resolves
+ *  against the exact fixture (3-letter codes collide across a tournament —
+ *  TAB as Tabur is France, TAB as Tabilo is Chile; see tennisPlayerFlag).
  *  Falls back to "" when no logo is known — callers should render a text
  *  badge in that case. */
 export function teamLogoUrl(sport, abbr, opts = {}) {
   if (!sport || !abbr) return "";
   const s = sport.toLowerCase();
   if (s === "atp" || s === "wta") {
-    const fi = _logoCtx.playerFlagIdx;
-    const pair = athletePairLookup(fi, abbr, opts.pairWith);
-    if (pair && pair[abbr]) return pair[abbr];
-    // Same fail-closed rule as names: no flag beats the wrong country's.
-    if ((opts.pairWith && fi?.__partnered?.[abbr]) || fi?.__contested?.[abbr]) return "";
-    return fi?.[abbr] || tennisFlagUrl(abbr);
+    return tennisPlayerFlag(abbr, opts);
   }
   if (s === "ipl") return iplLogoUrl(abbr);
   if (s === "wcup" || s === "intlfriendly") return countryFlagUrl(abbr);

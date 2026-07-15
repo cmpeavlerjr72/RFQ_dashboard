@@ -9,9 +9,11 @@
 //      (NO price off the live tape) vs our bid — no manual lookups.
 // One toggle flips every metric between # RFQs and $ budget (taker target cost).
 
-import { teamLogoUrl } from "/labels.js";
+import { teamLogoUrl, setLogoContext } from "/labels.js";
 import { NATIONAL_TEAMS } from "/national_teams.js";
-import { MLB_TEAMS, NHL_TEAMS, NBA_TEAMS, WNBA_TEAMS } from "/teams.js";
+import { MLB_TEAMS, NHL_TEAMS, NBA_TEAMS, WNBA_TEAMS,
+         buildAthleteIndex, buildAthleteFlagIndex,
+         resolveAthleteNameForEvent } from "/teams.js";
 
 const $ = (id) => document.getElementById(id);
 const NATIONAL = new Set(["WC", "INTLFRIENDLY", "UCL", "EPL", "SOCCER"]);
@@ -20,6 +22,8 @@ const state = {
   data: null,
   metric: "rfqs",            // "rfqs" (count) | "risk" ($ budget)
   expandedGames: new Set(),
+  athleteIdx: null,          // tennis player names, fixture-scoped (teams.js)
+  tennisCtxFor: null,        // date the tennis flag/name context was built for
 };
 
 // ---- formatting ----
@@ -80,18 +84,48 @@ function logoKeyFor(sport) {
   if (s === "SOCCER" || s === "UCL" || s === "EPL") return "soccer";
   return s.toLowerCase();
 }
-function teamName(sport, code) {
+function teamName(sport, code, ctx) {
   const s = (sport || "").toUpperCase();
   if (NATIONAL.has(s)) return NATIONAL_TEAMS[code] || code;
   if (s === "MLB") return MLB_TEAMS[code] || code;
   if (s === "NHL") return NHL_TEAMS[code] || code;
   if (s === "NBA") return NBA_TEAMS[code] || code;
   if (s === "WNBA") return WNBA_TEAMS[code] || code;
+  if ((s === "ATP" || s === "WTA") && state.athleteIdx) {
+    return resolveAthleteNameForEvent(state.athleteIdx, ctx?.token || "", code, ctx?.other);
+  }
   return code;
 }
-function flagImg(sport, code) {
-  const u = teamLogoUrl(logoKeyFor(sport), code);
+function flagImg(sport, code, ctx) {
+  const u = teamLogoUrl(logoKeyFor(sport), code, ctx?.token ? { eventToken: ctx.token } : {});
   return u ? `<img class="gx-flag" src="${u}" alt="${escapeHtml(code)}" onerror="this.style.display='none'">` : "";
+}
+
+// Tennis names/flags need the ESPN athlete context (player codes collide —
+// TAB is both Tabur and Tabilo — so resolution is fixture-scoped, see
+// teams.js). Load atp/wta scoreboards for the flow date + the next day
+// (Kalshi ticker date can trail the real date) once per selected date;
+// failures just leave codes/flagless cards — never block the Flow view.
+async function ensureTennisCtx(dateISO, games) {
+  const hasTennis = (games || []).some((g) => {
+    const s = (g.sport || "").toUpperCase();
+    return s === "ATP" || s === "WTA";
+  });
+  if (!hasTennis || state.tennisCtxFor === dateISO) return;
+  const d0 = dateISO.replace(/-/g, "");
+  const next = new Date(`${dateISO}T12:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  const d1 = next.toISOString().slice(0, 10).replace(/-/g, "");
+  const sbs = {};
+  await Promise.all(["atp", "wta"].flatMap((sp) => [d0, d1].map(async (d) => {
+    try {
+      const r = await fetch(`/api/scoreboard?sport=${sp}&date=${d}`);
+      if (r.ok) sbs[`${sp}:${d}`] = (await r.json()).payload;
+    } catch { /* progressive enhancement only */ }
+  })));
+  state.athleteIdx = buildAthleteIndex(sbs);
+  setLogoContext({ playerFlagIdx: buildAthleteFlagIndex(sbs), athleteIdx: state.athleteIdx });
+  state.tennisCtxFor = dateISO;
 }
 
 // Derive the two team codes for a game from its shape strings (each shape names
@@ -140,6 +174,7 @@ async function loadFlow({ force = false } = {}) {
     const r = await fetch(`/api/impflow?date=${date}${force ? "&fresh=1" : ""}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     state.data = await r.json();
+    await ensureTennisCtx(date, state.data?.games);
     render();
     setStatus(state.data.source === "empty" ? "no data" : `loaded (${state.data.source})`,
               state.data.source === "empty" ? "error" : "live");
@@ -464,10 +499,12 @@ function gameCardHtml(g) {
   const buckets = (g.buckets || []).slice().sort((a, b) => a.ts - b.ts);
   const chart = buckets.length ? flowSvg(buckets) : `<div class="muted" style="padding:8px">no flow</div>`;
   const trend = trendOf(buckets);
-  const hName = home ? teamName(g.sport, home) : g.game;
-  const aName = away ? teamName(g.sport, away) : "";
+  const hCtx = { token: g.game, other: away };
+  const aCtx = { token: g.game, other: home };
+  const hName = home ? teamName(g.sport, home, hCtx) : g.game;
+  const aName = away ? teamName(g.sport, away, aCtx) : "";
   const matchup = aName
-    ? `${flagImg(g.sport, home)}<span class="gx-team">${escapeHtml(hName)}</span><span class="gx-vs">vs</span><span class="gx-team">${escapeHtml(aName)}</span>${flagImg(g.sport, away)}`
+    ? `${flagImg(g.sport, home, hCtx)}<span class="gx-team">${escapeHtml(hName)}</span><span class="gx-vs">vs</span><span class="gx-team">${escapeHtml(aName)}</span>${flagImg(g.sport, away, aCtx)}`
     : `<span class="gx-team">${escapeHtml(hName)}</span>`;
 
   const admin = !!(state.data && state.data.admin);

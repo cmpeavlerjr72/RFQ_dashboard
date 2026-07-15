@@ -3,7 +3,8 @@
 // the buyer took, with NO-side odds. Manual-refresh by default.
 
 import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp, setLogoContext } from "/labels.js";
-import { buildAthleteIndex, buildAthleteFlagIndex, resolveAthleteName, isExcludedTicker,
+import { buildAthleteIndex, buildAthleteFlagIndex, resolveAthleteNameForEvent,
+         registerKalshiMarketNames, isExcludedTicker,
          allCompetitions, athleteCodeCandidates,
          NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, WNBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
 import { NATIONAL_TEAMS } from "/national_teams.js";
@@ -276,9 +277,12 @@ async function refresh() {
         Object.assign(markets, part);
         // Record each market's authoritative line (floor_strike) so netting +
         // labels use the REAL line, not a league-dependent ticker-integer guess.
+        // Tennis/UFC markets also register their EXACT player names (Kalshi is
+        // canon for its own markets) — beats any ESPN-derived code guess.
         for (const [tk, v] of Object.entries(part)) {
           const fs = v?.market?.floor_strike;
           if (typeof fs === "number") _floorStrikeByTicker[tk] = fs;
+          registerKalshiMarketNames(tk, v?.market);
         }
       }
       for (const p of state.positions) {
@@ -366,7 +370,8 @@ async function refresh() {
     }));
 
     state.athleteIdx = buildAthleteIndex(state.scoreboards);
-    setLogoContext({ playerFlagIdx: buildAthleteFlagIndex(state.scoreboards) });
+    setLogoContext({ playerFlagIdx: buildAthleteFlagIndex(state.scoreboards),
+                     athleteIdx: state.athleteIdx });
     buildUfcIdx();
 
     // For player props, pull the boxscore for each game we have a prop on,
@@ -4443,12 +4448,15 @@ function renderGameCards() {
     // UFC: resolve fighters (names/headshots/time/sides) up front — feeds the
     // collapsed head (headshot "logos", real-name title, time chip) + strip.
     const ufcInfo = g.sport === "ufc" ? ufcFightInfo(g) : null;
+    // Event token ("26JUL14RINTAB") — fixture context for tennis name/flag
+    // resolution (g.key is "tennis 26JUL14RINTAB" etc., see legGameKey).
+    const evTok = (g.key || "").split(" ")[1] || "";
     const logos = ufcInfo && ufcInfo.fighters.some((f) => f.headshot)
       ? ufcInfo.fighters.map((f) => f.headshot
           ? `<img class="team-logo ufc-logo" src="${escapeHtml(f.headshot)}" alt="${escapeHtml(f.code)}" title="${escapeHtml(f.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
           : "").join("")
       : (g.teams || []).map((abbr, i, arr) =>
-          `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league, pairWith: arr.length === 2 ? arr[1 - i] : undefined })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+          `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league, eventToken: evTok, pairWith: arr.length === 2 ? arr[1 - i] : undefined })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
         ).join("");
     const sport = (g.sport || "").toUpperCase();
     const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
@@ -4472,7 +4480,7 @@ function renderGameCards() {
         ? (live
             ? [live.away.name, live.home.name].filter(Boolean).join(" vs ")
             : (g.teams || []).map((a, i, arr) =>
-                resolveAthleteName(state.athleteIdx, a, arr.length === 2 ? arr[1 - i] : undefined)
+                resolveAthleteNameForEvent(state.athleteIdx, evTok, a, arr.length === 2 ? arr[1 - i] : undefined)
               ).join(" vs "))
         : isNationalCard
           ? (g.teams || []).map((a) => NATIONAL_TEAMS[a] || a).join(" vs ")
@@ -5934,7 +5942,7 @@ function parlayLegLogosHtml(p, max = 8) {
         const key = `${sport}|${league || ""}|${t}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push({ sport, abbr: t, league });
+        out.push({ sport, abbr: t, league, ticker: leg.ticker });
       }
     }
   }
@@ -5943,7 +5951,7 @@ function parlayLegLogosHtml(p, max = 8) {
   const extra = out.length > max
     ? `<span class="parlay-logo-more">+${out.length - max}</span>`
     : "";
-  const imgs = truncated.map(({ sport, abbr, league }) => {
+  const imgs = truncated.map(({ sport, abbr, league, ticker }) => {
     // UFC "teams" are fighter codes — swap the (nonexistent) team crest for
     // the fighter's ESPN headshot via the global fighter index.
     if (sport === "ufc") {
@@ -5952,7 +5960,7 @@ function parlayLegLogosHtml(p, max = 8) {
         return `<img class="team-logo ufc-logo" src="${escapeHtml(f.headshot)}" alt="${escapeHtml(abbr)}" title="${escapeHtml(f.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
       }
     }
-    return `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
+    return `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league, ticker })}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
   }).join("");
   return `<span class="parlay-logos">${imgs}${extra}</span>`;
 }
@@ -6002,7 +6010,7 @@ function renderParlayCard(p, n, probs) {
           return `<img class="team-logo ufc-logo" src="${escapeHtml(f.headshot)}" alt="${escapeHtml(abbr)}" title="${escapeHtml(f.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
         }
       }
-      return `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
+      return `<img class="team-logo" src="${teamLogoUrl(sport, abbr, { league, ticker: leg.ticker })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`;
     }).join("");
 
     // Date tag — disambiguates same-matchup legs across multiple dates

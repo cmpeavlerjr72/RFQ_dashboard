@@ -238,6 +238,28 @@ export function athleteCodeCandidates(displayName) {
   return [...codes];
 }
 
+// LOOSE candidates: prefix of EVERY name word too. The Kalshi ticker code can
+// come from any surname word (PRA from "Juan Carlos Prado Angelo") or from a
+// name ESPN prints surname-first ("Zheng Qinwen" → ZHE). Used only for
+// fixture-pair keys and the partnered marker, where over-generation is safe:
+// a pair hit must match BOTH players' codes at once.
+export function athleteCodeCandidatesLoose(displayName) {
+  const codes = new Set(athleteCodeCandidates(displayName));
+  for (const w of String(displayName || "").trim().split(/\s+/)) {
+    const c = w.replace(/[^A-Za-z]/g, "");
+    if (c.length >= 3) codes.add(c.slice(0, 3).toUpperCase());
+  }
+  return [...codes];
+}
+
+// Normalized name key: accent/case/punctuation-insensitive and word-order-free
+// ("Zheng Qinwen" == "Qinwen Zheng", "Clément" == "Clement").
+export function normAthleteName(s) {
+  return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z\s]/g, " ")
+    .split(/\s+/).filter(Boolean).sort().join("");
+}
+
 /**
  * Build a tennis/UFC athlete index keyed by 3-letter uppercase surname prefix.
  * The Kalshi ticker uses the 3-letter form; ESPN gives us the full name.
@@ -271,6 +293,10 @@ function buildScopedAthleteIndex(scoreboards, valueOf) {
   const partnered = {};    // code -> true (seen in a 2-player fixture)
   const contested = {};    // code -> true (claimed by 2+ distinct athletes)
   const claimant = {};     // code -> display name that first claimed it
+  const byName = {};       // normalized full name -> value (exact, collision-free)
+  const byLast = {};       // normalized last word  -> value (merged in when unique)
+  const lastClaim = {};
+  const lastContested = {};
   for (const sb of Object.values(scoreboards || {})) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
@@ -285,9 +311,19 @@ function buildScopedAthleteIndex(scoreboards, valueOf) {
           if (!display) continue;
           const val = valueOf(c, display);
           if (!val) continue;
-          const codes = athleteCodeCandidates(display);
-          players.push({ val, codes });
-          for (const code of codes) {
+          players.push({ val, loose: athleteCodeCandidatesLoose(display) });
+          byName[normAthleteName(display)] = val;
+          const words = display.trim().split(/\s+/);
+          const lastK = normAthleteName(words[words.length - 1]);
+          if (lastK) {
+            if (lastClaim[lastK] !== undefined && lastClaim[lastK] !== display) {
+              lastContested[lastK] = true;
+            } else {
+              lastClaim[lastK] = display;
+              byLast[lastK] = val;
+            }
+          }
+          for (const code of athleteCodeCandidates(display)) {
             if (claimant[code] !== undefined && claimant[code] !== display) {
               contested[code] = true;
             } else {
@@ -301,8 +337,8 @@ function buildScopedAthleteIndex(scoreboards, valueOf) {
         }
         if (players.length !== 2) continue;
         const [A, B] = players;
-        for (const ca of A.codes) {
-          for (const cb of B.codes) {
+        for (const ca of A.loose) {
+          for (const cb of B.loose) {
             if (ca === cb) continue;   // both players share the prefix: unresolvable
             partnered[ca] = true;
             partnered[cb] = true;
@@ -316,9 +352,16 @@ function buildScopedAthleteIndex(scoreboards, valueOf) {
       }
     }
   }
+  // Unique last-word keys widen name lookups ("Jacquemot" finds "Elsa
+  // Jacquemot") without reintroducing collisions: contested ones are dropped
+  // and a full-name key always wins.
+  for (const [k, v] of Object.entries(byLast)) {
+    if (!lastContested[k] && byName[k] === undefined) byName[k] = v;
+  }
   idx.__pairs = pairs;
   idx.__partnered = partnered;
   idx.__contested = contested;
+  idx.__byName = byName;
   return idx;
 }
 
@@ -347,6 +390,59 @@ export function resolveAthleteName(idx, code, oppCode) {
   if (oppCode && idx?.__partnered?.[code]) return code;
   if (idx?.__contested?.[code]) return code;
   return idx?.[code] || code;
+}
+
+// ---- Kalshi-canon athlete names ----
+// The dashboard batch-loads the full Kalshi market object for every held leg;
+// for tennis/UFC that object names the players EXACTLY (yes_sub_title = the
+// pick's full name, title = "... the A vs B: ..." surnames). Kalshi is canon
+// for its own markets, so this beats any ESPN-derived guess for the tickers
+// we hold; ESPN only fills in opponents' full names and country flags.
+const _kalshiEventNames = {};   // "26JUL14RINTAB" -> { RIN: "Arthur Rinderknech", TAB: "Tabur" }
+
+const KALSHI_ATHLETE_TICKER =
+  /^(?:KXATPMATCH|KXWTAMATCH|KXUFCFIGHT)-((\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3}))-([A-Z]{3})$/;
+
+export function registerKalshiMarketNames(ticker, market) {
+  if (!market) return;
+  const m = String(ticker || "").match(KALSHI_ATHLETE_TICKER);
+  if (!m) return;
+  const [, token, , cA, cB, pick] = m;
+  const names = _kalshiEventNames[token] || (_kalshiEventNames[token] = {});
+  const t = String(market.title || "").match(/\bthe (.+?) vs (.+?)(?::| match| fight|\?)/);
+  if (t) {
+    for (const surname of [t[1], t[2]]) {
+      const cs = athleteCodeCandidatesLoose(surname);
+      const hitA = cs.includes(cA), hitB = cs.includes(cB);
+      if (hitA !== hitB) {           // assign only when unambiguous
+        const code = hitA ? cA : cB;
+        if (!names[code]) names[code] = surname.trim();
+      }
+    }
+  }
+  const sub = String(market.yes_sub_title || "").trim();
+  if (sub && (pick === cA || pick === cB)) names[pick] = sub;   // full name beats surname
+}
+
+export function kalshiEventName(token, code) {
+  return (token && code && _kalshiEventNames[token]?.[code]) || undefined;
+}
+
+/** Event-scoped name resolution: Kalshi's own market naming first (exact for
+ *  held tickers), then the ESPN fixture ladder (resolveAthleteName). */
+export function resolveAthleteNameForEvent(idx, token, code, oppCode) {
+  return kalshiEventName(token, code) || resolveAthleteName(idx, code, oppCode);
+}
+
+/** Value (name or flag URL) by athlete display name: exact normalized
+ *  full-name key first, then the unique last-word key. */
+export function athleteValueByName(idx, name) {
+  const bn = idx?.__byName;
+  if (!bn || !name) return undefined;
+  const full = bn[normAthleteName(name)];
+  if (full) return full;
+  const words = String(name).trim().split(/\s+/);
+  return bn[normAthleteName(words[words.length - 1])];
 }
 
 /**
