@@ -2,7 +2,7 @@
 // summary KPIs + (optional) cumulative ROI chart + parlay table.
 
 import { legTeams, teamLogoUrl, setLogoContext } from "/labels.js";
-import { buildAthleteFlagIndex, MLB_STAT_LABELS, NBA_STAT_LABELS } from "/teams.js";
+import { buildAthleteFlagIndex, buildAthleteIndex, MLB_STAT_LABELS, NBA_STAT_LABELS } from "/teams.js";
 import { initAccountPicker, withAccount } from "/account.js";
 
 // Stat-code → human label dictionaries the breakdown rows draw from. The MLB
@@ -143,8 +143,11 @@ async function loadTennisFlagsForRange(start, end) {
       }),
     ),
   );
+  // athleteIdx too: tennis flags resolve through the PLAYER (fixture-scoped —
+  // 3-letter codes collide, TAB = Tabur AND Tabilo), so the flag lookup needs
+  // the name index alongside the flag index. See tennisPlayerFlag in labels.js.
   const flagIdx = buildAthleteFlagIndex(scoreboards);
-  setLogoContext({ playerFlagIdx: flagIdx });
+  setLogoContext({ playerFlagIdx: flagIdx, athleteIdx: buildAthleteIndex(scoreboards) });
 }
 
 async function loadRecap({ force = false } = {}) {
@@ -352,14 +355,14 @@ function logoStripForTickers(parlayMap, tickers, defaultSport, opts = {}) {
         const key = `${sport}|${league || ""}|${t}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push({ sport, abbr: t, league });
+        out.push({ sport, abbr: t, league, ticker: leg.ticker });
       }
     }
   }
   if (!out.length) return "";
   const truncated = out.length > max ? out.slice(0, max) : out;
   const moreChip = out.length > max ? `<span class="leg-count">+${out.length - max}</span>` : "";
-  const imgs = truncated.map(({ sport, abbr, league }) => renderTeamBadge(sport, abbr, league)).join("");
+  const imgs = truncated.map(({ sport, abbr, league, ticker }) => renderTeamBadge(sport, abbr, league, ticker)).join("");
   return `<div class="logo-strip">${imgs}${moreChip}</div>`;
 }
 
@@ -367,8 +370,9 @@ function logoStripForTickers(parlayMap, tickers, defaultSport, opts = {}) {
  *  Keeps the soccer / unknown-sport rows from being completely blank.
  *  Pass league for soccer (e.g. "LALIGA") so the logo resolver can
  *  disambiguate across leagues. */
-function renderTeamBadge(sport, abbr, league) {
-  const url = teamLogoUrl(sport, abbr, { league });
+function renderTeamBadge(sport, abbr, league, ticker) {
+  // ticker gives tennis flags their fixture context (see tennisPlayerFlag).
+  const url = teamLogoUrl(sport, abbr, { league, ticker });
   if (url) {
     return `<img class="leg-logo" src="${url}" alt="${escapeHtml(abbr)}" title="${escapeHtml(abbr)} (${escapeHtml(sport)})" loading="lazy" />`;
   }
@@ -550,7 +554,7 @@ function renderLogoStrip(parlay) {
       const key = `${sport}|${league || ""}|${t}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      imgs.push(renderTeamBadge(sport, t, league));
+      imgs.push(renderTeamBadge(sport, t, league, leg.ticker));
     }
   }
   if (!imgs.length) {
