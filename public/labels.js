@@ -11,9 +11,10 @@ import {
   NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, WNBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
   MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl, soccerLogoUrl,
   resolveAthleteName, resolveAthleteNameForEvent, athletePairLookup,
-  kalshiEventName, athleteValueByName,
+  kalshiEventName, athleteValueByName, normAthleteName,
 } from "/teams.js";
 import { NATIONAL_TEAMS, countryFlagUrl } from "/national_teams.js";
+import { TENNIS_NATIONALITY, tennisNationalityFlagUrl } from "/tennis_nationalities.js";
 
 // Series-prefix → league key used to look up soccer logos.
 const SOCCER_LEAGUE_FROM_PREFIX = {
@@ -821,6 +822,15 @@ function tennisPlayerFlag(abbr, opts) {
   }
   const pair = athletePairLookup(fi, abbr, pairWith || undefined);
   if (pair && pair[abbr]) return pair[abbr];
+  // STATIC nationality map (generated, name-keyed): once the player is
+  // identified — usually from Kalshi's own market naming — the flag never
+  // depends on the live ESPN session having the fixture. Full-name key
+  // first, then the unique last-word key ("tabur").
+  if (name) {
+    const tok = TENNIS_NATIONALITY[normAthleteName(name)]
+      || TENNIS_NATIONALITY[normAthleteName(String(name).trim().split(/\s+/).pop())];
+    if (tok) return tennisNationalityFlagUrl(tok);
+  }
   if ((pairWith && fi.__partnered?.[abbr]) || fi.__contested?.[abbr]) return "";
   return fi[abbr] || tennisFlagUrl(abbr);
 }
