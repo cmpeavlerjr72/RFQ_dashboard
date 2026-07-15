@@ -10,6 +10,7 @@
 import {
   NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, WNBA_TEAMS, IPL_TEAMS, SOCCER_TEAMS, SOCCER_LEAGUES,
   MLB_STAT_LABELS, NBA_STAT_LABELS, iplLogoUrl, tennisFlagUrl, soccerLogoUrl,
+  resolveAthleteName, athletePairLookup,
 } from "/teams.js";
 import { NATIONAL_TEAMS, countryFlagUrl } from "/national_teams.js";
 
@@ -256,6 +257,10 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
 
   // ---------- Tennis ATP/WTA ----------
   // KXATPMATCH-26APR29SINJOD-SIN  → "Sinner" if athleteIdx has SIN.
+  // Names resolve EVENT-SCOPED: the ticker carries BOTH players' codes, so we
+  // look up the exact ESPN fixture first — the flat 3-letter index collides
+  // (7/15: TAB was both Tabur and Tabilo) — and fail closed to the raw code
+  // rather than guess (see resolveAthleteName in teams.js).
   // We're long NO — for side="no" we flip to the opponent winning, so the
   // card reads in the direction we're rooting for ("Pellegrino beats Sinner").
   if (ticker.startsWith("KXATPMATCH-") || ticker.startsWith("KXWTAMATCH-")) {
@@ -265,8 +270,8 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     const m = dt.match(/^(\d{2}[A-Z]{3}\d{2})([A-Z]{3})([A-Z]{3})$/);
     let oppAbbr = "";
     if (m) oppAbbr = m[2] === pickAbbr ? m[3] : m[2];
-    const pickName = athleteIdx?.[pickAbbr] || pickAbbr;
-    const oppName = athleteIdx?.[oppAbbr] || oppAbbr;
+    const pickName = resolveAthleteName(athleteIdx, pickAbbr, oppAbbr);
+    const oppName = resolveAthleteName(athleteIdx, oppAbbr, pickAbbr);
     if (side === "yes") return `${tour}: ${pickName} beats ${oppName}`;
     return `${tour}: ${oppName} beats ${pickName}`;
   }
@@ -317,8 +322,8 @@ export function legLabel(ticker, side, athleteIdx, floorStrike) {
     if (m) {
       oppAbbr = m[2] === winnerAbbr ? m[3] : m[2];
     }
-    const winnerName = athleteIdx?.[winnerAbbr] || winnerAbbr;
-    const oppName = athleteIdx?.[oppAbbr] || oppAbbr;
+    const winnerName = resolveAthleteName(athleteIdx, winnerAbbr, oppAbbr);
+    const oppName = resolveAthleteName(athleteIdx, oppAbbr, winnerAbbr);
     if (side === "yes") return `UFC: ${winnerName} d. ${oppName}`;
     return `UFC: ${oppName} d. ${winnerName}`;
   }
@@ -783,14 +788,22 @@ export function setLogoContext(ctx) {
   if (ctx.playerFlagIdx) _logoCtx.playerFlagIdx = { ..._logoCtx.playerFlagIdx, ...ctx.playerFlagIdx };
 }
 
-/** Logo URL for a (sport, abbr). Optionally pass {league} for soccer.
+/** Logo URL for a (sport, abbr). Optionally pass {league} for soccer, and
+ *  {pairWith: oppAbbr} for tennis so the flag resolves against the exact
+ *  fixture (3-letter codes collide across a tournament — TAB as Tabur is
+ *  France, TAB as Tabilo is Chile).
  *  Falls back to "" when no logo is known — callers should render a text
  *  badge in that case. */
 export function teamLogoUrl(sport, abbr, opts = {}) {
   if (!sport || !abbr) return "";
   const s = sport.toLowerCase();
   if (s === "atp" || s === "wta") {
-    return _logoCtx.playerFlagIdx?.[abbr] || tennisFlagUrl(abbr);
+    const fi = _logoCtx.playerFlagIdx;
+    const pair = athletePairLookup(fi, abbr, opts.pairWith);
+    if (pair && pair[abbr]) return pair[abbr];
+    // Same fail-closed rule as names: no flag beats the wrong country's.
+    if ((opts.pairWith && fi?.__partnered?.[abbr]) || fi?.__contested?.[abbr]) return "";
+    return fi?.[abbr] || tennisFlagUrl(abbr);
   }
   if (s === "ipl") return iplLogoUrl(abbr);
   if (s === "wcup" || s === "intlfriendly") return countryFlagUrl(abbr);

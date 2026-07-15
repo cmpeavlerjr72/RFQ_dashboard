@@ -3,7 +3,7 @@
 // the buyer took, with NO-side odds. Manual-refresh by default.
 
 import { legLabel, legTeams, teamLogoUrl, legGameKey, legDateLabel, findEspnEvent, parsePlayerProp, setLogoContext } from "/labels.js";
-import { buildAthleteIndex, buildAthleteFlagIndex, isExcludedTicker,
+import { buildAthleteIndex, buildAthleteFlagIndex, resolveAthleteName, isExcludedTicker,
          allCompetitions, athleteCodeCandidates,
          NHL_TEAMS, MLB_TEAMS, NBA_TEAMS, WNBA_TEAMS, SOCCER_TEAMS } from "/teams.js";
 import { NATIONAL_TEAMS } from "/national_teams.js";
@@ -4447,8 +4447,8 @@ function renderGameCards() {
       ? ufcInfo.fighters.map((f) => f.headshot
           ? `<img class="team-logo ufc-logo" src="${escapeHtml(f.headshot)}" alt="${escapeHtml(f.code)}" title="${escapeHtml(f.name)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
           : "").join("")
-      : (g.teams || []).map((abbr) =>
-          `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
+      : (g.teams || []).map((abbr, i, arr) =>
+          `<img class="team-logo" src="${teamLogoUrl(g.sportLogoKey, abbr, { league: g.league, pairWith: arr.length === 2 ? arr[1 - i] : undefined })}" alt="${escapeHtml(abbr)}" onerror="this.style.display='none'" loading="lazy" decoding="async">`
         ).join("");
     const sport = (g.sport || "").toUpperCase();
     const live = liveStateFor(findEspnEventForGameKey(g.key), g.sport);
@@ -4461,8 +4461,9 @@ function renderGameCards() {
     // Tennis cards: show full athlete names ("Matteo Berrettini vs Francisco
     // Comesana") joined with "vs". The matched ESPN competition carries the
     // correct names; the global athlete index can collide on 3-letter codes
-    // (BER = Bertola OR Berrettini), so prefer the live-state names, then the
-    // index, then the raw code.
+    // (BER = Bertola OR Berrettini, TAB = Tabur OR Tabilo), so prefer the
+    // live-state names, then the fixture-scoped index (both codes name one
+    // match), failing closed to the raw code.
     const isTennisCard = g.sport === "atp" || g.sport === "wta";
     const isNationalCard = g.sport === "wcup" || g.sport === "intlfriendly";
     const title = ufcInfo && ufcInfo.fighters.length === 2
@@ -4470,7 +4471,9 @@ function renderGameCards() {
       : isTennisCard
         ? (live
             ? [live.away.name, live.home.name].filter(Boolean).join(" vs ")
-            : (g.teams || []).map((a) => state.athleteIdx[a] || a).join(" vs "))
+            : (g.teams || []).map((a, i, arr) =>
+                resolveAthleteName(state.athleteIdx, a, arr.length === 2 ? arr[1 - i] : undefined)
+              ).join(" vs "))
         : isNationalCard
           ? (g.teams || []).map((a) => NATIONAL_TEAMS[a] || a).join(" vs ")
           : (g.teams || []).join(" @ ");

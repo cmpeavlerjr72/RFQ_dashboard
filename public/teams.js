@@ -246,75 +246,122 @@ export function athleteCodeCandidates(displayName) {
  */
 // The tennis scoreboard returns the WHOLE tournament (every completed early
 // round too), so 3-letter codes collide — e.g. BER is both "Remy Bertola" (a
-// finished 1st-round match) and "Matteo Berrettini" (playing today). Resolve
-// collisions by match state: a live ("in") or upcoming ("pre") match wins over
-// a finished ("post") one, since our open exposure is on active matches.
+// finished 1st-round match) and "Matteo Berrettini" (playing today). Match
+// state (live > upcoming > finished) picks the flat winner, but that guess
+// broke 7/15: TAB was both "Clement Tabur" (our open position, today) and
+// "Alejandro Tabilo" (playing tomorrow), and the legs rendered Tabilo. So the
+// index also carries EVENT-SCOPED entries — a leg ticker names BOTH players,
+// so a fixture hit is unambiguous:
+//   __pairs      "AAA|BBB" (both codes, sorted) → { AAA: name, BBB: name }
+//   __partnered  code → true when seen in any 2-player fixture
+//   __contested  code → true when 2+ distinct athletes claim it
+// resolveAthleteName() tries the exact fixture first and FAILS CLOSED to the
+// raw code when the fixture can't be verified: a terse "TAB" is accurate,
+// a colliding full name is confidently wrong.
 function compStatePriority(comp) {
   const s = comp?.status?.type?.state;
   return s === "in" ? 0 : s === "pre" ? 1 : 2;   // lower wins
 }
 
-export function buildAthleteIndex(scoreboards) {
+function buildScopedAthleteIndex(scoreboards, valueOf) {
   const idx = {};
-  const seenPri = {};   // code -> priority that claimed it
+  const seenPri = {};      // code -> priority that claimed the flat slot
+  const pairs = {};        // "AAA|BBB" -> { AAA: value, BBB: value }
+  const pairPri = {};      // pair key -> priority that claimed it
+  const partnered = {};    // code -> true (seen in a 2-player fixture)
+  const contested = {};    // code -> true (claimed by 2+ distinct athletes)
+  const claimant = {};     // code -> display name that first claimed it
   for (const sb of Object.values(scoreboards || {})) {
     if (!sb || !Array.isArray(sb.events)) continue;
     for (const ev of sb.events) {
       for (const comp of allCompetitions(ev)) {
         const pri = compStatePriority(comp);
+        const players = [];
         for (const c of comp.competitors || []) {
           const display = c?.athlete?.displayName
             || c?.athlete?.fullName
             || c?.athletes?.[0]?.displayName
             || "";
           if (!display) continue;
-          for (const code of athleteCodeCandidates(display)) {
+          const val = valueOf(c, display);
+          if (!val) continue;
+          const codes = athleteCodeCandidates(display);
+          players.push({ val, codes });
+          for (const code of codes) {
+            if (claimant[code] !== undefined && claimant[code] !== display) {
+              contested[code] = true;
+            } else {
+              claimant[code] = display;
+            }
             if (seenPri[code] === undefined || pri < seenPri[code]) {
-              idx[code] = display;
+              idx[code] = val;
               seenPri[code] = pri;
+            }
+          }
+        }
+        if (players.length !== 2) continue;
+        const [A, B] = players;
+        for (const ca of A.codes) {
+          for (const cb of B.codes) {
+            if (ca === cb) continue;   // both players share the prefix: unresolvable
+            partnered[ca] = true;
+            partnered[cb] = true;
+            const key = ca < cb ? `${ca}|${cb}` : `${cb}|${ca}`;
+            if (pairPri[key] === undefined || pri < pairPri[key]) {
+              pairs[key] = { [ca]: A.val, [cb]: B.val };
+              pairPri[key] = pri;
             }
           }
         }
       }
     }
   }
+  idx.__pairs = pairs;
+  idx.__partnered = partnered;
+  idx.__contested = contested;
   return idx;
+}
+
+export function buildAthleteIndex(scoreboards) {
+  return buildScopedAthleteIndex(scoreboards, (_c, display) => display);
+}
+
+/** The fixture-scoped entry for two codes, or undefined. Key is sorted, so
+ *  argument order is free. */
+export function athletePairLookup(idx, a, b) {
+  if (!a || !b || !idx || !idx.__pairs) return undefined;
+  return idx.__pairs[a < b ? `${a}|${b}` : `${b}|${a}`];
+}
+
+/**
+ * Resolve a ticker athlete code to a display name, event-scoped when the
+ * opponent's code is known. Ladder: exact fixture pair → fail closed to the
+ * raw code when the code is fixture-ambiguous (it appears in other fixtures,
+ * or 2+ athletes claim it) → flat index → raw code. A handcrafted flat index
+ * (test-labels.html) has no scoped entries and behaves exactly as before.
+ */
+export function resolveAthleteName(idx, code, oppCode) {
+  if (!code) return code;
+  const pair = athletePairLookup(idx, code, oppCode);
+  if (pair && pair[code]) return pair[code];
+  if (oppCode && idx?.__partnered?.[code]) return code;
+  if (idx?.__contested?.[code]) return code;
+  return idx?.[code] || code;
 }
 
 /**
  * Build a tennis/UFC country-flag URL index keyed the same way as
- * buildAthleteIndex. ESPN puts a flag image URL on athlete.flag.href.
- * Returns { "SIN": "https://...italy.png", ... }.
+ * buildAthleteIndex — including the same __pairs/__partnered/__contested
+ * event-scoped entries, so flag lookups can be fixture-verified too (TAB as
+ * Tabur is France; TAB as Tabilo is Chile). ESPN puts a flag image URL on
+ * athlete.flag.href. Returns { "SIN": "https://...italy.png", ... }.
  */
 export function buildAthleteFlagIndex(scoreboards) {
-  const idx = {};
-  const seenPri = {};
-  for (const sb of Object.values(scoreboards || {})) {
-    if (!sb || !Array.isArray(sb.events)) continue;
-    for (const ev of sb.events) {
-      for (const comp of allCompetitions(ev)) {
-        const pri = compStatePriority(comp);
-        for (const c of comp.competitors || []) {
-          const display = c?.athlete?.displayName
-            || c?.athlete?.fullName
-            || c?.athletes?.[0]?.displayName
-            || "";
-          const flag = c?.athlete?.flag?.href
-            || c?.athlete?.flag?.alt
-            || c?.athletes?.[0]?.flag?.href
-            || "";
-          if (!display || !flag) continue;
-          for (const code of athleteCodeCandidates(display)) {
-            if (seenPri[code] === undefined || pri < seenPri[code]) {
-              idx[code] = flag;
-              seenPri[code] = pri;
-            }
-          }
-        }
-      }
-    }
-  }
-  return idx;
+  return buildScopedAthleteIndex(scoreboards, (c) =>
+    c?.athlete?.flag?.href
+    || c?.athlete?.flag?.alt
+    || c?.athletes?.[0]?.flag?.href
+    || "");
 }
 
 /**
